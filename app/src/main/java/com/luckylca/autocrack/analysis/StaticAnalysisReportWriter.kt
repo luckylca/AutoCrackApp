@@ -107,7 +107,7 @@ object StaticAnalysisReportWriter {
         .put("warnings", stringArray(summary.warnings))
 
     private fun stringArray(values: Iterable<String>): JSONArray = JSONArray().apply {
-        values.forEach(::put)
+        values.forEach { value -> put(value) }
     }
 
     private fun JSONObject.putNullable(key: String, value: Any?): JSONObject =
