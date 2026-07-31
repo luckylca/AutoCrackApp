@@ -4,16 +4,19 @@ AutoCrackApp is an Android-first APK reverse-analysis agent for authorized secur
 
 ## Current milestone
 
-Phase 1 provides:
+Phase 2 provides:
 
 - A native Kotlin and Jetpack Compose application.
-- Root availability and authorization detection.
-- KernelSU identification using version and filesystem evidence.
-- A read-only diagnostics screen.
-- Unit tests for root-output parsing.
-- GitHub Actions verification and a downloadable debug APK artifact.
+- Root availability and KernelSU authorization detection.
+- Current-user package discovery through a fixed, type-safe Root tool.
+- Searchable installed-package results with UID and primary APK path.
+- `pm path` parsing for `base.apk` and Split APKs.
+- Root-assisted copying into an app-private workspace.
+- File-size and SHA-256 verification for every extracted APK.
+- Unit tests for Root output, package parsing, path parsing, and Shell argument quoting.
+- GitHub Actions lint, tests, debug build, checksum generation, and APK artifact upload.
 
-No APK extraction, decompilation, native-code analysis, dynamic instrumentation, or external LLM calls are enabled yet.
+Phase 2 does not decompile DEX, decode resources, execute target code, analyze SO instructions, instrument processes, or call an external LLM.
 
 ## Build
 
@@ -26,8 +29,8 @@ gradle --no-daemon --stacktrace clean lintDebug testDebugUnitTest assembleDebug
 The resulting artifact contains:
 
 ```text
-AutoCrackApp-phase1-debug.apk
-AutoCrackApp-phase1-debug.apk.sha256
+AutoCrackApp-phase2-debug.apk
+AutoCrackApp-phase2-debug.apk.sha256
 ```
 
 ## Supported baseline
@@ -36,8 +39,18 @@ AutoCrackApp-phase1-debug.apk.sha256
 - Android API 36 compile and target SDK.
 - Rooted test devices, with KernelSU as the first supported root manager.
 
+## Workspace
+
+Extracted APK copies are stored under AutoCrackApp's private directory:
+
+```text
+files/workspaces/<package-name>/session-<timestamp>/
+```
+
+Every extraction session records the Base APK, all returned Split APKs, file sizes, and SHA-256 digests. A failed session is removed instead of leaving an incomplete workspace.
+
 ## Safety
 
-Use AutoCrackApp only on applications and devices you own or are explicitly authorized to analyze. The agent architecture will keep LLM planning separate from type-safe, audited device tools; models will not receive unrestricted root-shell access.
+Use AutoCrackApp only on applications and devices you own or are explicitly authorized to analyze. The app does not accept arbitrary Root Shell commands. Package names, Android user IDs, source paths, destinations, ownership, permissions, and timeouts are constructed by typed tools defined in application code.
 
-See [Phase 1 documentation](docs/PHASE_1.md) for the device test checklist and security boundary.
+See [Phase 2 documentation](docs/PHASE_2.md) for the security boundary and device test checklist.
