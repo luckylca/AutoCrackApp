@@ -53,6 +53,7 @@ class ApkStaticAnalyzer(
         if (!reportFile.isFile || reportFile.length() <= 0L) {
             throw StaticAnalysisException("静态分析报告写入失败")
         }
+        LatestAnalysisStore.publish(report)
         report
     }
 

@@ -23,6 +23,11 @@ data class StaticAnalysisReport(
 
     val warnings: List<String>
         get() = archives.flatMap(ApkArchiveSummary::warnings)
+
+    val nativeLibraryDiagnostics: List<NativeLibrarySummary>
+        get() = archives
+            .flatMap(ApkArchiveSummary::nativeLibraries)
+            .filter { library -> library.diagnostic != null }
 }
 
 data class ManifestSummary(
@@ -103,6 +108,8 @@ data class NativeLibrarySummary(
     val elfClass: String?,
     val machine: String?,
     val validElfMagic: Boolean,
+    val headerHex: String = "",
+    val diagnostic: String? = null,
 )
 
 class StaticAnalysisException(
