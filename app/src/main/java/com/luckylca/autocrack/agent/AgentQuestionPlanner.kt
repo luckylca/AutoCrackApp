@@ -24,7 +24,7 @@ object AgentQuestionPlanner {
             .take(MAX_TERMS)
     }
 
-    private const val MAX_TERMS = 18
+    private const val MAX_TERMS = 32
     private val TOKEN_REGEX = Regex("[\\p{L}\\p{N}_.$/-]{2,}")
     private val STOP_WORDS = setOf(
         "帮我", "分析", "这个", "应用", "app", "apk", "一下", "什么", "怎么", "是否",
