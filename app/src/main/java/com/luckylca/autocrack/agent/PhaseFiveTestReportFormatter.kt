@@ -23,6 +23,11 @@ data class PhaseFiveTestSnapshot(
 object PhaseFiveTestReportFormatter {
     fun format(snapshot: PhaseFiveTestSnapshot): String = buildString {
         val manifest = snapshot.staticReport.manifest
+        val staticDurationMillis = (
+            snapshot.staticReport.completedAtEpochMillis -
+                snapshot.staticReport.startedAtEpochMillis
+            ).coerceAtLeast(0L)
+
         appendLine("AutoCrackApp Phase 5 真机测试结果")
         appendLine("版本：${snapshot.versionName}")
         appendLine("设备：${snapshot.device}")
@@ -32,7 +37,7 @@ object PhaseFiveTestReportFormatter {
         appendLine()
         appendLine("1. APK 提取与静态盘点：通过")
         appendLine("   APK 数量：${snapshot.extraction.artifacts.size}")
-        appendLine("   静态分析耗时：${snapshot.staticReport.durationMillis} ms")
+        appendLine("   静态分析耗时：$staticDurationMillis ms")
         appendLine("   Manifest：${if (manifest.parsed) "成功" else "失败"}")
         appendLine("   DEX：${snapshot.staticReport.dexFileCount}")
         appendLine("   SO：${snapshot.staticReport.nativeLibraryCount}")
