@@ -9,7 +9,7 @@ object StaticAnalysisReportWriter {
     fun write(report: StaticAnalysisReport, destination: File) {
         try {
             val root = JSONObject()
-                .put("schemaVersion", 1)
+                .put("schemaVersion", 2)
                 .put("packageName", report.packageName)
                 .put("baseApkFileName", report.baseApkFileName)
                 .put("startedAtEpochMillis", report.startedAtEpochMillis)
@@ -100,7 +100,9 @@ object StaticAnalysisReportWriter {
                         .put("compressedSizeBytes", library.compressedSizeBytes)
                         .putNullable("elfClass", library.elfClass)
                         .putNullable("machine", library.machine)
-                        .put("validElfMagic", library.validElfMagic),
+                        .put("validElfMagic", library.validElfMagic)
+                        .put("headerHex", library.headerHex)
+                        .putNullable("diagnostic", library.diagnostic),
                 )
             }
         })
