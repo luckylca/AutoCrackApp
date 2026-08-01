@@ -7,6 +7,7 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -35,6 +36,7 @@ class ApkArchiveInspectorTest {
         )
 
         val summary = ApkArchiveInspector().inspect(extractedApk(apk))
+        val library = summary.nativeLibraries.single()
 
         assertEquals(8, summary.entryCount)
         assertTrue(summary.manifestEntryPresent)
@@ -45,16 +47,18 @@ class ApkArchiveInspectorTest {
         assertEquals(listOf("035", "039"), summary.dexFiles.map(DexFileSummary::dexVersion))
         assertTrue(summary.dexFiles.all(DexFileSummary::validMagic))
         assertEquals(1, summary.nativeLibraries.size)
-        assertEquals("arm64-v8a", summary.nativeLibraries.single().abi)
-        assertEquals("ELF64", summary.nativeLibraries.single().elfClass)
-        assertEquals("AArch64", summary.nativeLibraries.single().machine)
-        assertTrue(summary.nativeLibraries.single().validElfMagic)
+        assertEquals("arm64-v8a", library.abi)
+        assertEquals("ELF64", library.elfClass)
+        assertEquals("AArch64", library.machine)
+        assertTrue(library.validElfMagic)
+        assertTrue(library.headerHex.startsWith("7F 45 4C 46"))
+        assertNull(library.diagnostic)
         assertEquals(listOf("arm64-v8a"), summary.abis)
         assertTrue(summary.warnings.isEmpty())
     }
 
     @Test
-    fun inspect_reportsUnsafePathAndInvalidBinaryMagic() {
+    fun inspect_reportsUnsafePathAndInvalidBinaryMagicWithHeaderPreview() {
         val apk = temporaryFolder.newFile("unsafe.apk")
         writeZip(
             apk,
@@ -67,12 +71,33 @@ class ApkArchiveInspectorTest {
         )
 
         val summary = ApkArchiveInspector().inspect(extractedApk(apk))
+        val library = summary.nativeLibraries.single()
 
         assertFalse(summary.dexFiles.single().validMagic)
-        assertFalse(summary.nativeLibraries.single().validElfMagic)
+        assertFalse(library.validElfMagic)
+        assertEquals("6E 6F 74 2D 65 6C 66", library.headerHex)
+        assertTrue(library.diagnostic.orEmpty().contains("头部不是 7F 45 4C 46"))
         assertTrue(summary.warnings.any { it.contains("可疑路径") })
         assertTrue(summary.warnings.any { it.contains("DEX 魔数无效") })
-        assertTrue(summary.warnings.any { it.contains("有效 ELF") })
+        assertTrue(summary.warnings.any { it.contains("SO 诊断") && it.contains("header=6E 6F") })
+    }
+
+    @Test
+    fun inspect_reportsAbiAndMachineMismatch() {
+        val apk = temporaryFolder.newFile("mismatch.apk")
+        writeZip(
+            apk,
+            mapOf(
+                "AndroidManifest.xml" to byteArrayOf(1),
+                "lib/armeabi-v7a/libwrong.so" to aarch64ElfHeader(),
+            ),
+        )
+
+        val library = ApkArchiveInspector().inspect(extractedApk(apk)).nativeLibraries.single()
+
+        assertTrue(library.validElfMagic)
+        assertEquals("AArch64", library.machine)
+        assertTrue(library.diagnostic.orEmpty().contains("二者不一致"))
     }
 
     @Test
