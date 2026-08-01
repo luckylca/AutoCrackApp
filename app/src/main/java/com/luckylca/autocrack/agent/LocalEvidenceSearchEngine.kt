@@ -9,10 +9,19 @@ import com.luckylca.autocrack.dex.LocalAgentResult
 import java.io.File
 import java.io.IOException
 import java.util.Locale
-import org.json.JSONArray
-import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+internal object SqlLikePatternEscaper {
+    const val ESCAPE_CHARACTER: Char = '!'
+
+    fun escape(value: String): String = value
+        .replace("!", "!!")
+        .replace("%", "!%")
+        .replace("_", "!_")
+}
 
 class LocalEvidenceSearchEngine {
     suspend fun answer(
@@ -83,13 +92,13 @@ class LocalEvidenceSearchEngine {
     }
 
     private fun queryTerm(database: SQLiteDatabase, term: String): List<SearchRow> {
-        val escaped = escapeLike(term.lowercase(Locale.ROOT))
+        val escaped = SqlLikePatternEscaper.escape(term.lowercase(Locale.ROOT))
         val rows = mutableListOf<SearchRow>()
         database.rawQuery(
             """
             SELECT kind, dex_entry, symbol, detail, search_text
             FROM evidence
-            WHERE search_text LIKE ? ESCAPE '\\'
+            WHERE search_text LIKE ? ESCAPE '!'
             LIMIT $MAX_ROWS_PER_TERM
             """.trimIndent(),
             arrayOf("%$escaped%"),
@@ -201,11 +210,6 @@ class LocalEvidenceSearchEngine {
             throw DexIndexException("无法写入 Agent 本地结果：${exception.message}", exception)
         }
     }
-
-    private fun escapeLike(value: String): String = value
-        .replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
 
     private fun ensureInsideWorkspace(workspace: File, candidate: File) {
         val prefix = workspace.canonicalFile.path + File.separator
