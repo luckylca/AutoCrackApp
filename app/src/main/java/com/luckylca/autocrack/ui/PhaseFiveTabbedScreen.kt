@@ -26,7 +26,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.ScrollableTabRow
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -107,15 +107,15 @@ private sealed interface TabbedQueryState {
 @Composable
 fun PhaseFiveTabbedScreen() {
     val uiContext = LocalContext.current
-    val context = uiContext.applicationContext
+    val appContext = uiContext.applicationContext
     val runner = remember { ProcessRootCommandRunner() }
     val detector = remember(runner) { RootDetector(runner) }
-    val repository = remember(context, runner) { PackageRepository(context, runner) }
-    val staticAnalyzer = remember(context) { ApkStaticAnalyzer(context) }
+    val repository = remember(appContext, runner) { PackageRepository(appContext, runner) }
+    val staticAnalyzer = remember(appContext) { ApkStaticAnalyzer(appContext) }
     val dexIndexBuilder = remember { DexIndexBuilder() }
     val searchEngine = remember { LocalEvidenceSearchEngine() }
     val llmClient = remember { OpenAiCompatibleClient() }
-    val configStore = remember(context) { SecureLlmConfigStore(context) }
+    val configStore = remember(appContext) { SecureLlmConfigStore(appContext) }
     val scope = rememberCoroutineScope()
 
     var selectedTab by remember { mutableStateOf(PhaseFiveTab.APPS) }
@@ -170,20 +170,20 @@ fun PhaseFiveTabbedScreen() {
             }
             .onFailure { exception ->
                 recordEvent(
-                    "模型配置",
-                    exception.message ?: "读取加密模型配置失败",
-                    PhaseFiveDiagnosticSeverity.ERROR,
-                    exception,
+                    stage = "模型配置",
+                    message = exception.message ?: "读取加密模型配置失败",
+                    severity = PhaseFiveDiagnosticSeverity.ERROR,
+                    throwable = exception,
                 )
             }
 
         val status = runCatching { detector.inspect() }
             .onFailure { exception ->
                 recordEvent(
-                    "Root 检测",
-                    exception.message ?: "Root 检测异常",
-                    PhaseFiveDiagnosticSeverity.ERROR,
-                    exception,
+                    stage = "Root 检测",
+                    message = exception.message ?: "Root 检测异常",
+                    severity = PhaseFiveDiagnosticSeverity.ERROR,
+                    throwable = exception,
                 )
             }
             .getOrNull()
@@ -214,9 +214,13 @@ fun PhaseFiveTabbedScreen() {
     val allApps = (appListState as? TabbedAppListState.Ready)?.apps.orEmpty()
     val filteredApps = remember(allApps, appSearch) {
         val query = appSearch.trim()
-        if (query.isBlank()) allApps else allApps.filter { app ->
-            app.packageName.contains(query, ignoreCase = true) ||
-                app.primaryApkPath.orEmpty().contains(query, ignoreCase = true)
+        if (query.isBlank()) {
+            allApps
+        } else {
+            allApps.filter { app ->
+                app.packageName.contains(query, ignoreCase = true) ||
+                    app.primaryApkPath.orEmpty().contains(query, ignoreCase = true)
+            }
         }
     }
     val workspaceRunning = workspaceState is TabbedWorkspaceState.Running
@@ -243,7 +247,10 @@ fun PhaseFiveTabbedScreen() {
                 workspaceState = TabbedWorkspaceState.Running(app.packageName, stage)
                 recordEvent(stage, "开始解析 Manifest、签名、DEX、资源与 SO")
                 val staticReport = staticAnalyzer.analyze(extraction)
-                recordEvent(stage, "静态分析完成，DEX ${staticReport.dexFileCount}，SO ${staticReport.nativeLibraryCount}")
+                recordEvent(
+                    stage,
+                    "静态分析完成，DEX ${staticReport.dexFileCount}，SO ${staticReport.nativeLibraryCount}",
+                )
 
                 stage = "DEX 索引"
                 workspaceState = TabbedWorkspaceState.Running(app.packageName, stage)
@@ -253,7 +260,8 @@ fun PhaseFiveTabbedScreen() {
                 workspaceState = TabbedWorkspaceState.Ready(workspace)
                 recordEvent(
                     stage,
-                    "索引完成：类 ${dexIndex.classCount}，方法 ${dexIndex.methodCount}，字符串 ${dexIndex.stringCount}，耗时 ${dexIndex.durationMillis} ms",
+                    "索引完成：类 ${dexIndex.classCount}，方法 ${dexIndex.methodCount}，" +
+                        "字符串 ${dexIndex.stringCount}，耗时 ${dexIndex.durationMillis} ms",
                 )
                 if (agentQuestion.isBlank()) {
                     agentQuestion = "分析这个应用的登录、Token 保存和加密相关实现"
@@ -281,7 +289,10 @@ fun PhaseFiveTabbedScreen() {
                 )
                 lastLocalResult = local
                 queryState = TabbedQueryState.Success("本地分析")
-                recordEvent(stage, "检索完成，返回 ${local.evidence.size} 条证据，耗时 ${local.durationMillis} ms")
+                recordEvent(
+                    stage,
+                    "检索完成，返回 ${local.evidence.size} 条证据，耗时 ${local.durationMillis} ms",
+                )
             } catch (exception: Exception) {
                 val message = exception.message ?: "本地分析失败"
                 queryState = TabbedQueryState.Error(stage, message)
@@ -338,16 +349,24 @@ fun PhaseFiveTabbedScreen() {
             .navigationBarsPadding(),
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-            Text("AutoCrackApp", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text(
-                selectedPackageName ?: "Phase 5.1 · Tabbed DEX Agent",
+                text = "AutoCrackApp",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = selectedPackageName ?: "Phase 5.1 · Tabbed DEX Agent",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        ScrollableTabRow(selectedTabIndex = selectedTab.ordinal, edgePadding = 8.dp) {
+
+        PrimaryScrollableTabRow(
+            selectedTabIndex = selectedTab.ordinal,
+            edgePadding = 8.dp,
+        ) {
             PhaseFiveTab.entries.forEach { tab ->
                 Tab(
                     selected = selectedTab == tab,
@@ -474,12 +493,15 @@ fun PhaseFiveTabbedScreen() {
                     )
                     val report = PhaseFiveDiagnosticReportFormatter.format(snapshot)
                     val clipboard = uiContext.getSystemService(ClipboardManager::class.java)
-                    clipboard.setPrimaryClip(ClipData.newPlainText("AutoCrackApp Phase 5 诊断报告", report))
+                    clipboard.setPrimaryClip(
+                        ClipData.newPlainText("AutoCrackApp Phase 5 诊断报告", report),
+                    )
                     Toast.makeText(uiContext, "完整诊断报告已复制", Toast.LENGTH_SHORT).show()
                 },
                 onClear = {
-                    diagnosticEvents = emptyList()
-                    recordEvent("诊断", "用户清空了旧诊断事件")
+                    diagnosticEvents = listOf(
+                        phaseFiveDiagnosticEvent("诊断", "用户清空了旧诊断事件"),
+                    )
                 },
             )
         }
@@ -498,7 +520,9 @@ private fun AppsTab(
     onBuildWorkspace: (InstalledApp) -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Spacer(Modifier.height(4.dp)) }
@@ -516,9 +540,15 @@ private fun AppsTab(
                     TabbedInfoRow("访问状态", rootStatus.accessState.name)
                     TabbedInfoRow("Root 管理器", rootStatus.provider.name)
                     TabbedInfoRow("su 路径", rootStatus.suPath ?: "未找到")
-                    rootStatus.diagnostic?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    rootStatus.diagnostic?.let { diagnostic ->
+                        Text(diagnostic, color = MaterialTheme.colorScheme.error)
+                    }
                 }
-                Button(modifier = Modifier.fillMaxWidth(), onClick = onRefresh, enabled = !busy) {
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onRefresh,
+                    enabled = !busy,
+                ) {
                     Text("重新检测并刷新")
                 }
             }
@@ -562,7 +592,9 @@ private fun WorkspaceTab(
     onOpenDiagnostics: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Spacer(Modifier.height(4.dp)) }
@@ -570,7 +602,9 @@ private fun WorkspaceTab(
             TabbedWorkspaceState.Idle -> item {
                 TabbedInfoCard("尚未建立工作区") {
                     Text("先在“应用”Tab 选择目标应用。")
-                    Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenApps) { Text("选择应用") }
+                    Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenApps) {
+                        Text("选择应用")
+                    }
                 }
             }
             is TabbedWorkspaceState.Running -> item {
@@ -586,10 +620,16 @@ private fun WorkspaceTab(
                     TabbedInfoRow("目标包名", state.packageName)
                     TabbedInfoRow("失败阶段", state.stage)
                     Text(state.message, color = MaterialTheme.colorScheme.error)
-                    Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenDiagnostics) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onOpenDiagnostics,
+                    ) {
                         Text("查看并复制完整诊断")
                     }
-                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onOpenApps) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onOpenApps,
+                    ) {
                         Text("返回应用列表")
                     }
                 }
@@ -597,7 +637,10 @@ private fun WorkspaceTab(
             is TabbedWorkspaceState.Ready -> {
                 item { WorkspaceSummaryCard(state.workspace) }
                 item {
-                    Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenAnalysis) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onOpenAnalysis,
+                    ) {
                         Text("进入一句话分析")
                     }
                 }
@@ -623,7 +666,9 @@ private fun AnalysisTab(
     onOpenDiagnostics: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Spacer(Modifier.height(4.dp)) }
@@ -631,7 +676,9 @@ private fun AnalysisTab(
             item {
                 TabbedInfoCard("没有可分析的工作区") {
                     Text("先选择应用并等待 DEX 索引完成。")
-                    Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenApps) { Text("选择应用") }
+                    Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenApps) {
+                        Text("选择应用")
+                    }
                 }
             }
         } else {
@@ -649,15 +696,24 @@ private fun AnalysisTab(
                     Button(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = onLocalAnalyze,
-                        enabled = queryState !is TabbedQueryState.Running && question.trim().length >= 4,
-                    ) { Text("仅使用本地证据分析") }
+                        enabled = queryState !is TabbedQueryState.Running &&
+                            question.trim().length >= MIN_QUESTION_LENGTH,
+                    ) {
+                        Text("仅使用本地证据分析")
+                    }
                     Button(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = onModelAnalyze,
-                        enabled = queryState !is TabbedQueryState.Running && hasModelConfig && question.trim().length >= 4,
-                    ) { Text("本地检索后调用外部模型") }
+                        enabled = queryState !is TabbedQueryState.Running &&
+                            hasModelConfig && question.trim().length >= MIN_QUESTION_LENGTH,
+                    ) {
+                        Text("本地检索后调用外部模型")
+                    }
                     if (!hasModelConfig) {
-                        OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onOpenModel) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = onOpenModel,
+                        ) {
                             Text("配置外部模型")
                         }
                     }
@@ -668,13 +724,18 @@ private fun AnalysisTab(
                 TabbedQueryState.Idle -> Unit
                 is TabbedQueryState.Running -> item { TabbedProgressCard(queryState.stage) }
                 is TabbedQueryState.Success -> item {
-                    TabbedInfoCard("分析完成") { TabbedInfoRow("模式", queryState.mode) }
+                    TabbedInfoCard("分析完成") {
+                        TabbedInfoRow("模式", queryState.mode)
+                    }
                 }
                 is TabbedQueryState.Error -> item {
                     TabbedInfoCard("Agent 分析失败") {
                         TabbedInfoRow("失败阶段", queryState.stage)
                         Text(queryState.message, color = MaterialTheme.colorScheme.error)
-                        Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenDiagnostics) {
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = onOpenDiagnostics,
+                        ) {
                             Text("查看异常与堆栈")
                         }
                     }
@@ -702,13 +763,18 @@ private fun ModelTab(
     onClear: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Spacer(Modifier.height(4.dp)) }
         item {
             TabbedInfoCard("外部模型配置") {
-                TabbedInfoRow("状态", if (savedConfig == null) "未配置" else "已使用 Android Keystore 加密保存")
+                TabbedInfoRow(
+                    "状态",
+                    if (savedConfig == null) "未配置" else "已使用 Android Keystore 加密保存",
+                )
                 OutlinedTextField(
                     modifier = Modifier.fillMaxWidth(),
                     value = baseUrl,
@@ -728,17 +794,25 @@ private fun ModelTab(
                     modifier = Modifier.fillMaxWidth(),
                     value = apiKey,
                     onValueChange = onApiKeyChange,
-                    label = { Text(if (savedConfig == null) "API Key" else "API Key（留空保留原值）") },
+                    label = {
+                        Text(if (savedConfig == null) "API Key" else "API Key（留空保留原值）")
+                    },
                     visualTransformation = PasswordVisualTransformation(),
                     singleLine = true,
                 )
-                Button(modifier = Modifier.fillMaxWidth(), onClick = onSave) { Text("保存配置") }
+                Button(modifier = Modifier.fillMaxWidth(), onClick = onSave) {
+                    Text("保存配置")
+                }
                 OutlinedButton(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = onClear,
                     enabled = savedConfig != null,
-                ) { Text("清除配置") }
-                message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+                ) {
+                    Text("清除配置")
+                }
+                message?.let { status ->
+                    Text(status, color = MaterialTheme.colorScheme.primary)
+                }
                 Text(
                     "只有主动点击外部模型分析时才联网；APK、DEX、SO 文件不会上传。",
                     style = MaterialTheme.typography.bodySmall,
@@ -767,7 +841,9 @@ private fun DiagnosticsTab(
     onClear: () -> Unit,
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { Spacer(Modifier.height(4.dp)) }
@@ -778,9 +854,12 @@ private fun DiagnosticsTab(
                 TabbedInfoRow("应用列表", appListState.toDiagnosticText())
                 TabbedInfoRow("工作区", workspaceState.toDiagnosticText())
                 TabbedInfoRow("Agent", queryState.toDiagnosticText())
-                workspace?.let {
-                    TabbedInfoRow("索引大小", Formatter.formatShortFileSize(LocalContext.current, it.dexIndex.indexBytes))
-                    TabbedInfoRow("索引耗时", "${it.dexIndex.durationMillis} ms")
+                workspace?.let { ready ->
+                    TabbedInfoRow(
+                        "索引大小",
+                        Formatter.formatShortFileSize(LocalContext.current, ready.dexIndex.indexBytes),
+                    )
+                    TabbedInfoRow("索引耗时", "${ready.dexIndex.durationMillis} ms")
                 }
                 TabbedInfoRow("本地证据", localResult?.evidence?.size?.toString() ?: "无成功结果")
                 TabbedInfoRow("外部模型", llmAnswer?.model ?: "无成功结果")
@@ -788,7 +867,10 @@ private fun DiagnosticsTab(
         }
         item {
             TabbedInfoCard("完整诊断报告") {
-                Text("报告会自动包含失败阶段、错误文本、异常类型、堆栈、工作区统计和最近运行事件，不再依赖手工填写“有问题”。")
+                Text(
+                    "报告会自动包含失败阶段、错误文本、异常类型、堆栈、工作区统计和最近运行事件，" +
+                        "不再依赖手工填写“有问题”。",
+                )
                 OutlinedTextField(
                     modifier = Modifier.fillMaxWidth(),
                     value = note,
@@ -810,10 +892,10 @@ private fun DiagnosticsTab(
                 if (events.isEmpty()) {
                     Text("暂无事件")
                 } else {
-                    events.takeLast(30).asReversed().forEach { event ->
+                    events.takeLast(MAX_VISIBLE_EVENTS).asReversed().forEach { event ->
                         HorizontalDivider()
                         Text(
-                            "[${event.severity}] ${event.stage}",
+                            text = "[${event.severity}] ${event.stage}",
                             fontWeight = FontWeight.SemiBold,
                             color = if (event.severity == PhaseFiveDiagnosticSeverity.ERROR) {
                                 MaterialTheme.colorScheme.error
@@ -822,14 +904,20 @@ private fun DiagnosticsTab(
                             },
                         )
                         Text(event.message)
-                        event.exceptionType?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                        event.stackTrace?.lineSequence()?.take(6)?.joinToString("\n")?.let { preview ->
-                            Text(
-                                preview,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        event.exceptionType?.let { type ->
+                            Text(type, style = MaterialTheme.typography.bodySmall)
                         }
+                        event.stackTrace
+                            ?.lineSequence()
+                            ?.take(MAX_VISIBLE_STACK_LINES)
+                            ?.joinToString("\n")
+                            ?.let { preview ->
+                                Text(
+                                    preview,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                     }
                 }
             }
@@ -839,18 +927,32 @@ private fun DiagnosticsTab(
 }
 
 @Composable
-private fun TabbedAppCard(app: InstalledApp, busy: Boolean, onBuild: () -> Unit) {
+private fun TabbedAppCard(
+    app: InstalledApp,
+    busy: Boolean,
+    onBuild: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(app.packageName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                if (app.kind == InstalledAppKind.SYSTEM) "系统应用 · UID ${app.uid ?: "未知"}" else "用户应用 · UID ${app.uid ?: "未知"}",
+                app.packageName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                if (app.kind == InstalledAppKind.SYSTEM) {
+                    "系统应用 · UID ${app.uid ?: "未知"}"
+                } else {
+                    "用户应用 · UID ${app.uid ?: "未知"}"
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
@@ -861,7 +963,11 @@ private fun TabbedAppCard(app: InstalledApp, busy: Boolean, onBuild: () -> Unit)
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Button(modifier = Modifier.fillMaxWidth(), onClick = onBuild, enabled = !busy) {
+            Button(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onBuild,
+                enabled = !busy,
+            ) {
                 Text("建立工作区")
             }
         }
@@ -875,13 +981,23 @@ private fun WorkspaceSummaryCard(workspace: TabbedAgentWorkspace) {
         TabbedInfoRow("包名", workspace.extraction.packageName)
         TabbedInfoRow("版本", workspace.staticReport.manifest.versionName ?: "未知")
         TabbedInfoRow("APK 数量", workspace.extraction.artifacts.size.toString())
-        TabbedInfoRow("APK 总大小", Formatter.formatShortFileSize(context, workspace.extraction.totalBytes))
+        TabbedInfoRow(
+            "APK 总大小",
+            Formatter.formatShortFileSize(context, workspace.extraction.totalBytes),
+        )
         TabbedInfoRow("静态 DEX", workspace.staticReport.dexFileCount.toString())
         TabbedInfoRow("索引 DEX 条目", workspace.dexIndex.dexEntryCount.toString())
-        TabbedInfoRow("类 / 方法 / 字段", "${workspace.dexIndex.classCount} / ${workspace.dexIndex.methodCount} / ${workspace.dexIndex.fieldCount}")
+        TabbedInfoRow(
+            "类 / 方法 / 字段",
+            "${workspace.dexIndex.classCount} / ${workspace.dexIndex.methodCount} / " +
+                workspace.dexIndex.fieldCount,
+        )
         TabbedInfoRow("字符串", workspace.dexIndex.stringCount.toString())
         TabbedInfoRow("跳过字符串", workspace.dexIndex.skippedStringCount.toString())
-        TabbedInfoRow("索引大小", Formatter.formatShortFileSize(context, workspace.dexIndex.indexBytes))
+        TabbedInfoRow(
+            "索引大小",
+            Formatter.formatShortFileSize(context, workspace.dexIndex.indexBytes),
+        )
         TabbedInfoRow("索引耗时", "${workspace.dexIndex.durationMillis} ms")
         TabbedInfoRow("数据库", workspace.dexIndex.databasePath)
     }
@@ -894,9 +1010,12 @@ private fun LocalEvidenceCard(result: LocalAgentResult) {
         TabbedInfoRow("证据数量", result.evidence.size.toString())
         TabbedInfoRow("耗时", "${result.durationMillis} ms")
         Text(result.localSummary)
-        result.evidence.take(30).forEachIndexed { index, evidence ->
+        result.evidence.take(MAX_VISIBLE_EVIDENCE).forEachIndexed { index, evidence ->
             HorizontalDivider()
-            Text("${index + 1}. [${evidence.kind.name}] ${evidence.symbol}", fontWeight = FontWeight.SemiBold)
+            Text(
+                "${index + 1}. [${evidence.kind.name}] ${evidence.symbol}",
+                fontWeight = FontWeight.SemiBold,
+            )
             Text(evidence.dexEntry, style = MaterialTheme.typography.bodySmall)
             Text(evidence.detail, style = MaterialTheme.typography.bodySmall)
             Text(
@@ -933,16 +1052,25 @@ private fun TabbedProgressCard(message: String) {
 }
 
 @Composable
-private fun TabbedInfoCard(title: String, content: @Composable () -> Unit) {
+private fun TabbedInfoCard(
+    title: String,
+    content: @Composable () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
             HorizontalDivider()
             content()
         }
@@ -952,7 +1080,11 @@ private fun TabbedInfoCard(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun TabbedInfoRow(label: String, value: String) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(value, style = MaterialTheme.typography.bodyLarge)
     }
 }
@@ -961,8 +1093,8 @@ private fun RootStatus?.toDiagnosticText(): String = when (this) {
     null -> "未完成检测"
     else -> buildString {
         append(accessState.name).append(" / ").append(provider.name)
-        suPath?.let { append(" / su=").append(it) }
-        diagnostic?.let { append(" / ").append(it) }
+        suPath?.let { path -> append(" / su=").append(path) }
+        diagnostic?.let { text -> append(" / ").append(text) }
     }
 }
 
@@ -987,3 +1119,7 @@ private fun TabbedQueryState.toDiagnosticText(): String = when (this) {
 }
 
 private const val MAX_DIAGNOSTIC_EVENTS = 100
+private const val MAX_VISIBLE_EVENTS = 30
+private const val MAX_VISIBLE_STACK_LINES = 6
+private const val MAX_VISIBLE_EVIDENCE = 30
+private const val MIN_QUESTION_LENGTH = 4
