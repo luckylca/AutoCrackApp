@@ -6,6 +6,7 @@ import android.os.Build
 import android.text.format.Formatter
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
@@ -24,10 +26,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.PrimaryScrollableTabRow
-import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -345,8 +347,7 @@ fun PhaseFiveTabbedScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding(),
+            .statusBarsPadding(),
     ) {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
             Text(
@@ -355,7 +356,7 @@ fun PhaseFiveTabbedScreen() {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = selectedPackageName ?: "Phase 5.1 · Tabbed DEX Agent",
+                text = selectedPackageName ?: "Phase 5.2 · Bottom Navigation DEX Agent",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
@@ -363,147 +364,178 @@ fun PhaseFiveTabbedScreen() {
             )
         }
 
-        PrimaryScrollableTabRow(
-            selectedTabIndex = selectedTab.ordinal,
-            edgePadding = 8.dp,
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
         ) {
-            PhaseFiveTab.entries.forEach { tab ->
-                Tab(
-                    selected = selectedTab == tab,
-                    onClick = { selectedTab = tab },
-                    text = { Text(tab.title) },
+            when (selectedTab) {
+                PhaseFiveTab.APPS -> AppsTab(
+                    rootStatus = rootStatus,
+                    appListState = appListState,
+                    filteredApps = filteredApps,
+                    searchQuery = appSearch,
+                    onSearchChange = { appSearch = it },
+                    busy = workspaceRunning || queryRunning,
+                    onRefresh = { refreshKey += 1 },
+                    onBuildWorkspace = ::buildWorkspace,
+                )
+
+                PhaseFiveTab.WORKSPACE -> WorkspaceTab(
+                    state = workspaceState,
+                    onOpenApps = { selectedTab = PhaseFiveTab.APPS },
+                    onOpenAnalysis = { selectedTab = PhaseFiveTab.ANALYSIS },
+                    onOpenDiagnostics = { selectedTab = PhaseFiveTab.DIAGNOSTICS },
+                )
+
+                PhaseFiveTab.ANALYSIS -> AnalysisTab(
+                    workspace = readyWorkspace,
+                    question = agentQuestion,
+                    onQuestionChange = { agentQuestion = it },
+                    queryState = queryState,
+                    localResult = lastLocalResult,
+                    llmAnswer = lastLlmAnswer,
+                    hasModelConfig = savedConfig != null,
+                    onLocalAnalyze = { readyWorkspace?.let(::runLocalAnalysis) },
+                    onModelAnalyze = { readyWorkspace?.let(::runModelAnalysis) },
+                    onOpenApps = { selectedTab = PhaseFiveTab.APPS },
+                    onOpenModel = { selectedTab = PhaseFiveTab.MODEL },
+                    onOpenDiagnostics = { selectedTab = PhaseFiveTab.DIAGNOSTICS },
+                )
+
+                PhaseFiveTab.MODEL -> ModelTab(
+                    savedConfig = savedConfig,
+                    baseUrl = baseUrlInput,
+                    onBaseUrlChange = { baseUrlInput = it },
+                    model = modelInput,
+                    onModelChange = { modelInput = it },
+                    apiKey = apiKeyInput,
+                    onApiKeyChange = { apiKeyInput = it },
+                    message = configMessage,
+                    onSave = {
+                        runCatching {
+                            val key = apiKeyInput.ifBlank {
+                                savedConfig?.apiKey ?: error("首次配置必须输入 API Key")
+                            }
+                            val config = LlmProviderConfig(
+                                baseUrl = baseUrlInput,
+                                model = modelInput,
+                                apiKey = key,
+                            ).validated()
+                            configStore.save(config)
+                            savedConfig = config
+                            baseUrlInput = config.baseUrl
+                            modelInput = config.model
+                            apiKeyInput = ""
+                            configMessage = "配置已使用 Android Keystore 加密保存"
+                            recordEvent("模型配置", "成功保存 ${config.model} / ${config.baseUrl}")
+                        }.onFailure { exception ->
+                            val message = exception.message ?: "保存模型配置失败"
+                            configMessage = message
+                            recordEvent(
+                                "模型配置",
+                                message,
+                                PhaseFiveDiagnosticSeverity.ERROR,
+                                exception,
+                            )
+                        }
+                    },
+                    onClear = {
+                        runCatching { configStore.clear() }
+                            .onSuccess {
+                                savedConfig = null
+                                baseUrlInput = ""
+                                modelInput = ""
+                                apiKeyInput = ""
+                                configMessage = "已清除外部模型配置"
+                                recordEvent("模型配置", "已清除外部模型配置")
+                            }
+                            .onFailure { exception ->
+                                val message = exception.message ?: "清除模型配置失败"
+                                configMessage = message
+                                recordEvent(
+                                    "模型配置",
+                                    message,
+                                    PhaseFiveDiagnosticSeverity.ERROR,
+                                    exception,
+                                )
+                            }
+                    },
+                )
+
+                PhaseFiveTab.DIAGNOSTICS -> DiagnosticsTab(
+                    selectedPackageName = selectedPackageName,
+                    rootStatus = rootStatus,
+                    appListState = appListState,
+                    workspaceState = workspaceState,
+                    queryState = queryState,
+                    workspace = readyWorkspace,
+                    localResult = lastLocalResult,
+                    llmAnswer = lastLlmAnswer,
+                    events = diagnosticEvents,
+                    note = diagnosticNote,
+                    onNoteChange = { diagnosticNote = it },
+                    onCopy = {
+                        val snapshot = PhaseFiveDiagnosticSnapshot(
+                            versionName = BuildConfig.VERSION_NAME,
+                            device = "${Build.MANUFACTURER} ${Build.MODEL}",
+                            androidVersion =
+                                "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                            abi = Build.SUPPORTED_ABIS.joinToString(),
+                            selectedPackageName = selectedPackageName,
+                            rootStatus = rootStatus.toDiagnosticText(),
+                            appListStatus = appListState.toDiagnosticText(),
+                            workspaceStatus = workspaceState.toDiagnosticText(),
+                            queryStatus = queryState.toDiagnosticText(),
+                            extraction = readyWorkspace?.extraction,
+                            staticReport = readyWorkspace?.staticReport,
+                            dexIndex = readyWorkspace?.dexIndex,
+                            localResult = lastLocalResult,
+                            llmAnswer = lastLlmAnswer,
+                            events = diagnosticEvents,
+                            note = diagnosticNote,
+                        )
+                        val report = PhaseFiveDiagnosticReportFormatter.format(snapshot)
+                        val clipboard = uiContext.getSystemService(ClipboardManager::class.java)
+                        clipboard.setPrimaryClip(
+                            ClipData.newPlainText("AutoCrackApp Phase 5 诊断报告", report),
+                        )
+                        Toast.makeText(
+                            uiContext,
+                            "完整诊断报告已复制",
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    },
+                    onClear = {
+                        diagnosticEvents = listOf(
+                            phaseFiveDiagnosticEvent("诊断", "用户清空了旧诊断事件"),
+                        )
+                    },
                 )
             }
         }
 
-        when (selectedTab) {
-            PhaseFiveTab.APPS -> AppsTab(
-                rootStatus = rootStatus,
-                appListState = appListState,
-                filteredApps = filteredApps,
-                searchQuery = appSearch,
-                onSearchChange = { appSearch = it },
-                busy = workspaceRunning || queryRunning,
-                onRefresh = { refreshKey += 1 },
-                onBuildWorkspace = ::buildWorkspace,
-            )
-
-            PhaseFiveTab.WORKSPACE -> WorkspaceTab(
-                state = workspaceState,
-                onOpenApps = { selectedTab = PhaseFiveTab.APPS },
-                onOpenAnalysis = { selectedTab = PhaseFiveTab.ANALYSIS },
-                onOpenDiagnostics = { selectedTab = PhaseFiveTab.DIAGNOSTICS },
-            )
-
-            PhaseFiveTab.ANALYSIS -> AnalysisTab(
-                workspace = readyWorkspace,
-                question = agentQuestion,
-                onQuestionChange = { agentQuestion = it },
-                queryState = queryState,
-                localResult = lastLocalResult,
-                llmAnswer = lastLlmAnswer,
-                hasModelConfig = savedConfig != null,
-                onLocalAnalyze = { readyWorkspace?.let(::runLocalAnalysis) },
-                onModelAnalyze = { readyWorkspace?.let(::runModelAnalysis) },
-                onOpenApps = { selectedTab = PhaseFiveTab.APPS },
-                onOpenModel = { selectedTab = PhaseFiveTab.MODEL },
-                onOpenDiagnostics = { selectedTab = PhaseFiveTab.DIAGNOSTICS },
-            )
-
-            PhaseFiveTab.MODEL -> ModelTab(
-                savedConfig = savedConfig,
-                baseUrl = baseUrlInput,
-                onBaseUrlChange = { baseUrlInput = it },
-                model = modelInput,
-                onModelChange = { modelInput = it },
-                apiKey = apiKeyInput,
-                onApiKeyChange = { apiKeyInput = it },
-                message = configMessage,
-                onSave = {
-                    runCatching {
-                        val key = apiKeyInput.ifBlank {
-                            savedConfig?.apiKey ?: error("首次配置必须输入 API Key")
-                        }
-                        val config = LlmProviderConfig(
-                            baseUrl = baseUrlInput,
-                            model = modelInput,
-                            apiKey = key,
-                        ).validated()
-                        configStore.save(config)
-                        savedConfig = config
-                        baseUrlInput = config.baseUrl
-                        modelInput = config.model
-                        apiKeyInput = ""
-                        configMessage = "配置已使用 Android Keystore 加密保存"
-                        recordEvent("模型配置", "成功保存 ${config.model} / ${config.baseUrl}")
-                    }.onFailure { exception ->
-                        val message = exception.message ?: "保存模型配置失败"
-                        configMessage = message
-                        recordEvent("模型配置", message, PhaseFiveDiagnosticSeverity.ERROR, exception)
-                    }
-                },
-                onClear = {
-                    runCatching { configStore.clear() }
-                        .onSuccess {
-                            savedConfig = null
-                            baseUrlInput = ""
-                            modelInput = ""
-                            apiKeyInput = ""
-                            configMessage = "已清除外部模型配置"
-                            recordEvent("模型配置", "已清除外部模型配置")
-                        }
-                        .onFailure { exception ->
-                            val message = exception.message ?: "清除模型配置失败"
-                            configMessage = message
-                            recordEvent("模型配置", message, PhaseFiveDiagnosticSeverity.ERROR, exception)
-                        }
-                },
-            )
-
-            PhaseFiveTab.DIAGNOSTICS -> DiagnosticsTab(
-                selectedPackageName = selectedPackageName,
-                rootStatus = rootStatus,
-                appListState = appListState,
-                workspaceState = workspaceState,
-                queryState = queryState,
-                workspace = readyWorkspace,
-                localResult = lastLocalResult,
-                llmAnswer = lastLlmAnswer,
-                events = diagnosticEvents,
-                note = diagnosticNote,
-                onNoteChange = { diagnosticNote = it },
-                onCopy = {
-                    val snapshot = PhaseFiveDiagnosticSnapshot(
-                        versionName = BuildConfig.VERSION_NAME,
-                        device = "${Build.MANUFACTURER} ${Build.MODEL}",
-                        androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-                        abi = Build.SUPPORTED_ABIS.joinToString(),
-                        selectedPackageName = selectedPackageName,
-                        rootStatus = rootStatus.toDiagnosticText(),
-                        appListStatus = appListState.toDiagnosticText(),
-                        workspaceStatus = workspaceState.toDiagnosticText(),
-                        queryStatus = queryState.toDiagnosticText(),
-                        extraction = readyWorkspace?.extraction,
-                        staticReport = readyWorkspace?.staticReport,
-                        dexIndex = readyWorkspace?.dexIndex,
-                        localResult = lastLocalResult,
-                        llmAnswer = lastLlmAnswer,
-                        events = diagnosticEvents,
-                        note = diagnosticNote,
-                    )
-                    val report = PhaseFiveDiagnosticReportFormatter.format(snapshot)
-                    val clipboard = uiContext.getSystemService(ClipboardManager::class.java)
-                    clipboard.setPrimaryClip(
-                        ClipData.newPlainText("AutoCrackApp Phase 5 诊断报告", report),
-                    )
-                    Toast.makeText(uiContext, "完整诊断报告已复制", Toast.LENGTH_SHORT).show()
-                },
-                onClear = {
-                    diagnosticEvents = listOf(
-                        phaseFiveDiagnosticEvent("诊断", "用户清空了旧诊断事件"),
-                    )
-                },
-            )
+        NavigationBar(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+        ) {
+            PhaseFiveTab.entries.forEach { tab ->
+                val selected = selectedTab == tab
+                NavigationBarItem(
+                    selected = selected,
+                    onClick = { selectedTab = tab },
+                    icon = {
+                        Text(
+                            text = tab.title.take(1),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    },
+                    label = { Text(tab.title) },
+                    alwaysShowLabel = true,
+                )
+            }
         }
     }
 }
@@ -601,7 +633,7 @@ private fun WorkspaceTab(
         when (state) {
             TabbedWorkspaceState.Idle -> item {
                 TabbedInfoCard("尚未建立工作区") {
-                    Text("先在“应用”Tab 选择目标应用。")
+                    Text("先在“应用”中选择目标应用。")
                     Button(modifier = Modifier.fillMaxWidth(), onClick = onOpenApps) {
                         Text("选择应用")
                     }
@@ -612,7 +644,7 @@ private fun WorkspaceTab(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     TabbedInfoRow("目标包名", state.packageName)
                     TabbedInfoRow("当前阶段", state.stage)
-                    Text("大型应用索引可能需要数分钟。切换到其他 Tab 不会中断任务。")
+                    Text("大型应用索引可能需要数分钟。切换底部页面不会中断任务。")
                 }
             }
             is TabbedWorkspaceState.Error -> item {
