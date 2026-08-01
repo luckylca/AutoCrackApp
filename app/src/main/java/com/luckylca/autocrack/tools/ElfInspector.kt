@@ -390,9 +390,10 @@ class ElfInspector {
             val end = safeEnd(section.offset, section.size, reader.size) ?: return@forEach
             var parsedNotes = 0
             while (cursor + NOTE_HEADER_SIZE <= end && parsedNotes < MAX_NOTES) {
-                val nameSize = reader.u32(cursor)
-                val descriptionSize = reader.u32(cursor + 4)
-                val type = reader.u32(cursor + 8)
+                val cursorOffset = cursor.toInt()
+                val nameSize = reader.u32(cursorOffset)
+                val descriptionSize = reader.u32(cursorOffset + 4)
+                val type = reader.u32(cursorOffset + 8)
                 val nameStart = cursor + NOTE_HEADER_SIZE
                 val nameEnd = nameStart + nameSize
                 val descriptionStart = align4(nameEnd)
