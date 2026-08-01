@@ -197,11 +197,12 @@ class ApkArchiveInspector {
         val dataEncoding = header.getOrNull(5)?.toInt()?.and(0xff)
         if (validMagic && dataEncoding == null) {
             diagnostics += "ELF 头部过短，缺少 EI_DATA 字段"
-        } else if (validMagic && dataEncoding !in setOf(1, 2)) {
+        } else if (validMagic && dataEncoding != 1 && dataEncoding != 2) {
             diagnostics += "未知 EI_DATA：0x${dataEncoding.toHexByte()}"
         }
 
-        val machine = if (validMagic && header.size >= ELF_HEADER_BYTES && dataEncoding in setOf(1, 2)) {
+        val knownDataEncoding = dataEncoding == 1 || dataEncoding == 2
+        val machine = if (validMagic && header.size >= ELF_HEADER_BYTES && knownDataEncoding) {
             val first = header[18].toInt() and 0xff
             val second = header[19].toInt() and 0xff
             val machineCode = if (dataEncoding == 1) {
@@ -218,6 +219,10 @@ class ApkArchiveInspector {
         }
 
         abiMachineDiagnostic(abi, machine)?.let(diagnostics::add)
+        val diagnostic = diagnostics
+            .distinct()
+            .joinToString("；")
+            .takeIf { value -> value.isNotBlank() }
 
         return NativeLibrarySummary(
             entryName = entry.name,
@@ -229,7 +234,7 @@ class ApkArchiveInspector {
             machine = machine,
             validElfMagic = validMagic,
             headerHex = headerHex,
-            diagnostic = diagnostics.distinct().joinToString("；").ifBlank { null },
+            diagnostic = diagnostic,
         )
     }
 
