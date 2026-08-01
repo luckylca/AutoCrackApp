@@ -8,6 +8,7 @@ import com.luckylca.autocrack.dex.DexIndexSummary
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import java.util.Locale
 import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
@@ -174,18 +175,20 @@ class AnalysisToolExecutor(
                 """
                 SELECT kind, dex_entry, symbol, detail
                 FROM evidence
-                WHERE kind = 'METHOD' AND detail LIKE '%; native'
-                LIMIT $MAX_NATIVE_METHOD_ROWS
+                WHERE kind = 'METHOD' AND detail LIKE '%native%'
+                LIMIT $MAX_NATIVE_CANDIDATE_ROWS
                 """.trimIndent(),
                 null,
             ).use { cursor ->
                 while (cursor.moveToNext()) {
-                    rows += DexSearchRow(
+                    val row = DexSearchRow(
                         kind = cursor.getString(0),
                         dexEntry = cursor.getString(1),
                         symbol = cursor.getString(2),
                         detail = cursor.getString(3),
                     )
+                    if (isNativeMethodDetail(row.detail)) rows += row
+                    if (rows.size >= MAX_NATIVE_METHOD_ROWS) break
                 }
             }
         } finally {
@@ -269,10 +272,10 @@ class AnalysisToolExecutor(
             ZipFile(apkFile).use { zipFile ->
                 val entry = zipFile.getEntry(target.library.entryName)
                     ?: throw AnalysisToolException("APK 中缺少 SO entry：${target.library.entryName}")
-                if (entry.size > MAX_ELF_BYTES) {
+                if (entry.size >= 0L && entry.size > MAX_ELF_BYTES) {
                     throw AnalysisToolException("SO 超过单次工具限制：${entry.size} B")
                 }
-                zipFile.getInputStream(entry).use { input -> readBounded(input.readBytes(), MAX_ELF_BYTES) }
+                zipFile.getInputStream(entry).use { input -> readBounded(input, MAX_ELF_BYTES) }
             }
         } catch (exception: IOException) {
             throw AnalysisToolException("读取 SO 失败：${exception.message}", exception)
@@ -324,11 +327,20 @@ class AnalysisToolExecutor(
         return workspace
     }
 
-    private fun readBounded(bytes: ByteArray, maxBytes: Long): ByteArray {
-        if (bytes.size.toLong() > maxBytes) {
-            throw AnalysisToolException("SO 解压后超过单次工具限制：${bytes.size} B")
+    private fun readBounded(input: InputStream, maxBytes: Long): ByteArray {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(STREAM_BUFFER_BYTES)
+        var total = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > maxBytes) {
+                throw AnalysisToolException("SO 解压后超过单次工具限制：>$maxBytes B")
+            }
+            output.write(buffer, 0, count)
         }
-        return bytes
+        return output.toByteArray()
     }
 
     private fun writeResult(result: AnalysisToolResult, extra: JSONObject?, destination: File) {
@@ -415,6 +427,12 @@ class AnalysisToolExecutor(
     private fun isFirstParty(symbol: String, packageName: String): Boolean =
         symbol == packageName || symbol.startsWith("$packageName.")
 
+    private fun isNativeMethodDetail(detail: String): Boolean {
+        val accessHex = ACCESS_FLAGS_REGEX.find(detail)?.groupValues?.getOrNull(1) ?: return false
+        val accessFlags = accessHex.toIntOrNull(16) ?: return false
+        return accessFlags and ACC_NATIVE != 0
+    }
+
     private fun dexKindOrder(kind: String): Int = when (kind) {
         "METHOD" -> 0
         "CLASS" -> 1
@@ -447,10 +465,14 @@ class AnalysisToolExecutor(
         const val MIN_DEX_QUERY_CHARS = 2
         const val MIN_ELF_QUERY_CHARS = 3
         const val MAX_DEX_SEARCH_ROWS = 500
+        const val MAX_NATIVE_CANDIDATE_ROWS = 20_000
         const val MAX_NATIVE_METHOD_ROWS = 5_000
         const val MAX_TOOL_LINES = 300
         const val MAX_SYMBOL_PREVIEW = 60
         const val MAX_STRING_PREVIEW = 80
         const val MAX_ELF_BYTES = 128L * 1024L * 1024L
+        const val STREAM_BUFFER_BYTES = 16 * 1024
+        const val ACC_NATIVE = 0x100
+        val ACCESS_FLAGS_REGEX = Regex("access=0x([0-9a-fA-F]+)")
     }
 }
