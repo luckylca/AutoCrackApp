@@ -53,9 +53,9 @@ class ApkArchiveInspector {
                         warnings += "ZIP 中存在可疑路径条目：$name"
                     }
 
-                    when {
-                        name == ANDROID_MANIFEST_ENTRY -> manifestPresent = true
-                        name == RESOURCES_ARSC_ENTRY -> resourcesArscPresent = true
+                    when (name) {
+                        ANDROID_MANIFEST_ENTRY -> manifestPresent = true
+                        RESOURCES_ARSC_ENTRY -> resourcesArscPresent = true
                     }
                     if (name.startsWith(RES_PREFIX)) resourceEntries += 1
                     if (name.startsWith(ASSETS_PREFIX)) assetEntries += 1
@@ -84,8 +84,17 @@ class ApkArchiveInspector {
                             compressedSize = compressedSize,
                         )
                         nativeLibraries += nativeLibrary
-                        if (!nativeLibrary.validElfMagic) {
-                            warnings += "SO 文件不是有效 ELF：$name"
+                        nativeLibrary.diagnostic?.let { diagnostic ->
+                            warnings += buildString {
+                                append("SO 诊断：")
+                                append(name)
+                                append(" | size=")
+                                append(size)
+                                append(" B | header=")
+                                append(nativeLibrary.headerHex.ifBlank { "<empty>" })
+                                append(" | ")
+                                append(diagnostic)
+                            }
                         }
                     }
                 }
@@ -154,28 +163,61 @@ class ApkArchiveInspector {
         compressedSize: Long,
     ): NativeLibrarySummary {
         val header = readPrefix(zipFile, entry, ELF_HEADER_BYTES)
+        val headerHex = header.take(ELF_PREVIEW_BYTES).joinToString(" ") { byte ->
+            "%02X".format(byte.toInt() and 0xff)
+        }
         val validMagic = header.size >= ELF_MAGIC.size &&
             ELF_MAGIC.indices.all { index -> header[index] == ELF_MAGIC[index] }
+        val diagnostics = mutableListOf<String>()
 
-        val elfClass = if (validMagic && header.size > 4) {
-            when (header[4].toInt() and 0xff) {
+        if (header.size < ELF_MAGIC.size) {
+            diagnostics += "文件过短，无法读取完整的 4 字节 ELF 魔数"
+        } else if (!validMagic) {
+            diagnostics += "头部不是 7F 45 4C 46；可能是加壳或加密数据、占位文件，或仅使用了 .so 扩展名"
+        }
+
+        val classByte = header.getOrNull(4)?.toInt()?.and(0xff)
+        val elfClass = if (validMagic) {
+            when (classByte) {
                 1 -> "ELF32"
                 2 -> "ELF64"
-                else -> "未知"
+                null -> {
+                    diagnostics += "ELF 头部过短，缺少 EI_CLASS 字段"
+                    null
+                }
+                else -> {
+                    diagnostics += "未知 EI_CLASS：0x${classByte.toHexByte()}"
+                    "未知"
+                }
             }
         } else {
             null
         }
 
-        val machine = if (validMagic && header.size >= ELF_HEADER_BYTES) {
-            val littleEndian = (header[5].toInt() and 0xff) != 2
+        val dataEncoding = header.getOrNull(5)?.toInt()?.and(0xff)
+        if (validMagic && dataEncoding == null) {
+            diagnostics += "ELF 头部过短，缺少 EI_DATA 字段"
+        } else if (validMagic && dataEncoding !in setOf(1, 2)) {
+            diagnostics += "未知 EI_DATA：0x${dataEncoding.toHexByte()}"
+        }
+
+        val machine = if (validMagic && header.size >= ELF_HEADER_BYTES && dataEncoding in setOf(1, 2)) {
             val first = header[18].toInt() and 0xff
             val second = header[19].toInt() and 0xff
-            val machineCode = if (littleEndian) first or (second shl 8) else (first shl 8) or second
+            val machineCode = if (dataEncoding == 1) {
+                first or (second shl 8)
+            } else {
+                (first shl 8) or second
+            }
             machineName(machineCode)
         } else {
+            if (validMagic && header.size < ELF_HEADER_BYTES) {
+                diagnostics += "ELF 头部不足 $ELF_HEADER_BYTES 字节，无法读取 e_machine"
+            }
             null
         }
+
+        abiMachineDiagnostic(abi, machine)?.let(diagnostics::add)
 
         return NativeLibrarySummary(
             entryName = entry.name,
@@ -186,6 +228,8 @@ class ApkArchiveInspector {
             elfClass = elfClass,
             machine = machine,
             validElfMagic = validMagic,
+            headerHex = headerHex,
+            diagnostic = diagnostics.distinct().joinToString("；").ifBlank { null },
         )
     }
 
@@ -217,6 +261,22 @@ class ApkArchiveInspector {
         return SIGNING_SUFFIXES.any { suffix -> name.endsWith(suffix, ignoreCase = true) }
     }
 
+    private fun abiMachineDiagnostic(abi: String, machine: String?): String? {
+        val expected = when (abi.lowercase()) {
+            "arm64-v8a" -> "AArch64"
+            "armeabi", "armeabi-v7a" -> "ARM"
+            "x86" -> "x86"
+            "x86_64" -> "x86_64"
+            "mips", "mips64" -> "MIPS"
+            else -> null
+        }
+        return if (expected != null && machine != null && expected != machine) {
+            "ABI 目录为 $abi，但 ELF e_machine 为 $machine，二者不一致"
+        } else {
+            null
+        }
+    }
+
     private fun machineName(machineCode: Int): String = when (machineCode) {
         3 -> "x86"
         8 -> "MIPS"
@@ -227,6 +287,8 @@ class ApkArchiveInspector {
         else -> "未知($machineCode)"
     }
 
+    private fun Int?.toHexByte(): String = this?.let { "%02X".format(it and 0xff) } ?: "??"
+
     private companion object {
         const val ANDROID_MANIFEST_ENTRY = "AndroidManifest.xml"
         const val RESOURCES_ARSC_ENTRY = "resources.arsc"
@@ -236,6 +298,7 @@ class ApkArchiveInspector {
         const val APK_SUFFIX = ".apk"
         const val DEX_HEADER_BYTES = 8
         const val ELF_HEADER_BYTES = 20
+        const val ELF_PREVIEW_BYTES = 16
 
         val DEX_ENTRY_REGEX = Regex("^classes(?:[2-9][0-9]*)?\\.dex$")
         val NATIVE_LIBRARY_REGEX = Regex("^lib/([^/]+)/([^/]+\\.so)$")
