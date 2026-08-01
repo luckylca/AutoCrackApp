@@ -13,7 +13,7 @@ fun AutoCrackApp() {
     val darkTheme = androidx.compose.foundation.isSystemInDarkTheme()
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
-            PhaseTwoScreen()
+            PhaseThreeScreen()
         }
     }
 }

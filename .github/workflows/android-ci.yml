@@ -49,14 +49,14 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-phase2-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-phase3-debug.apk
           cd dist
-          sha256sum AutoCrackApp-phase2-debug.apk > AutoCrackApp-phase2-debug.apk.sha256
+          sha256sum AutoCrackApp-phase3-debug.apk > AutoCrackApp-phase3-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-phase2-debug
+          name: AutoCrackApp-phase3-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-phase2-reports
+          name: AutoCrackApp-phase3-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
