@@ -61,6 +61,9 @@ internal object PtyProcessProbeScriptBuilder {
               tr '\000\011\012\015|' '     '
             }
 
+            # Android kernels may expose empty task/*/children files even for visible
+            # descendants. Capture an internal /proc table and let Kotlin return only
+            # the active PTY root and its PPID descendants to callers.
             echo PROCESS_TABLE_BEGIN
             for PROC_DIR in /proc/[0-9]*; do
               [ -d "${'$'}PROC_DIR" ] || continue
