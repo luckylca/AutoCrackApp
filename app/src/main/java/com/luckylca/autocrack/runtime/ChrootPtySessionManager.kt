@@ -319,13 +319,14 @@ class ChrootPtySessionManager private constructor(context: Context) {
             runCatching { chrootEngine.cleanupMounts() }
                 .onSuccess { result ->
                     cleanupExitCode = result.exitCode
-                    cleanupOutput = buildString {
+                    val combinedOutput = buildString {
                         if (result.stdout.isNotBlank()) append(result.stdout)
                         if (result.stderr.isNotBlank()) {
                             if (isNotEmpty()) append('\n')
                             append(result.stderr)
                         }
-                    }.ifBlank { null }
+                    }
+                    cleanupOutput = combinedOutput.takeIf(String::isNotBlank)
                     if (!result.succeeded) {
                         cleanupFailure = "挂载清理失败：exit=${result.exitCode}, " +
                             result.stderr.ifBlank { result.stdout }
