@@ -1,0 +1,118 @@
+name: Build Debian arm64 rootfs
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rootfs-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-rootfs:
+    name: Build verified Debian bookworm arm64 package
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install host packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends zip xz-utils
+
+      - name: Build Debian arm64 rootfs
+        env:
+          ROOTFS_VERSION: bookworm-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/rootfs
+          docker pull --platform linux/arm64 debian:bookworm-slim
+          docker run --platform linux/arm64 --name autocrack-rootfs debian:bookworm-slim \
+            /bin/bash -euxc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                bash ca-certificates coreutils findutils grep sed gawk file \
+                tar zip unzip xz-utils zstd curl wget jq sqlite3 \
+                python3-minimal binutils procps util-linux
+              apt-get clean
+              rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+              mkdir -p /workspace /root /opt/autocrack
+              printf "%s\n" "AutoCrackApp Debian arm64 runtime" > /opt/autocrack/README
+            '
+          docker export autocrack-rootfs > dist/rootfs/rootfs.tar
+          xz -T0 -6 dist/rootfs/rootfs.tar
+
+          ARCHIVE=dist/rootfs/rootfs.tar.xz
+          export ARCHIVE_SHA
+          export ARCHIVE_SIZE
+          export SOURCE_IMAGE_ID
+          ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+          ARCHIVE_SIZE=$(stat -c '%s' "$ARCHIVE")
+          SOURCE_IMAGE_ID=$(docker image inspect --format '{{.Id}}' debian:bookworm-slim)
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = {
+              "schemaVersion": 1,
+              "id": "autocrack-debian-bookworm-arm64",
+              "version": os.environ["ROOTFS_VERSION"],
+              "architecture": "arm64",
+              "archiveEntry": "rootfs.tar.xz",
+              "archiveSha256": os.environ["ARCHIVE_SHA"],
+              "archiveSizeBytes": int(os.environ["ARCHIVE_SIZE"]),
+              "compression": "xz",
+              "sourceImage": "debian:bookworm-slim",
+              "sourceImageId": os.environ["SOURCE_IMAGE_ID"],
+              "requiredPaths": [
+                  "/bin/bash",
+                  "/usr/bin/env",
+                  "/usr/bin/file",
+                  "/usr/bin/readelf",
+                  "/usr/bin/python3",
+                  "/usr/bin/unzip",
+                  "/usr/bin/xz",
+                  "/usr/bin/zstd"
+              ]
+          }
+          Path("dist/rootfs/manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          tar -tJf "$ARCHIVE" | grep -Eq '(^|/)bin/bash$'
+          tar -tJf "$ARCHIVE" | grep -Eq '(^|/)usr/bin/readelf$'
+          (
+            cd dist/rootfs
+            zip -0 AutoCrackApp-debian-bookworm-arm64-rootfs.zip manifest.json rootfs.tar.xz
+            sha256sum AutoCrackApp-debian-bookworm-arm64-rootfs.zip \
+              > AutoCrackApp-debian-bookworm-arm64-rootfs.zip.sha256
+          )
+        shell: bash
+
+      - name: Upload Debian rootfs package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-debian-bookworm-arm64-rootfs
+          path: |
+            dist/rootfs/AutoCrackApp-debian-bookworm-arm64-rootfs.zip
+            dist/rootfs/AutoCrackApp-debian-bookworm-arm64-rootfs.zip.sha256
+            dist/rootfs/manifest.json
+          if-no-files-found: error
+          retention-days: 14
