@@ -11,6 +11,23 @@ enum class PtySessionState {
     FAILED,
 }
 
+data class PtyProcessInfo(
+    val pid: Int,
+    val parentPid: Int,
+    val processGroupId: Int,
+    val sessionId: Int,
+    val state: String,
+    val name: String,
+    val commandLine: String,
+)
+
+data class PtyProcessTreeSnapshot(
+    val rootPid: Int? = null,
+    val processes: List<PtyProcessInfo> = emptyList(),
+    val refreshedAtEpochMillis: Long? = null,
+    val failure: String? = null,
+)
+
 data class PtySessionSnapshot(
     val sessionId: String? = null,
     val state: PtySessionState = PtySessionState.IDLE,
@@ -26,6 +43,7 @@ data class PtySessionSnapshot(
     val bytesWritten: Long = 0L,
     val transcriptPath: String? = null,
     val auditPath: String? = null,
+    val processTree: PtyProcessTreeSnapshot = PtyProcessTreeSnapshot(),
     val cleanupExitCode: Int? = null,
     val cleanupOutput: String? = null,
     val failure: String? = null,
