@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "runtimeId": "debian-arm64-autocrack",
+  "distribution": "debian",
+  "architecture": "arm64",
+  "release": "bookworm",
+  "version": "pending-pinned-artifact",
+  "archiveFormat": "tar.zst",
+  "downloadUrl": null,
+  "sha256": null,
+  "requiredFreeBytes": 2147483648,
+  "entryShell": "/bin/bash",
+  "bindMounts": [
+    {"source": "/dev", "target": "/dev", "recursive": true, "readOnly": false},
+    {"source": "/proc", "target": "/proc", "recursive": false, "readOnly": false},
+    {"source": "/sys", "target": "/sys", "recursive": true, "readOnly": true},
+    {"source": "${ACTIVE_WORKSPACE}", "target": "/workspace", "recursive": true, "readOnly": false}
+  ],
+  "healthCommand": "/bin/bash -lc 'id; uname -m; command -v python3; command -v readelf'",
+  "status": "schema_ready_archive_not_yet_published"
+}
