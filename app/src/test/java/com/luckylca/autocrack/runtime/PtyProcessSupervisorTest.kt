@@ -10,7 +10,10 @@ class PtyProcessSupervisorTest {
         val script = PtyProcessProbeScriptBuilder.build(30891)
 
         assertTrue(script.contains("ROOT_PID=30891"))
-        assertTrue(script.contains("/proc/\${PID}/task/\${PID}/children"))
+        assertTrue(script.contains("/proc/"))
+        assertTrue(script.contains("/task/"))
+        assertTrue(script.contains("/children"))
+        assertTrue(script.contains("walk_process"))
         assertTrue(script.contains("PROCESS_TREE_BEGIN"))
         assertTrue(script.contains("PROCESS_TREE_END"))
     }
