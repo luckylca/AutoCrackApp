@@ -14,8 +14,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.5.5-phase5.5-debian-chroot"
+        versionCode = 11
+        versionName = "0.5.5.1-phase5.5.1-hardlink-fallback"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
