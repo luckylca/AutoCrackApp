@@ -207,10 +207,50 @@ object MountScriptBuilder {
     fun cleanup(rootfsPath: String): String {
         val root = ShellEscaper.quote(rootfsPath)
         return """
+            set -eu
             ROOT=$root
-            for TARGET in apex vendor system root workspace sys proc dev; do
-              umount -l "${'$'}ROOT/${'$'}TARGET" 2>/dev/null || true
+            PASS=0
+            while [ "${'$'}PASS" -lt 8 ]; do
+              TARGETS=
+              while read -r SOURCE TARGET FSTYPE OPTIONS REST; do
+                case "${'$'}TARGET" in
+                  "${'$'}ROOT"/*)
+                    TARGETS="${'$'}TARGET
+            ${'$'}TARGETS"
+                    ;;
+                esac
+              done < /proc/mounts
+
+              [ -n "${'$'}TARGETS" ] || break
+              PROGRESS=0
+              OLD_IFS=${'$'}IFS
+              IFS='
+            '
+              for TARGET in ${'$'}TARGETS; do
+                [ -n "${'$'}TARGET" ] || continue
+                if umount -l "${'$'}TARGET" 2>/dev/null; then
+                  PROGRESS=1
+                fi
+              done
+              IFS=${'$'}OLD_IFS
+              PASS=${'$'}((PASS + 1))
+              [ "${'$'}PROGRESS" -eq 1 ] || break
             done
+
+            REMAINING=
+            while read -r SOURCE TARGET FSTYPE OPTIONS REST; do
+              case "${'$'}TARGET" in
+                "${'$'}ROOT"/*)
+                  REMAINING="${'$'}REMAINING${'$'}TARGET
+            "
+                  ;;
+              esac
+            done < /proc/mounts
+
+            if [ -n "${'$'}REMAINING" ]; then
+              printf 'ROOTFS_MOUNTS_REMAIN\n%s' "${'$'}REMAINING"
+              exit 1
+            fi
             echo ROOTFS_MOUNTS_CLEAN
         """.trimIndent()
     }
