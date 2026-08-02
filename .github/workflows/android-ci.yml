@@ -18,7 +18,7 @@ jobs:
   build-and-test:
     name: Lint, test, and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Check out repository
@@ -49,14 +49,14 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-phase4-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.4-root-runtime-debug.apk
           cd dist
-          sha256sum AutoCrackApp-phase4-debug.apk > AutoCrackApp-phase4-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.4-root-runtime-debug.apk > AutoCrackApp-0.5.4-root-runtime-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-phase4-debug
+          name: AutoCrackApp-0.5.4-root-runtime-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -65,7 +65,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-phase4-reports
+          name: AutoCrackApp-0.5.4-root-runtime-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml

@@ -5,6 +5,7 @@ composeBom = "2026.06.00"
 activityCompose = "1.13.0"
 coreKtx = "1.17.0"
 coroutines = "1.10.2"
+smali = "3.0.9"
 junit = "4.13.2"
 
 [libraries]
@@ -16,6 +17,7 @@ androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+smali-dexlib2 = { module = "com.android.tools.smali:smali-dexlib2", version.ref = "smali" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
