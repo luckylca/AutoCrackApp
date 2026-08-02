@@ -1,11 +1,14 @@
 package com.luckylca.autocrack.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -26,12 +29,14 @@ private enum class AppScreen {
     TOOLS,
     RUNTIME,
     LINUX,
+    TERMINAL,
 }
 
 @Composable
 fun AutoCrackApp() {
     val darkTheme = androidx.compose.foundation.isSystemInDarkTheme()
     var screen by remember { mutableStateOf(AppScreen.MAIN) }
+    val navigationScroll = rememberScrollState()
 
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -41,13 +46,16 @@ fun AutoCrackApp() {
                     AppScreen.TOOLS -> AnalysisToolsScreen()
                     AppScreen.RUNTIME -> RuntimeFoundationScreen()
                     AppScreen.LINUX -> ChrootRuntimeScreen()
+                    AppScreen.TERMINAL -> PtyTerminalScreen()
                 }
 
                 Row(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(top = 8.dp, end = 12.dp),
+                        .horizontalScroll(navigationScroll)
+                        .padding(top = 8.dp, start = 8.dp, end = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     FilledTonalButton(onClick = { screen = AppScreen.MAIN }) {
@@ -61,6 +69,9 @@ fun AutoCrackApp() {
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.LINUX }) {
                         Text("Linux")
+                    }
+                    FilledTonalButton(onClick = { screen = AppScreen.TERMINAL }) {
+                        Text("终端")
                     }
                 }
             }
