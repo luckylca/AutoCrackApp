@@ -3,9 +3,7 @@ package com.luckylca.autocrack.runtime
 import android.content.Context
 import android.net.Uri
 import android.system.Os
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
@@ -18,7 +16,6 @@ import java.util.Locale
 import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
@@ -274,14 +271,23 @@ class RootfsPackageInstaller(
         var entryCount = 0
         var extractedBytes = 0L
         val compressedInput = when (compression) {
-            "xz" -> XZCompressorInputStream(BufferedInputStream(FileInputStream(archiveFile)), true)
-            "gzip" -> GzipCompressorInputStream(BufferedInputStream(FileInputStream(archiveFile)), true)
+            "xz" -> XZCompressorInputStream.builder()
+                .setPath(archiveFile.toPath())
+                .setDecompressConcatenated(true)
+                .setMemoryLimitKiB(XZ_MEMORY_LIMIT_KIB)
+                .get()
+
+            "gzip" -> GzipCompressorInputStream.builder()
+                .setPath(archiveFile.toPath())
+                .setDecompressConcatenated(true)
+                .get()
+
             else -> error("不支持的压缩格式：$compression")
         }
 
         TarArchiveInputStream(compressedInput).use { tar ->
             while (true) {
-                val entry = tar.nextEntry as? TarArchiveEntry ?: break
+                val entry = tar.nextEntry ?: break
                 entryCount += 1
                 require(entryCount <= MAX_ENTRIES) { "rootfs 条目数量超过上限" }
                 val target = RootfsPathPolicy.resolveEntry(destination, entry.name)
@@ -312,7 +318,11 @@ class RootfsPackageInstaller(
                             val buffer = ByteArray(COPY_BUFFER_BYTES)
                             var remaining = entry.size
                             while (remaining > 0L) {
-                                val count = tar.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                                val count = tar.read(
+                                    buffer,
+                                    0,
+                                    minOf(buffer.size.toLong(), remaining).toInt(),
+                                )
                                 require(count > 0) { "rootfs 文件提前结束：${entry.name}" }
                                 output.write(buffer, 0, count)
                                 remaining -= count
@@ -411,6 +421,7 @@ class RootfsPackageInstaller(
         const val MAX_ENTRIES = 500_000
         const val COPY_BUFFER_BYTES = 128 * 1024
         const val PROGRESS_ENTRY_INTERVAL = 2_000
+        const val XZ_MEMORY_LIMIT_KIB = 256 * 1024
         const val PERMISSION_MASK = 0xFFF
         const val EXECUTABLE_MODE = 0x1ED
     }
