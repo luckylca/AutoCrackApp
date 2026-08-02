@@ -1,5 +1,6 @@
 package com.luckylca.autocrack.runtime
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -13,6 +14,16 @@ class TerminalOutputBufferTest {
 
         assertTrue(output.contains("RED\nabD"))
         assertFalse(output.contains("\u001B["))
+    }
+
+    @Test
+    fun redrawsPromptInsteadOfAppendingDuplicates() {
+        val buffer = TerminalOutputBuffer(maxCharacters = 2_048)
+
+        buffer.append("bash-5.2# old command")
+        val output = buffer.append("\r\u001B[2Kautocrack:/workspace# ")
+
+        assertEquals("autocrack:/workspace# ", output)
     }
 
     @Test
@@ -30,7 +41,7 @@ class TerminalOutputBufferTest {
     }
 
     @Test
-    fun buildsInteractiveRootChrootCommand() {
+    fun buildsInteractiveRootChrootCommandWithGuestLocalPty() {
         val command = ChrootPtyCommandBuilder.build(
             "/data/data/com.luckylca.autocrack/files/runtime/rootfs/current",
         )
@@ -38,7 +49,9 @@ class TerminalOutputBufferTest {
         assertTrue(command.contains("exec chroot"))
         assertTrue(command.contains("/usr/bin/env -i"))
         assertTrue(command.contains("TERM='xterm-256color'"))
-        assertTrue(command.contains("PS1='autocrack:\\w# '"))
+        assertTrue(command.contains("/usr/bin/script -q -e -f -c"))
+        assertTrue(command.contains("PS1="))
+        assertTrue(command.contains("autocrack:"))
         assertTrue(command.contains("/bin/bash --noprofile --norc -i"))
         assertTrue(command.contains("cd -- /workspace"))
     }
