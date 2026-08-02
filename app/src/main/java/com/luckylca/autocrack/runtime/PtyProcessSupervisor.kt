@@ -15,17 +15,22 @@ internal class PtyProcessSupervisor(
                 identity = HostExecutionIdentity.ROOT,
             ),
         )
-        val processes = PtyProcessProbeParser.parse(result.stdout)
+        val processes = PtyProcessProbeParser.parse(result.stdout, rootPid)
         val failure = when {
             result.stdout.lineSequence().any { it.trim() == ROOT_GONE_MARKER } ->
                 "PTY 根进程已退出"
-            result.succeeded && processes.isNotEmpty() -> null
+            result.stdoutTruncated ->
+                "进程表输出被截断，无法生成可靠进程树"
             result.failure != null -> result.failure
             result.timedOut -> "进程树探测超时"
             result.cancelled -> "进程树探测被取消"
-            else -> result.stderr.ifBlank {
+            !result.succeeded -> result.stderr.ifBlank {
                 "进程树探测失败：exit=${result.exitCode ?: "unknown"}"
             }
+            processes.isEmpty() -> "没有在 /proc 快照中找到 PTY 根进程"
+            processes.size == 1 ->
+                "仅识别到 PTY 根进程；当前内核可能限制了其他进程的 /proc 可见性"
+            else -> null
         }
         return PtyProcessTreeSnapshot(
             rootPid = rootPid,
@@ -36,7 +41,7 @@ internal class PtyProcessSupervisor(
     }
 
     private companion object {
-        const val PROCESS_PROBE_TIMEOUT_MILLIS = 5_000L
+        const val PROCESS_PROBE_TIMEOUT_MILLIS = 10_000L
         const val ROOT_GONE_MARKER = "ROOT_GONE"
     }
 }
@@ -47,103 +52,133 @@ internal object PtyProcessProbeScriptBuilder {
         return """
             set -u
             ROOT_PID=$rootPid
-            if [ ! -d "/proc/${'$'}ROOT_PID" ]; then
+            if [ ! -r "/proc/${'$'}ROOT_PID/stat" ]; then
               echo ROOT_GONE
               exit 3
             fi
 
-            VISITED=""
             sanitize() {
               tr '\000\011\012\015|' '     '
             }
-            status_value() {
-              KEY="${'$'}1"
-              FILE="${'$'}2"
-              sed -n "s/^${'$'}KEY:[[:space:]]*//p" "${'$'}FILE" 2>/dev/null | head -n 1
-            }
-            walk_process() {
-              PID="${'$'}1"
-              case " ${'$'}VISITED " in
-                *" ${'$'}PID "*) return ;;
-              esac
-              VISITED="${'$'}VISITED ${'$'}PID"
 
-              STATUS="/proc/${'$'}PID/status"
-              STAT_FILE="/proc/${'$'}PID/stat"
-              [ -r "${'$'}STATUS" ] || return
-              [ -r "${'$'}STAT_FILE" ] || return
+            echo PROCESS_TABLE_BEGIN
+            for PROC_DIR in /proc/[0-9]*; do
+              [ -d "${'$'}PROC_DIR" ] || continue
+              PID="${'$'}{PROC_DIR##*/}"
+              STAT_FILE="${'$'}PROC_DIR/stat"
+              [ -r "${'$'}STAT_FILE" ] || continue
 
-              NAME="${'$'}(status_value Name "${'$'}STATUS" | sanitize)"
-              STATE="${'$'}(status_value State "${'$'}STATUS" | sanitize)"
-              STAT_LINE="${'$'}(cat "${'$'}STAT_FILE" 2>/dev/null || true)"
-              [ -n "${'$'}STAT_LINE" ] || return
-
-              # /proc/<pid>/stat starts with: pid (comm) state ppid pgrp session ...
-              # comm may contain spaces or ')' characters, so remove through the final ') '.
-              STAT_REST="${'$'}{STAT_LINE##*) }"
-              set -- ${'$'}STAT_REST
-              STATE_CODE="${'$'}{1:-?}"
-              PPID="${'$'}{2:-0}"
-              PGID="${'$'}{3:-0}"
-              SID="${'$'}{4:-0}"
-
-              CMDLINE="${'$'}(cat "/proc/${'$'}PID/cmdline" 2>/dev/null | sanitize)"
-              [ -n "${'$'}CMDLINE" ] || CMDLINE="[${'$'}NAME]"
-              [ -n "${'$'}STATE" ] || STATE="${'$'}STATE_CODE"
-              printf 'P|%s|%s|%s|%s|%s|%s|%s\n' \
-                "${'$'}PID" "${'$'}PPID" "${'$'}PGID" "${'$'}SID" \
-                "${'$'}STATE" "${'$'}NAME" "${'$'}CMDLINE"
-
-              # Linux records children per task. Read every task's children file so a
-              # child created by a non-leader thread is not missed. This remains scoped
-              # to the active PTY process and its descendants; it never scans all /proc.
-              CHILDREN=""
-              for CHILDREN_FILE in "/proc/${'$'}PID/task/"*/children; do
-                [ -r "${'$'}CHILDREN_FILE" ] || continue
-                FILE_CHILDREN="${'$'}(cat "${'$'}CHILDREN_FILE" 2>/dev/null || true)"
-                CHILDREN="${'$'}CHILDREN ${'$'}FILE_CHILDREN"
-              done
-              for CHILD in ${'$'}CHILDREN; do
-                walk_process "${'$'}CHILD"
-              done
-            }
-
-            echo PROCESS_TREE_BEGIN
-            walk_process "${'$'}ROOT_PID"
-            echo PROCESS_TREE_END
+              STAT_LINE="${'$'}(cat "${'$'}STAT_FILE" 2>/dev/null | sanitize)"
+              [ -n "${'$'}STAT_LINE" ] || continue
+              CMDLINE="${'$'}(cat "${'$'}PROC_DIR/cmdline" 2>/dev/null | sanitize)"
+              printf 'R|%s|%s|%s\n' "${'$'}PID" "${'$'}STAT_LINE" "${'$'}CMDLINE"
+            done
+            echo PROCESS_TABLE_END
         """.trimIndent()
     }
 }
 
 internal object PtyProcessProbeParser {
-    fun parse(output: String): List<PtyProcessInfo> {
+    fun parse(output: String, rootPid: Int): List<PtyProcessInfo> {
+        require(rootPid > 1) { "PTY 根进程 PID 非法" }
+        val allProcesses = parseProcessTable(output)
+        return selectRootAndDescendants(allProcesses, rootPid)
+    }
+
+    internal fun parseProcessTable(output: String): List<PtyProcessInfo> {
         var inside = false
         val processes = mutableListOf<PtyProcessInfo>()
         output.lineSequence().forEach { rawLine ->
             val line = rawLine.trimEnd()
             when (line) {
-                "PROCESS_TREE_BEGIN" -> inside = true
-                "PROCESS_TREE_END" -> inside = false
+                "PROCESS_TABLE_BEGIN" -> inside = true
+                "PROCESS_TABLE_END" -> inside = false
                 else -> {
-                    if (!inside || !line.startsWith("P|")) return@forEach
-                    val fields = line.split('|', limit = 8)
-                    if (fields.size != 8) return@forEach
-                    val pid = fields[1].toIntOrNull() ?: return@forEach
-                    val parentPid = fields[2].toIntOrNull() ?: 0
-                    val processGroupId = fields[3].toIntOrNull() ?: 0
-                    val sessionId = fields[4].toIntOrNull() ?: 0
-                    processes += PtyProcessInfo(
-                        pid = pid,
-                        parentPid = parentPid,
-                        processGroupId = processGroupId,
-                        sessionId = sessionId,
-                        state = fields[5].trim(),
-                        name = fields[6].trim(),
-                        commandLine = fields[7].trim(),
-                    )
+                    if (!inside || !line.startsWith("R|")) return@forEach
+                    val fields = line.split('|', limit = 4)
+                    if (fields.size != 4) return@forEach
+                    val expectedPid = fields[1].toIntOrNull() ?: return@forEach
+                    parseStatRecord(
+                        expectedPid = expectedPid,
+                        statLine = fields[2],
+                        commandLine = fields[3],
+                    )?.let(processes::add)
                 }
             }
         }
         return processes.distinctBy(PtyProcessInfo::pid)
     }
+
+    internal fun selectRootAndDescendants(
+        processes: List<PtyProcessInfo>,
+        rootPid: Int,
+    ): List<PtyProcessInfo> {
+        val processByPid = processes.associateBy(PtyProcessInfo::pid)
+        if (rootPid !in processByPid) return emptyList()
+
+        val selectedPids = linkedSetOf(rootPid)
+        var changed: Boolean
+        do {
+            changed = false
+            processes.forEach { process ->
+                if (process.pid !in selectedPids && process.parentPid in selectedPids) {
+                    selectedPids += process.pid
+                    changed = true
+                }
+            }
+        } while (changed)
+
+        return selectedPids.mapNotNull(processByPid::get)
+    }
+
+    private fun parseStatRecord(
+        expectedPid: Int,
+        statLine: String,
+        commandLine: String,
+    ): PtyProcessInfo? {
+        val openParen = statLine.indexOf('(')
+        val closeParen = statLine.lastIndexOf(") ")
+        if (openParen <= 0 || closeParen <= openParen) return null
+
+        val statPid = statLine.substring(0, openParen).trim().toIntOrNull() ?: return null
+        if (statPid != expectedPid) return null
+
+        val name = statLine.substring(openParen + 1, closeParen).trim()
+        val remainingFields = statLine.substring(closeParen + 2)
+            .trim()
+            .split(WHITESPACE_REGEX)
+        if (remainingFields.size < MINIMUM_STAT_FIELDS) return null
+
+        val stateCode = remainingFields[0]
+        val parentPid = remainingFields[1].toIntOrNull() ?: return null
+        val processGroupId = remainingFields[2].toIntOrNull() ?: return null
+        val sessionId = remainingFields[3].toIntOrNull() ?: return null
+        return PtyProcessInfo(
+            pid = expectedPid,
+            parentPid = parentPid,
+            processGroupId = processGroupId,
+            sessionId = sessionId,
+            state = stateLabel(stateCode),
+            name = name,
+            commandLine = commandLine.trim().ifBlank { "[$name]" },
+        )
+    }
+
+    private fun stateLabel(stateCode: String): String {
+        val description = when (stateCode.firstOrNull()) {
+            'R' -> "running"
+            'S' -> "sleeping"
+            'D' -> "disk sleep"
+            'T' -> "stopped"
+            't' -> "tracing stop"
+            'Z' -> "zombie"
+            'X', 'x' -> "dead"
+            'I' -> "idle"
+            else -> "unknown"
+        }
+        return "$stateCode ($description)"
+    }
+
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    private const val MINIMUM_STAT_FIELDS = 4
 }
