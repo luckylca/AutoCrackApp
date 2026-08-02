@@ -96,8 +96,9 @@ jobs:
           )
           PY
 
-          tar -tJf "$ARCHIVE" | grep -Eq '(^|/)bin/bash$'
-          tar -tJf "$ARCHIVE" | grep -Eq '(^|/)usr/bin/readelf$'
+          tar -tJf "$ARCHIVE" > dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)bin/bash$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/readelf$' dist/rootfs/rootfs-entries.txt
           (
             cd dist/rootfs
             zip -0 AutoCrackApp-debian-bookworm-arm64-rootfs.zip manifest.json rootfs.tar.xz
