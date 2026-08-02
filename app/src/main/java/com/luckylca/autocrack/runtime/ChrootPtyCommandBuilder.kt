@@ -15,13 +15,21 @@ object ChrootPtyCommandBuilder {
             "LANG" to "C.UTF-8",
             "LC_ALL" to "C.UTF-8",
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "PS1" to "autocrack:\\w# ",
             "AUTOC_WORKSPACE" to "/workspace",
         )
-        val innerCommand = buildString {
+        val interactiveShell = buildString {
             append("umask 077\n")
             append("cd -- /workspace || exit 125\n")
+            append("export PS1=").append(ShellEscaper.quote("autocrack:\\w# ")).append('\n')
             append("exec /bin/bash --noprofile --norc -i")
+        }
+        val innerCommand = buildString {
+            append("if [ -x /usr/bin/script ]; then\n")
+            append("  exec /usr/bin/script -q -e -f -c ")
+                .append(ShellEscaper.quote(interactiveShell))
+                .append(" /dev/null\n")
+            append("fi\n")
+            append(interactiveShell)
         }
 
         return buildString {
