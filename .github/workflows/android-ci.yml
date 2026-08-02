@@ -57,14 +57,14 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.7-process-supervisor-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.7.1-process-probe-fix-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.7-process-supervisor-debug.apk > AutoCrackApp-0.5.7-process-supervisor-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.7.1-process-probe-fix-debug.apk > AutoCrackApp-0.5.7.1-process-probe-fix-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.7-process-supervisor-debug
+          name: AutoCrackApp-0.5.7.1-process-probe-fix-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -73,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.7-process-supervisor-reports
+          name: AutoCrackApp-0.5.7.1-process-probe-fix-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
