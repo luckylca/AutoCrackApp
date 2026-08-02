@@ -6,14 +6,15 @@ import org.junit.Test
 
 class PtyProcessSupervisorTest {
     @Test
-    fun buildsGlobalProcSnapshotWithoutChildrenPseudoFile() {
+    fun buildsGlobalProcSnapshotWithoutRecursiveChildrenWalk() {
         val script = PtyProcessProbeScriptBuilder.build(30891)
 
         assertTrue(script.contains("ROOT_PID=30891"))
         assertTrue(script.contains("/proc/[0-9]*"))
         assertTrue(script.contains("PROCESS_TABLE_BEGIN"))
         assertTrue(script.contains("PROCESS_TABLE_END"))
-        assertTrue(!script.contains("/children"))
+        assertTrue(!script.contains("walk_process"))
+        assertTrue(!script.contains("CHILDREN_FILE="))
     }
 
     @Test
