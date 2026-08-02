@@ -1,0 +1,217 @@
+package com.luckylca.autocrack.runtime
+
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+
+class ChrootRuntimeEngine(
+    private val layout: RuntimeLayout,
+    private val hostEngine: RootShellRuntimeEngine,
+) : RuntimeEngine {
+    override val mode: RuntimeCapabilityMode = RuntimeCapabilityMode.FULL_ROOT
+
+    override suspend fun execute(request: ShellCommandRequest): ShellCommandResult {
+        require(layout.readRootfsState() == RuntimeRootfsState.INSTALLED) {
+            "Debian rootfs 尚未安装"
+        }
+        require(layout.rootfsRoot.isDirectory) { "rootfs current 目录不存在" }
+        val workspace = layout.createRuntimeWorkspace()
+        val mountResult = prepareMounts(workspace)
+        require(mountResult.succeeded) {
+            "准备 chroot 挂载失败：exit=${mountResult.exitCode}, ${mountResult.stderr}"
+        }
+
+        val startedAt = System.currentTimeMillis()
+        return try {
+            val hostResult = hostEngine.execute(
+                ShellCommandRequest(
+                    command = ChrootCommandBuilder.build(
+                        rootfsPath = layout.rootfsRoot.path,
+                        request = request,
+                    ),
+                    workingDirectory = layout.runtimeRoot.path,
+                    stdin = request.stdin,
+                    timeoutMillis = request.timeoutMillis,
+                    identity = HostExecutionIdentity.ROOT,
+                ),
+            )
+            val result = hostResult.copy(
+                command = request.command,
+                workingDirectory = request.workingDirectory,
+                auditFilePath = layout.chrootAuditFile.path,
+            )
+            appendAudit(result, startedAt)
+            result
+        } finally {
+            cleanupMounts()
+        }
+    }
+
+    suspend fun prepareMounts(workspace: File = layout.createRuntimeWorkspace()): ShellCommandResult {
+        require(layout.readRootfsState() == RuntimeRootfsState.INSTALLED) {
+            "Debian rootfs 尚未安装"
+        }
+        require(layout.rootfsRoot.isDirectory) { "rootfs current 目录不存在" }
+        require(layout.isManagedPath(workspace)) { "工作区不在 AutoCrackApp 管理目录" }
+        prepareRootfsDirectories()
+        val command = MountScriptBuilder.prepare(
+            rootfsPath = layout.rootfsRoot.path,
+            workspacePath = workspace.canonicalPath,
+            homePath = layout.homeRoot.canonicalPath,
+        )
+        return hostEngine.execute(
+            ShellCommandRequest(
+                command = command,
+                workingDirectory = layout.runtimeRoot.path,
+                timeoutMillis = MOUNT_TIMEOUT_MILLIS,
+            ),
+        )
+    }
+
+    suspend fun cleanupMounts(): ShellCommandResult {
+        val command = MountScriptBuilder.cleanup(layout.rootfsRoot.path)
+        return hostEngine.execute(
+            ShellCommandRequest(
+                command = command,
+                workingDirectory = layout.runtimeRoot.path,
+                timeoutMillis = MOUNT_TIMEOUT_MILLIS,
+            ),
+        )
+    }
+
+    private fun prepareRootfsDirectories() {
+        listOf(
+            "dev",
+            "dev/pts",
+            "proc",
+            "sys",
+            "workspace",
+            "root",
+            "tmp",
+            "system",
+            "vendor",
+            "apex",
+        ).forEach { relative -> File(layout.rootfsRoot, relative).mkdirs() }
+        File(layout.rootfsRoot, "etc/resolv.conf").apply {
+            parentFile?.mkdirs()
+            writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n", Charsets.UTF_8)
+        }
+    }
+
+    private suspend fun appendAudit(result: ShellCommandResult, startedAt: Long) {
+        withContext(Dispatchers.IO) {
+            val json = JSONObject()
+                .put("schemaVersion", 1)
+                .put("requestId", result.requestId)
+                .put("runtime", "debian-chroot")
+                .put("rootfsVersion", layout.readRootfsVersion() ?: JSONObject.NULL)
+                .put("command", result.command)
+                .put("workingDirectory", result.workingDirectory)
+                .put("exitCode", result.exitCode ?: JSONObject.NULL)
+                .put("startedAtEpochMillis", startedAt)
+                .put("completedAtEpochMillis", result.completedAtEpochMillis)
+                .put("durationMillis", result.durationMillis)
+                .put("timedOut", result.timedOut)
+                .put("cancelled", result.cancelled)
+                .put("stdoutChars", result.stdout.length)
+                .put("stderrChars", result.stderr.length)
+                .put("stdoutTruncated", result.stdoutTruncated)
+                .put("stderrTruncated", result.stderrTruncated)
+                .put("failure", result.failure ?: JSONObject.NULL)
+            layout.auditRoot.mkdirs()
+            synchronized(AUDIT_LOCK) {
+                layout.chrootAuditFile.appendText(json.toString() + "\n", Charsets.UTF_8)
+            }
+        }
+    }
+
+    private companion object {
+        val AUDIT_LOCK = Any()
+        const val MOUNT_TIMEOUT_MILLIS = 30_000L
+    }
+}
+
+object ChrootCommandBuilder {
+    fun build(rootfsPath: String, request: ShellCommandRequest): String {
+        require(request.workingDirectory.startsWith('/')) {
+            "chroot 工作目录必须是绝对路径"
+        }
+        require(!request.workingDirectory.contains("..")) {
+            "chroot 工作目录不能包含 .."
+        }
+        val environment = linkedMapOf(
+            "HOME" to "/root",
+            "USER" to "root",
+            "LOGNAME" to "root",
+            "SHELL" to "/bin/bash",
+            "TERM" to "xterm-256color",
+            "LANG" to "C.UTF-8",
+            "LC_ALL" to "C.UTF-8",
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "AUTOC_WORKSPACE" to "/workspace",
+        ).apply { putAll(request.environment) }
+
+        val inner = buildString {
+            append("cd -- ").append(ShellEscaper.quote(request.workingDirectory))
+                .append(" || exit 125\n")
+            append("exec /bin/bash --noprofile --norc -lc ")
+                .append(ShellEscaper.quote(request.command))
+        }
+        return buildString {
+            append("exec chroot ").append(ShellEscaper.quote(rootfsPath))
+            append(" /usr/bin/env -i")
+            environment.forEach { (key, value) ->
+                append(' ').append(key).append('=').append(ShellEscaper.quote(value))
+            }
+            append(" /bin/bash --noprofile --norc -c ").append(ShellEscaper.quote(inner))
+        }
+    }
+}
+
+object MountScriptBuilder {
+    fun prepare(rootfsPath: String, workspacePath: String, homePath: String): String {
+        val root = ShellEscaper.quote(rootfsPath)
+        val workspace = ShellEscaper.quote(workspacePath)
+        val home = ShellEscaper.quote(homePath)
+        return """
+            set -eu
+            ROOT=$root
+            WORKSPACE=$workspace
+            HOME_SOURCE=$home
+            is_mounted() { grep -qs " ${'$'}1 " /proc/mounts; }
+            bind_once() {
+              SRC="${'$'}1"; DST="${'$'}2"
+              if ! is_mounted "${'$'}DST"; then mount --bind "${'$'}SRC" "${'$'}DST"; fi
+            }
+            rbind_once() {
+              SRC="${'$'}1"; DST="${'$'}2"
+              if ! is_mounted "${'$'}DST"; then
+                mount --rbind "${'$'}SRC" "${'$'}DST" 2>/dev/null || mount --bind "${'$'}SRC" "${'$'}DST"
+              fi
+            }
+            mkdir -p "${'$'}ROOT/dev" "${'$'}ROOT/dev/pts" "${'$'}ROOT/proc" "${'$'}ROOT/sys" \
+              "${'$'}ROOT/workspace" "${'$'}ROOT/root" "${'$'}ROOT/system" "${'$'}ROOT/vendor" "${'$'}ROOT/apex"
+            rbind_once /dev "${'$'}ROOT/dev"
+            if ! is_mounted "${'$'}ROOT/proc"; then mount -t proc proc "${'$'}ROOT/proc"; fi
+            rbind_once /sys "${'$'}ROOT/sys"
+            bind_once "${'$'}WORKSPACE" "${'$'}ROOT/workspace"
+            bind_once "${'$'}HOME_SOURCE" "${'$'}ROOT/root"
+            [ ! -d /system ] || bind_once /system "${'$'}ROOT/system"
+            [ ! -d /vendor ] || bind_once /vendor "${'$'}ROOT/vendor"
+            [ ! -d /apex ] || bind_once /apex "${'$'}ROOT/apex"
+            echo ROOTFS_MOUNTS_READY
+        """.trimIndent()
+    }
+
+    fun cleanup(rootfsPath: String): String {
+        val root = ShellEscaper.quote(rootfsPath)
+        return """
+            ROOT=$root
+            for TARGET in apex vendor system root workspace sys proc dev; do
+              umount -l "${'$'}ROOT/${'$'}TARGET" 2>/dev/null || true
+            done
+            echo ROOTFS_MOUNTS_CLEAN
+        """.trimIndent()
+    }
+}
