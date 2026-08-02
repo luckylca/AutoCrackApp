@@ -69,22 +69,40 @@ internal object PtyProcessProbeScriptBuilder {
               VISITED="${'$'}VISITED ${'$'}PID"
 
               STATUS="/proc/${'$'}PID/status"
+              STAT_FILE="/proc/${'$'}PID/stat"
               [ -r "${'$'}STATUS" ] || return
+              [ -r "${'$'}STAT_FILE" ] || return
+
               NAME="${'$'}(status_value Name "${'$'}STATUS" | sanitize)"
               STATE="${'$'}(status_value State "${'$'}STATUS" | sanitize)"
-              PPID="${'$'}(status_value PPid "${'$'}STATUS")"
-              PGID="${'$'}(status_value NSpgid "${'$'}STATUS")"
-              SID="${'$'}(status_value NSsid "${'$'}STATUS")"
+              STAT_LINE="${'$'}(cat "${'$'}STAT_FILE" 2>/dev/null || true)"
+              [ -n "${'$'}STAT_LINE" ] || return
+
+              # /proc/<pid>/stat starts with: pid (comm) state ppid pgrp session ...
+              # comm may contain spaces or ')' characters, so remove through the final ') '.
+              STAT_REST="${'$'}{STAT_LINE##*) }"
+              set -- ${'$'}STAT_REST
+              STATE_CODE="${'$'}{1:-?}"
+              PPID="${'$'}{2:-0}"
+              PGID="${'$'}{3:-0}"
+              SID="${'$'}{4:-0}"
+
               CMDLINE="${'$'}(cat "/proc/${'$'}PID/cmdline" 2>/dev/null | sanitize)"
               [ -n "${'$'}CMDLINE" ] || CMDLINE="[${'$'}NAME]"
-              [ -n "${'$'}PPID" ] || PPID=0
-              [ -n "${'$'}PGID" ] || PGID=0
-              [ -n "${'$'}SID" ] || SID=0
+              [ -n "${'$'}STATE" ] || STATE="${'$'}STATE_CODE"
               printf 'P|%s|%s|%s|%s|%s|%s|%s\n' \
                 "${'$'}PID" "${'$'}PPID" "${'$'}PGID" "${'$'}SID" \
                 "${'$'}STATE" "${'$'}NAME" "${'$'}CMDLINE"
 
-              CHILDREN="${'$'}(cat "/proc/${'$'}PID/task/${'$'}PID/children" 2>/dev/null || true)"
+              # Linux records children per task. Read every task's children file so a
+              # child created by a non-leader thread is not missed. This remains scoped
+              # to the active PTY process and its descendants; it never scans all /proc.
+              CHILDREN=""
+              for CHILDREN_FILE in "/proc/${'$'}PID/task/"*/children; do
+                [ -r "${'$'}CHILDREN_FILE" ] || continue
+                FILE_CHILDREN="${'$'}(cat "${'$'}CHILDREN_FILE" 2>/dev/null || true)"
+                CHILDREN="${'$'}CHILDREN ${'$'}FILE_CHILDREN"
+              done
               for CHILD in ${'$'}CHILDREN; do
                 walk_process "${'$'}CHILD"
               done
