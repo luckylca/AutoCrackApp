@@ -2,7 +2,9 @@ package com.luckylca.autocrack.runtime
 
 import android.content.Context
 import android.net.Uri
+import android.system.ErrnoException
 import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.FileVisitResult
@@ -120,6 +122,30 @@ object RootfsPathPolicy {
         return target
     }
 }
+
+internal object RootfsHardLinkPolicy {
+    fun shouldMaterialize(errno: Int): Boolean = when (errno) {
+        OsConstants.EACCES,
+        OsConstants.EPERM,
+        OsConstants.EXDEV,
+        OsConstants.EMLINK,
+        OsConstants.ENOSYS,
+        OsConstants.EROFS -> true
+
+        else -> false
+    }
+}
+
+private data class PendingHardLink(
+    val target: File,
+    val linkName: String,
+    val mode: Int,
+)
+
+private data class HardLinkRestoreResult(
+    val copiedBytes: Long,
+    val materialized: Boolean,
+)
 
 class RootfsPackageInstaller(
     context: Context,
@@ -267,7 +293,7 @@ class RootfsPackageInstaller(
         compression: String,
         onProgress: (String) -> Unit,
     ): Pair<Int, Long> {
-        val hardLinks = mutableListOf<Pair<File, String>>()
+        val hardLinks = mutableListOf<PendingHardLink>()
         var entryCount = 0
         var extractedBytes = 0L
         val compressedInput = when (compression) {
@@ -305,7 +331,11 @@ class RootfsPackageInstaller(
                     }
 
                     entry.isLink -> {
-                        hardLinks += target to entry.linkName
+                        hardLinks += PendingHardLink(
+                            target = target,
+                            linkName = entry.linkName,
+                            mode = entry.mode,
+                        )
                     }
 
                     entry.isFile -> {
@@ -340,13 +370,76 @@ class RootfsPackageInstaller(
             }
         }
 
-        hardLinks.forEach { (target, linkName) ->
-            val source = RootfsPathPolicy.resolveEntry(destination, linkName)
-            require(source.exists()) { "rootfs 硬链接目标不存在：$linkName" }
-            if (target.exists()) target.delete()
-            Os.link(source.path, target.path)
+        var materializedHardLinks = 0
+        hardLinks.forEach { hardLink ->
+            val restored = restoreHardLink(
+                destination = destination,
+                hardLink = hardLink,
+                remainingBytes = MAX_EXTRACTED_BYTES - extractedBytes,
+            )
+            extractedBytes += restored.copiedBytes
+            if (restored.materialized) materializedHardLinks += 1
+        }
+        if (materializedHardLinks > 0) {
+            onProgress("系统限制硬链接，已将 $materializedHardLinks 个条目安全复制")
         }
         return entryCount to extractedBytes
+    }
+
+    private fun restoreHardLink(
+        destination: File,
+        hardLink: PendingHardLink,
+        remainingBytes: Long,
+    ): HardLinkRestoreResult {
+        val source = RootfsPathPolicy.resolveEntry(destination, hardLink.linkName)
+        require(source.isFile && !Files.isSymbolicLink(source.toPath())) {
+            "rootfs 硬链接目标不是普通文件：${hardLink.linkName}"
+        }
+        Files.deleteIfExists(hardLink.target.toPath())
+
+        return try {
+            Os.link(source.path, hardLink.target.path)
+            applyMode(hardLink.target, hardLink.mode)
+            HardLinkRestoreResult(copiedBytes = 0L, materialized = false)
+        } catch (exception: ErrnoException) {
+            if (!RootfsHardLinkPolicy.shouldMaterialize(exception.errno)) throw exception
+
+            val expectedBytes = source.length()
+            require(expectedBytes <= remainingBytes) {
+                "rootfs 硬链接复制会超过解包大小上限：${hardLink.linkName}"
+            }
+            val copiedBytes = copyRegularFile(
+                source = source,
+                target = hardLink.target,
+                maxBytes = remainingBytes,
+            )
+            require(copiedBytes == expectedBytes) {
+                "rootfs 硬链接复制大小不匹配：${hardLink.linkName}"
+            }
+            applyMode(hardLink.target, hardLink.mode)
+            HardLinkRestoreResult(copiedBytes = copiedBytes, materialized = true)
+        }
+    }
+
+    private fun copyRegularFile(
+        source: File,
+        target: File,
+        maxBytes: Long,
+    ): Long {
+        var copied = 0L
+        source.inputStream().buffered().use { input ->
+            FileOutputStream(target).buffered().use { output ->
+                val buffer = ByteArray(COPY_BUFFER_BYTES)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    copied += count
+                    require(copied <= maxBytes) { "rootfs 硬链接复制超过允许上限" }
+                    output.write(buffer, 0, count)
+                }
+            }
+        }
+        return copied
     }
 
     private fun activateStaging(manifest: RootfsPackageManifest) {
