@@ -1,6 +1,5 @@
 package com.luckylca.autocrack.runtime
 
-import java.io.File
 import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -57,7 +56,7 @@ class RootShellRuntimeEngine(
                     }
                     val stdinDeferred = async(Dispatchers.IO) {
                         runningProcess.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
-                            request.stdin?.let(writer::write)
+                            request.stdin?.let { stdin -> writer.write(stdin) }
                         }
                     }
 
