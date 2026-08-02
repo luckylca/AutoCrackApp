@@ -7,7 +7,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -66,6 +69,11 @@ class ChrootPtySessionManager private constructor(context: Context) {
                 auditPath = ptyAuditFile.path,
             )
 
+            val staleCleanup = chrootEngine.cleanupMounts()
+            check(staleCleanup.succeeded) {
+                "清理遗留 chroot 挂载失败：exit=${staleCleanup.exitCode}, " +
+                    staleCleanup.stderr.ifBlank { staleCleanup.stdout }
+            }
             val mountResult = chrootEngine.prepareMounts(layout.createRuntimeWorkspace())
             check(mountResult.succeeded) {
                 "准备 PTY chroot 挂载失败：exit=${mountResult.exitCode}, ${mountResult.stderr}"
@@ -123,16 +131,19 @@ class ChrootPtySessionManager private constructor(context: Context) {
                     detail = JSONObject()
                         .put("rows", rows)
                         .put("columns", columns)
-                        .put("rootfsVersion", layout.readRootfsVersion() ?: JSONObject.NULL),
+                        .put("rootfsVersion", layout.readRootfsVersion() ?: JSONObject.NULL)
+                        .put("staleCleanupExitCode", staleCleanup.exitCode ?: JSONObject.NULL),
                 )
                 PtySessionForegroundService.start(appContext, sessionId, pid)
                 readerJob = scope.launch { readLoop(managed) }
             } catch (exception: Exception) {
-                runCatching { chrootEngine.cleanupMounts() }
+                val cleanup = runCatching { chrootEngine.cleanupMounts() }.getOrNull()
                 mutableSnapshot.update {
                     it.copy(
                         state = PtySessionState.FAILED,
                         completedAtEpochMillis = System.currentTimeMillis(),
+                        cleanupExitCode = cleanup?.exitCode,
+                        cleanupOutput = cleanup?.stdout,
                         failure = exception.message ?: exception::class.java.name,
                     )
                 }
@@ -232,6 +243,8 @@ class ChrootPtySessionManager private constructor(context: Context) {
             appendLine("写入字节：${current.bytesWritten}")
             appendLine("Transcript：${current.transcriptPath ?: "无"}")
             appendLine("审计：${current.auditPath ?: "无"}")
+            appendLine("挂载清理退出码：${current.cleanupExitCode ?: "未执行"}")
+            appendLine("挂载清理输出：${current.cleanupOutput ?: "无"}")
             appendLine("Failure：${current.failure ?: "无"}")
             appendLine()
             appendLine("终端输出：")
@@ -291,22 +304,55 @@ class ChrootPtySessionManager private constructor(context: Context) {
         failure: String?,
     ) {
         if (!session.finalized.compareAndSet(false, true)) return
-        readerJob?.cancel()
+
+        val currentJob = currentCoroutineContext()[Job]
+        val activeReader = readerJob
         readerJob = null
-        runCatching { chrootEngine.cleanupMounts() }
-        PtySessionForegroundService.stop(appContext)
+        if (activeReader != null && activeReader !== currentJob) {
+            withContext(NonCancellable) { activeReader.cancelAndJoin() }
+        }
+
+        var cleanupExitCode: Int? = null
+        var cleanupOutput: String? = null
+        var cleanupFailure: String? = null
+        withContext(NonCancellable) {
+            runCatching { chrootEngine.cleanupMounts() }
+                .onSuccess { result ->
+                    cleanupExitCode = result.exitCode
+                    cleanupOutput = buildString {
+                        if (result.stdout.isNotBlank()) append(result.stdout)
+                        if (result.stderr.isNotBlank()) {
+                            if (isNotEmpty()) append('\n')
+                            append(result.stderr)
+                        }
+                    }.ifBlank { null }
+                    if (!result.succeeded) {
+                        cleanupFailure = "挂载清理失败：exit=${result.exitCode}, " +
+                            result.stderr.ifBlank { result.stdout }
+                    }
+                }
+                .onFailure { exception ->
+                    cleanupFailure = "挂载清理异常：${exception.message ?: exception::class.java.name}"
+                }
+            PtySessionForegroundService.stop(appContext)
+        }
 
         lifecycleMutex.withLock {
             if (activeSession === session) activeSession = null
         }
         val completedAt = System.currentTimeMillis()
-        val finalState = if (failure == null) PtySessionState.EXITED else PtySessionState.FAILED
+        val finalFailure = listOfNotNull(failure, cleanupFailure)
+            .joinToString(" | ")
+            .takeIf(String::isNotBlank)
+        val finalState = if (finalFailure == null) PtySessionState.EXITED else PtySessionState.FAILED
         mutableSnapshot.update { current ->
             current.copy(
                 state = finalState,
                 completedAtEpochMillis = completedAt,
                 exitCode = exitCode.takeUnless { it == NativePtyBridge.STILL_RUNNING },
-                failure = failure,
+                cleanupExitCode = cleanupExitCode,
+                cleanupOutput = cleanupOutput,
+                failure = finalFailure,
             )
         }
         appendAudit(
@@ -314,7 +360,9 @@ class ChrootPtySessionManager private constructor(context: Context) {
             session = session,
             detail = JSONObject()
                 .put("exitCode", exitCode)
-                .put("failure", failure ?: JSONObject.NULL)
+                .put("cleanupExitCode", cleanupExitCode ?: JSONObject.NULL)
+                .put("cleanupOutput", cleanupOutput ?: JSONObject.NULL)
+                .put("failure", finalFailure ?: JSONObject.NULL)
                 .put("completedAtEpochMillis", completedAt),
         )
     }
