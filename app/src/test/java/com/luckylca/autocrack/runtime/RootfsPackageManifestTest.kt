@@ -2,6 +2,7 @@ package com.luckylca.autocrack.runtime
 
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -59,5 +60,13 @@ class RootfsPackageManifestTest {
         } finally {
             root.deleteRecursively()
         }
+    }
+
+    @Test
+    fun hardLinkPolicyMaterializesPlatformRestrictionFailures() {
+        assertTrue(RootfsHardLinkPolicy.shouldMaterialize(13)) // EACCES
+        assertTrue(RootfsHardLinkPolicy.shouldMaterialize(1)) // EPERM
+        assertTrue(RootfsHardLinkPolicy.shouldMaterialize(18)) // EXDEV
+        assertFalse(RootfsHardLinkPolicy.shouldMaterialize(2)) // ENOENT
     }
 }
