@@ -25,6 +25,7 @@ private enum class AppScreen {
     MAIN,
     TOOLS,
     RUNTIME,
+    LINUX,
 }
 
 @Composable
@@ -39,6 +40,7 @@ fun AutoCrackApp() {
                     AppScreen.MAIN -> PhaseFiveTabbedScreen()
                     AppScreen.TOOLS -> AnalysisToolsScreen()
                     AppScreen.RUNTIME -> RuntimeFoundationScreen()
+                    AppScreen.LINUX -> ChrootRuntimeScreen()
                 }
 
                 Row(
@@ -46,16 +48,19 @@ fun AutoCrackApp() {
                         .align(Alignment.TopEnd)
                         .statusBarsPadding()
                         .padding(top = 8.dp, end = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     FilledTonalButton(onClick = { screen = AppScreen.MAIN }) {
-                        Text("主页")
+                        Text("首页")
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.TOOLS }) {
                         Text("工具")
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.RUNTIME }) {
-                        Text("运行时")
+                        Text("Root")
+                    }
+                    FilledTonalButton(onClick = { screen = AppScreen.LINUX }) {
+                        Text("Linux")
                     }
                 }
             }

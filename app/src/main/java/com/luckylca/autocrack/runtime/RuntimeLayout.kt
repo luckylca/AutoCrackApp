@@ -7,7 +7,11 @@ import org.json.JSONObject
 class RuntimeLayout(context: Context) {
     val filesRoot: File = context.applicationContext.filesDir.canonicalFile
     val runtimeRoot: File = File(filesRoot, "runtime").canonicalFile
-    val rootfsRoot: File = File(runtimeRoot, "rootfs").canonicalFile
+    val rootfsContainer: File = File(runtimeRoot, "rootfs").canonicalFile
+    val rootfsRoot: File = File(rootfsContainer, "current").canonicalFile
+    val rootfsStagingRoot: File = File(rootfsContainer, "staging").canonicalFile
+    val rootfsBackupRoot: File = File(rootfsContainer, "backup").canonicalFile
+    val rootfsPackagesRoot: File = File(rootfsContainer, "packages").canonicalFile
     val homeRoot: File = File(runtimeRoot, "home").canonicalFile
     val binRoot: File = File(runtimeRoot, "bin").canonicalFile
     val toolpacksRoot: File = File(runtimeRoot, "toolpacks").canonicalFile
@@ -17,11 +21,15 @@ class RuntimeLayout(context: Context) {
     val workspacesRoot: File = File(filesRoot, "workspaces").canonicalFile
     val runtimeStateFile: File = File(runtimeRoot, "runtime-state.json").canonicalFile
     val shellAuditFile: File = File(auditRoot, "shell-exec.jsonl").canonicalFile
+    val chrootAuditFile: File = File(auditRoot, "chroot-exec.jsonl").canonicalFile
+    val installedRootfsManifestFile: File =
+        File(rootfsContainer, "installed-manifest.json").canonicalFile
 
     fun initialize(): RuntimeLayout {
         listOf(
             runtimeRoot,
-            rootfsRoot,
+            rootfsContainer,
+            rootfsPackagesRoot,
             homeRoot,
             binRoot,
             toolpacksRoot,
@@ -32,15 +40,7 @@ class RuntimeLayout(context: Context) {
         ).forEach(::ensureDirectory)
 
         if (!runtimeStateFile.exists()) {
-            runtimeStateFile.writeText(
-                JSONObject()
-                    .put("schemaVersion", 1)
-                    .put("rootfsState", RuntimeRootfsState.NOT_INSTALLED.name)
-                    .put("rootfsVersion", JSONObject.NULL)
-                    .put("updatedAtEpochMillis", System.currentTimeMillis())
-                    .toString(2),
-                Charsets.UTF_8,
-            )
+            writeRuntimeState(RuntimeRootfsState.NOT_INSTALLED, null)
         }
         return this
     }
@@ -62,14 +62,18 @@ class RuntimeLayout(context: Context) {
         }.getOrDefault(RuntimeRootfsState.BROKEN)
     }
 
+    fun readRootfsVersion(): String? {
+        initialize()
+        return runCatching {
+            JSONObject(runtimeStateFile.readText(Charsets.UTF_8))
+                .optString("rootfsVersion")
+                .takeIf(String::isNotBlank)
+        }.getOrNull()
+    }
+
     fun updateRootfsState(state: RuntimeRootfsState, version: String? = null) {
         initialize()
-        val json = JSONObject()
-            .put("schemaVersion", 1)
-            .put("rootfsState", state.name)
-            .put("rootfsVersion", version ?: JSONObject.NULL)
-            .put("updatedAtEpochMillis", System.currentTimeMillis())
-        runtimeStateFile.writeText(json.toString(2), Charsets.UTF_8)
+        writeRuntimeState(state, version)
     }
 
     fun requireManagedPath(path: File): File {
@@ -77,6 +81,21 @@ class RuntimeLayout(context: Context) {
         val allowed = listOf(runtimeRoot, workspacesRoot).any { root -> isInside(root, canonical) }
         require(allowed) { "路径不在 AutoCrackApp 管理目录中：${canonical.path}" }
         return canonical
+    }
+
+    fun isManagedPath(path: File): Boolean {
+        val canonical = path.canonicalFile
+        return listOf(runtimeRoot, workspacesRoot).any { root -> isInside(root, canonical) }
+    }
+
+    private fun writeRuntimeState(state: RuntimeRootfsState, version: String?) {
+        val json = JSONObject()
+            .put("schemaVersion", 2)
+            .put("rootfsState", state.name)
+            .put("rootfsVersion", version ?: JSONObject.NULL)
+            .put("rootfsPath", rootfsRoot.path)
+            .put("updatedAtEpochMillis", System.currentTimeMillis())
+        runtimeStateFile.writeText(json.toString(2), Charsets.UTF_8)
     }
 
     private fun ensureDirectory(directory: File) {
