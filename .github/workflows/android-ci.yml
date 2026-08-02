@@ -18,7 +18,7 @@ jobs:
   build-and-test:
     name: Lint, test, and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -38,25 +38,33 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Install Android SDK, NDK, and CMake packages
         run: |
           yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.3.13750724" \
+            "cmake;3.22.1"
 
       - name: Lint, unit test, and assemble debug APK
         run: gradle --no-daemon --stacktrace clean lintDebug testDebugUnitTest assembleDebug
 
+      - name: Verify native PTY library is packaged
+        run: |
+          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -F "lib/arm64-v8a/libautocrack_pty.so"
+
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.5.1-hardlink-fallback-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.6-native-pty-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.5.1-hardlink-fallback-debug.apk > AutoCrackApp-0.5.5.1-hardlink-fallback-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.6-native-pty-debug.apk > AutoCrackApp-0.5.6-native-pty-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.5.1-hardlink-fallback-debug
+          name: AutoCrackApp-0.5.6-native-pty-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -65,7 +73,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.5.1-hardlink-fallback-reports
+          name: AutoCrackApp-0.5.6-native-pty-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
