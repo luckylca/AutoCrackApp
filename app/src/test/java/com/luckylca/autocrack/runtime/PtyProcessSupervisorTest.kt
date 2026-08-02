@@ -10,10 +10,9 @@ class PtyProcessSupervisorTest {
         val script = PtyProcessProbeScriptBuilder.build(30891)
 
         assertTrue(script.contains("ROOT_PID=30891"))
-        assertTrue(script.contains("/proc/"))
-        assertTrue(script.contains("/task/"))
-        assertTrue(script.contains("/children"))
-        assertTrue(script.contains("walk_process"))
+        assertTrue(script.contains("STAT_REST=\"\${STAT_LINE##*) }\""))
+        assertTrue(script.contains("\"/proc/\$PID/task/\"*/children"))
+        assertTrue(script.contains("walk_process \"\$CHILD\""))
         assertTrue(script.contains("PROCESS_TREE_BEGIN"))
         assertTrue(script.contains("PROCESS_TREE_END"))
     }
@@ -35,6 +34,8 @@ class PtyProcessSupervisorTest {
         assertEquals(2, processes.size)
         assertEquals(30891, processes[0].pid)
         assertEquals(30910, processes[1].pid)
+        assertEquals(30891, processes[1].processGroupId)
+        assertEquals(30891, processes[1].sessionId)
         assertEquals("bash", processes[1].name)
         assertEquals("/bin/bash --noprofile --norc -i", processes[1].commandLine)
     }
