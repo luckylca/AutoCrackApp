@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 class ChrootPtySessionManager private constructor(context: Context) {
@@ -32,6 +33,7 @@ class ChrootPtySessionManager private constructor(context: Context) {
     private val layout = RuntimeLayout(appContext).initialize()
     private val hostEngine = RootShellRuntimeEngine(layout)
     private val chrootEngine = ChrootRuntimeEngine(layout, hostEngine)
+    private val processSupervisor = PtyProcessSupervisor(layout, hostEngine)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lifecycleMutex = Mutex()
     private val auditLock = Any()
@@ -136,6 +138,7 @@ class ChrootPtySessionManager private constructor(context: Context) {
                 )
                 PtySessionForegroundService.start(appContext, sessionId, pid)
                 readerJob = scope.launch { readLoop(managed) }
+                scope.launch { runCatching { refreshProcessTree() } }
             } catch (exception: Exception) {
                 val cleanup = runCatching { chrootEngine.cleanupMounts() }.getOrNull()
                 mutableSnapshot.update {
@@ -187,6 +190,36 @@ class ChrootPtySessionManager private constructor(context: Context) {
         )
         return succeeded
     }
+
+    suspend fun refreshProcessTree(): PtyProcessTreeSnapshot {
+        val session = activeSession ?: error("没有运行中的 PTY 会话")
+        val tree = processSupervisor.inspect(session.info.pid)
+        mutableSnapshot.update { current ->
+            if (current.sessionId == session.info.sessionId) {
+                current.copy(processTree = tree)
+            } else {
+                current
+            }
+        }
+        appendAudit(
+            event = "process_refresh",
+            session = session,
+            detail = JSONObject()
+                .put("processCount", tree.processes.size)
+                .put("failure", tree.failure ?: JSONObject.NULL)
+                .put(
+                    "pids",
+                    JSONArray(tree.processes.map(PtyProcessInfo::pid)),
+                ),
+        )
+        return tree
+    }
+
+    suspend fun terminateProcessGroup(): Boolean =
+        signalProcessGroup(OsConstants.SIGTERM, "terminate")
+
+    suspend fun killProcessGroup(): Boolean =
+        signalProcessGroup(OsConstants.SIGKILL, "kill")
 
     suspend fun resize(rows: Int, columns: Int): Boolean {
         require(rows in MIN_TERMINAL_SIZE..MAX_TERMINAL_SIZE) { "终端行数非法" }
@@ -243,6 +276,16 @@ class ChrootPtySessionManager private constructor(context: Context) {
             appendLine("写入字节：${current.bytesWritten}")
             appendLine("Transcript：${current.transcriptPath ?: "无"}")
             appendLine("审计：${current.auditPath ?: "无"}")
+            appendLine("进程树刷新：${current.processTree.refreshedAtEpochMillis ?: "未执行"}")
+            appendLine("进程树数量：${current.processTree.processes.size}")
+            appendLine("进程树 Failure：${current.processTree.failure ?: "无"}")
+            current.processTree.processes.take(MAX_DIAGNOSTIC_PROCESS_COUNT).forEach { process ->
+                appendLine(
+                    "  PID=${process.pid} PPID=${process.parentPid} " +
+                        "PGID=${process.processGroupId} SID=${process.sessionId} " +
+                        "STATE=${process.state} NAME=${process.name} CMD=${process.commandLine}",
+                )
+            }
             appendLine("挂载清理退出码：${current.cleanupExitCode ?: "未执行"}")
             appendLine("挂载清理输出：${current.cleanupOutput ?: "无"}")
             appendLine("Failure：${current.failure ?: "无"}")
@@ -250,6 +293,21 @@ class ChrootPtySessionManager private constructor(context: Context) {
             appendLine("终端输出：")
             appendLine(current.output.takeLast(MAX_DIAGNOSTIC_OUTPUT_CHARS))
         }
+    }
+
+    private suspend fun signalProcessGroup(signal: Int, event: String): Boolean {
+        val session = activeSession ?: return false
+        val succeeded = withContext(Dispatchers.IO) {
+            NativePtyBridge.nativeSignal(session.info.handle, signal)
+        }
+        appendAudit(
+            event = event,
+            session = session,
+            detail = JSONObject()
+                .put("signal", signal)
+                .put("succeeded", succeeded),
+        )
+        return succeeded
     }
 
     private suspend fun readLoop(session: ManagedSession) {
@@ -402,6 +460,7 @@ class ChrootPtySessionManager private constructor(context: Context) {
         private const val MIN_TERMINAL_SIZE = 2
         private const val MAX_TERMINAL_SIZE = 1_000
         private const val MAX_DIAGNOSTIC_OUTPUT_CHARS = 40_000
+        private const val MAX_DIAGNOSTIC_PROCESS_COUNT = 40
         private const val CTRL_C: Byte = 0x03
     }
 }
