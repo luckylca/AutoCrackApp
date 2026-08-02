@@ -14,7 +14,7 @@ class ShellEscaperTest {
     @Test
     fun buildHostScriptUsesRequestedWorkingDirectoryAndEnvironment() {
         val request = ShellCommandRequest(
-            command = "printf '%s' \"$VALUE\"",
+            command = "printf '%s' \"\$VALUE\"",
             workingDirectory = "/data/user/0/com.example/files/work space",
             environment = mapOf("VALUE" to "hello ' runtime"),
             timeoutMillis = 1_000L,
