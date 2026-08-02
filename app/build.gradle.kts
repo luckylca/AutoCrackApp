@@ -14,8 +14,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.5.4-phase5.4-root-runtime"
+        versionCode = 10
+        versionName = "0.5.5-phase5.5-debian-chroot"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -73,6 +73,8 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.smali.dexlib2)
+    implementation(libs.commons.compress)
+    implementation(libs.xz.java)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 
