@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "0.5.4",
+  "priorityModes": ["FULL_ROOT", "SHIZUKU"],
+  "tools": [
+    {
+      "id": "runtime.health",
+      "title": "Inspect Root runtime health",
+      "runtime": "host_bridge",
+      "requiresCapabilities": ["ROOT_IDENTITY"],
+      "changesState": false,
+      "confirmation": "none",
+      "output": "RuntimeHealthReport"
+    },
+    {
+      "id": "shell.exec",
+      "title": "Execute a one-shot shell command",
+      "runtime": "root_host_foundation",
+      "requiresCapabilities": ["ROOT_SHELL"],
+      "changesState": "depends_on_command",
+      "confirmation": "manual_now_agent_policy_later",
+      "inputs": {
+        "command": "string",
+        "workingDirectory": "managed_path",
+        "environment": "map<string,string>",
+        "stdin": "optional_string",
+        "timeoutMillis": "100..1800000"
+      },
+      "output": "ShellCommandResult",
+      "audit": "runtime/audit/shell-exec.jsonl"
+    },
+    {
+      "id": "shell.cancel_all",
+      "title": "Cancel all active one-shot shell commands",
+      "runtime": "root_host_foundation",
+      "requiresCapabilities": ["ROOT_SHELL"],
+      "changesState": true,
+      "confirmation": "none",
+      "output": "cancelled_process_count"
+    },
+    {
+      "id": "fs.list",
+      "title": "List workspace files",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none"
+    },
+    {
+      "id": "fs.read_text",
+      "title": "Read bounded UTF-8 text from the workspace",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none"
+    },
+    {
+      "id": "fs.write_text",
+      "title": "Write UTF-8 text inside the workspace",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "agent_policy"
+    },
+    {
+      "id": "fs.copy",
+      "title": "Copy a workspace file or directory",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_READ", "WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "agent_policy"
+    },
+    {
+      "id": "fs.move",
+      "title": "Move a workspace file or directory",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "agent_policy"
+    },
+    {
+      "id": "fs.delete",
+      "title": "Delete a workspace file or directory",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "required"
+    },
+    {
+      "id": "fs.sha256",
+      "title": "Calculate SHA-256 for a workspace file",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none"
+    },
+    {
+      "id": "runtime.rootfs.install",
+      "title": "Install the pinned Debian arm64 rootfs",
+      "runtime": "host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "MOUNT", "CHROOT"],
+      "changesState": true,
+      "confirmation": "required",
+      "status": "planned_for_0.5.5"
+    },
+    {
+      "id": "shizuku.user_service",
+      "title": "Connect to the Shizuku UserService host bridge",
+      "runtime": "host_bridge",
+      "requiresCapabilities": ["SHIZUKU_BINDER"],
+      "changesState": false,
+      "confirmation": "android_permission",
+      "status": "planned_after_full_root"
+    }
+  ]
+}
