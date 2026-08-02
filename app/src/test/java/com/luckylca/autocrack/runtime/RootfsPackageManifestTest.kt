@@ -1,5 +1,6 @@
 package com.luckylca.autocrack.runtime
 
+import android.system.OsConstants
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,9 +65,18 @@ class RootfsPackageManifestTest {
 
     @Test
     fun hardLinkPolicyMaterializesPlatformRestrictionFailures() {
-        assertTrue(RootfsHardLinkPolicy.shouldMaterialize(13)) // EACCES
-        assertTrue(RootfsHardLinkPolicy.shouldMaterialize(1)) // EPERM
-        assertTrue(RootfsHardLinkPolicy.shouldMaterialize(18)) // EXDEV
-        assertFalse(RootfsHardLinkPolicy.shouldMaterialize(2)) // ENOENT
+        val materializableErrnos = listOf(
+            OsConstants.EACCES,
+            OsConstants.EPERM,
+            OsConstants.EXDEV,
+            OsConstants.EMLINK,
+            OsConstants.ENOSYS,
+            OsConstants.EROFS,
+        )
+
+        materializableErrnos.forEach { errno ->
+            assertTrue(RootfsHardLinkPolicy.shouldMaterialize(errno))
+        }
+        assertFalse(RootfsHardLinkPolicy.shouldMaterialize(Int.MAX_VALUE))
     }
 }
