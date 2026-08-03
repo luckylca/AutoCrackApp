@@ -1,0 +1,242 @@
+name: Build Rizin deep analysis toolpack
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rizin-toolpack-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-rizin-toolpack:
+    name: Build pinned ARM64 Rizin deep-analysis package
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    env:
+      RIZIN_VERSION: "0.9.1"
+      RIZIN_RELEASE_SHA256: "49b96162df17fb0eba443884f8eb0792145646d05c96ac6542e7776a0960fff2"
+      TOOLPACK_ID: rizin-deep-static
+      TOOLPACK_VERSION: rizin-0.9.1_autocrack-1.0.0
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install host packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends curl jq python3
+
+      - name: Download and verify official Rizin ARM64 release
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/sources dist/release dist/payload/bin dist/payload/lib/rizin
+          RIZIN_URL="https://github.com/rizinorg/rizin/releases/download/v${RIZIN_VERSION}/rizin-v${RIZIN_VERSION}-android-aarch64.tar.gz"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output dist/sources/rizin-android-aarch64.tar.gz "$RIZIN_URL"
+          printf '%s  %s\n' "$RIZIN_RELEASE_SHA256" \
+            dist/sources/rizin-android-aarch64.tar.gz \
+            | sha256sum --check --strict -
+          tar -tzf dist/sources/rizin-android-aarch64.tar.gz \
+            > dist/sources/rizin-release-entries.txt
+          tar -xzf dist/sources/rizin-android-aarch64.tar.gz -C dist/release
+          printf '%s' "$RIZIN_URL" > dist/sources/rizin-release.url
+
+          RIZIN_BINARY=$(find dist/release -type f \( -name rizin -o -name rz \) -perm /111 \
+            | LC_ALL=C sort | head -n 1)
+          test -n "$RIZIN_BINARY"
+          cp "$RIZIN_BINARY" dist/payload/lib/rizin/rizin
+          chmod 0755 dist/payload/lib/rizin/rizin
+          file dist/payload/lib/rizin/rizin
+
+      - name: Add reviewed AutoCrack Rizin commands
+        run: |
+          set -euxo pipefail
+          cp toolpacks/rizin-deep-static/bin/* dist/payload/bin/
+          chmod 0755 dist/payload/bin/*
+
+      - name: Build deterministic payload and provisional manifest
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          payload_root = Path("dist/payload")
+          payload_zip = Path("dist/payload.zip")
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+
+          with zipfile.ZipFile(payload_zip, "w", compression=zipfile.ZIP_STORED) as archive:
+              for path in sorted(p for p in payload_root.rglob("*") if p.is_file()):
+                  relative = path.relative_to(payload_root).as_posix()
+                  mode = 0o755 if relative.startswith("bin/") or os.access(path, os.X_OK) else 0o644
+                  info = zipfile.ZipInfo(relative, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | mode) << 16
+                  archive.writestr(info, path.read_bytes())
+
+          payload_bytes = payload_zip.read_bytes()
+          payload_sha = hashlib.sha256(payload_bytes).hexdigest()
+          payload_size = len(payload_bytes)
+          source_url = Path("dist/sources/rizin-release.url").read_text().strip()
+
+          manifest = {
+              "schemaVersion": 1,
+              "id": os.environ["TOOLPACK_ID"],
+              "title": "Rizin deep ELF and native analysis",
+              "version": os.environ["TOOLPACK_VERSION"],
+              "architecture": "arm64",
+              "payloadEntry": "payload.zip",
+              "payloadSha256": payload_sha,
+              "payloadSizeBytes": payload_size,
+              "requiredPaths": [
+                  "bin/rizin",
+                  "bin/rz-functions",
+                  "bin/rz-disasm",
+                  "bin/rz-deep-report",
+                  "lib/rizin/rizin"
+              ],
+              "commands": [
+                  {"name": "rizin", "relativePath": "bin/rizin"},
+                  {"name": "rz-functions", "relativePath": "bin/rz-functions"},
+                  {"name": "rz-disasm", "relativePath": "bin/rz-disasm"},
+                  {"name": "rz-deep-report", "relativePath": "bin/rz-deep-report"}
+              ],
+              "selfTests": [
+                  {
+                      "id": "rizin-version",
+                      "title": "Rizin ARM64",
+                      "command": "rizin -v",
+                      "expectedExitCodes": [0],
+                      "outputContains": [os.environ["RIZIN_VERSION"]]
+                  },
+                  {
+                      "id": "rz-functions-self-test",
+                      "title": "Rizin function inventory",
+                      "command": "rz-functions --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["RZ_FUNCTIONS_SELF_TEST_OK"]
+                  },
+                  {
+                      "id": "rz-disasm-self-test",
+                      "title": "Rizin bounded disassembly",
+                      "command": "rz-disasm --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["RZ_DISASM_SELF_TEST_OK"]
+                  },
+                  {
+                      "id": "rz-deep-report-self-test",
+                      "title": "Rizin deep report generator",
+                      "command": "rz-deep-report --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["RZ_DEEP_REPORT_SELF_TEST_OK"]
+                  }
+              ],
+              "sources": [
+                  {
+                      "name": "rizin",
+                      "version": os.environ["RIZIN_VERSION"],
+                      "url": source_url,
+                      "sha256": os.environ["RIZIN_RELEASE_SHA256"]
+                  }
+              ]
+          }
+          Path("dist/manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8"
+          )
+          Path("dist/payload.sha256").write_text(payload_sha + "\n", encoding="utf-8")
+          Path("dist/payload.size").write_text(str(payload_size) + "\n", encoding="utf-8")
+          print(f"RIZIN_PAYLOAD_SHA256={payload_sha}")
+          print(f"RIZIN_PAYLOAD_SIZE={payload_size}")
+          PY
+
+      - name: Run ARM64 Rizin command and report tests
+        run: |
+          set -euxo pipefail
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist/payload:/opt/rizin-toolpack:ro" \
+            debian:bookworm-slim /bin/bash -euxc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends bash coreutils file python3
+              export PATH=/opt/rizin-toolpack/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+              mkdir -p /workspace
+              rizin -v | grep -F "0.9.1"
+              rz-functions --self-test | grep -F RZ_FUNCTIONS_SELF_TEST_OK
+              rz-disasm --self-test | grep -F RZ_DISASM_SELF_TEST_OK
+              rz-deep-report --self-test | grep -F RZ_DEEP_REPORT_SELF_TEST_OK
+              rz-functions /bin/ls > /workspace/functions.json
+              python3 -m json.tool /workspace/functions.json >/dev/null
+              rz-disasm /bin/ls entry0 16 > /workspace/entry.json
+              python3 -m json.tool /workspace/entry.json >/dev/null
+              rz-deep-report /bin/ls /workspace/ls-rizin-report \
+                | grep -F RZ_DEEP_REPORT_OK
+              python3 -m json.tool /workspace/ls-rizin-report/summary.json >/dev/null
+              test -s /workspace/ls-rizin-report/functions.json
+              test -s /workspace/ls-rizin-report/imports.json
+              test -s /workspace/ls-rizin-report/callgraph.json
+              test -s /workspace/ls-rizin-report/entry-disasm.json
+              test -s /workspace/ls-rizin-report/summary.txt
+            '
+
+      - name: Package and verify final toolpack
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          output = Path("dist/AutoCrackApp-rizin-deep-static-toolpack.zip")
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+          with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+              for name in ("manifest.json", "payload.zip"):
+                  path = Path("dist") / name
+                  info = zipfile.ZipInfo(name, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | 0o644) << 16
+                  archive.writestr(info, path.read_bytes())
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          Path(str(output) + ".sha256").write_text(
+              f"{digest}  {output.name}\n", encoding="utf-8"
+          )
+          print(f"RIZIN_TOOLPACK_SHA256={digest}")
+          PY
+
+          unzip -t dist/AutoCrackApp-rizin-deep-static-toolpack.zip
+          test "$(unzip -Z1 dist/AutoCrackApp-rizin-deep-static-toolpack.zip | wc -l)" -eq 2
+          jq -e '.commands | map(.name) == ["rizin", "rz-functions", "rz-disasm", "rz-deep-report"]' \
+            dist/manifest.json >/dev/null
+
+      - name: Upload Rizin deep-analysis toolpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-rizin-deep-static-toolpack
+          path: |
+            dist/AutoCrackApp-rizin-deep-static-toolpack.zip
+            dist/AutoCrackApp-rizin-deep-static-toolpack.zip.sha256
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/sources/rizin-release-entries.txt
+          if-no-files-found: error
+          retention-days: 14
