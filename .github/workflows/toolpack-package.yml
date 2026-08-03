@@ -1,0 +1,202 @@
+name: Build reverse-analysis toolpack
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolpack-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk-dex-toolpack:
+    name: Build verified JADX and Apktool package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      JADX_VERSION: "1.5.5"
+      APKTOOL_VERSION: "3.0.2"
+      TOOLPACK_ID: apk-dex-static
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends curl jq unzip zip
+
+      - name: Download pinned upstream releases
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/sources dist/payload/bin dist/payload/lib/jadx dist/payload/lib/apktool
+
+          JADX_URL="https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip"
+          APKTOOL_URL="https://github.com/iBotPeaches/Apktool/releases/download/v${APKTOOL_VERSION}/apktool_${APKTOOL_VERSION}.jar"
+
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output dist/sources/jadx.zip "$JADX_URL"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output dist/sources/apktool.jar "$APKTOOL_URL"
+
+          test -s dist/sources/jadx.zip
+          test -s dist/sources/apktool.jar
+          unzip -t dist/sources/jadx.zip
+          jar tf dist/sources/apktool.jar >/dev/null
+
+          printf '%s' "$JADX_URL" > dist/sources/jadx.url
+          printf '%s' "$APKTOOL_URL" > dist/sources/apktool.url
+          sha256sum dist/sources/jadx.zip | awk '{print $1}' > dist/sources/jadx.sha256
+          sha256sum dist/sources/apktool.jar | awk '{print $1}' > dist/sources/apktool.sha256
+
+      - name: Assemble relocatable payload
+        run: |
+          set -euxo pipefail
+          unzip -q dist/sources/jadx.zip -d dist/payload/lib/jadx
+          cp dist/sources/apktool.jar dist/payload/lib/apktool/apktool.jar
+
+          cat > dist/payload/bin/jadx <<'EOF'
+          #!/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          exec "$ROOT/lib/jadx/bin/jadx" "$@"
+          EOF
+
+          cat > dist/payload/bin/apktool <<'EOF'
+          #!/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          exec java -jar "$ROOT/lib/apktool/apktool.jar" "$@"
+          EOF
+
+          chmod 0755 dist/payload/bin/jadx dist/payload/bin/apktool
+          test -f dist/payload/lib/jadx/bin/jadx
+          test -f dist/payload/lib/apktool/apktool.jar
+
+          (
+            cd dist/payload
+            find . -print0 | LC_ALL=C sort -z | xargs -0 touch -h -d '@0'
+            zip -X -q -r ../payload.zip .
+          )
+
+      - name: Generate pinned manifest and package
+        run: |
+          set -euxo pipefail
+          export JADX_URL
+          export APKTOOL_URL
+          export JADX_SHA256
+          export APKTOOL_SHA256
+          export PAYLOAD_SHA256
+          export PAYLOAD_SIZE
+          JADX_URL=$(cat dist/sources/jadx.url)
+          APKTOOL_URL=$(cat dist/sources/apktool.url)
+          JADX_SHA256=$(cat dist/sources/jadx.sha256)
+          APKTOOL_SHA256=$(cat dist/sources/apktool.sha256)
+          PAYLOAD_SHA256=$(sha256sum dist/payload.zip | awk '{print $1}')
+          PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          jadx_version = os.environ["JADX_VERSION"]
+          apktool_version = os.environ["APKTOOL_VERSION"]
+          manifest = {
+              "schemaVersion": 1,
+              "id": os.environ["TOOLPACK_ID"],
+              "title": "APK and DEX static analysis",
+              "version": f"jadx-{jadx_version}_apktool-{apktool_version}",
+              "architecture": "all",
+              "payloadEntry": "payload.zip",
+              "payloadSha256": os.environ["PAYLOAD_SHA256"],
+              "payloadSizeBytes": int(os.environ["PAYLOAD_SIZE"]),
+              "requiredPaths": [
+                  "bin/jadx",
+                  "bin/apktool",
+                  "lib/jadx/bin/jadx",
+                  "lib/apktool/apktool.jar",
+              ],
+              "commands": [
+                  {"name": "jadx", "relativePath": "bin/jadx"},
+                  {"name": "apktool", "relativePath": "bin/apktool"},
+              ],
+              "selfTests": [
+                  {
+                      "id": "java-version",
+                      "title": "Java runtime",
+                      "command": "java -version",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["version"],
+                  },
+                  {
+                      "id": "jadx-version",
+                      "title": "JADX CLI",
+                      "command": "jadx --version",
+                      "expectedExitCodes": [0],
+                      "outputContains": [jadx_version],
+                  },
+                  {
+                      "id": "apktool-version",
+                      "title": "Apktool",
+                      "command": "apktool --version",
+                      "expectedExitCodes": [0],
+                      "outputContains": [apktool_version],
+                  },
+              ],
+              "sources": [
+                  {
+                      "name": "jadx",
+                      "version": jadx_version,
+                      "url": os.environ["JADX_URL"],
+                      "sha256": os.environ["JADX_SHA256"],
+                  },
+                  {
+                      "name": "apktool",
+                      "version": apktool_version,
+                      "url": os.environ["APKTOOL_URL"],
+                      "sha256": os.environ["APKTOOL_SHA256"],
+                  },
+              ],
+          }
+          Path("dist/manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          jq -e '.schemaVersion == 1' dist/manifest.json >/dev/null
+          jq -e '.payloadSha256 | test("^[0-9a-f]{64}$")' dist/manifest.json >/dev/null
+          jq -e '.sources | length == 2' dist/manifest.json >/dev/null
+
+          (
+            cd dist
+            zip -0 -q AutoCrackApp-apk-dex-static-toolpack.zip manifest.json payload.zip
+            sha256sum AutoCrackApp-apk-dex-static-toolpack.zip \
+              > AutoCrackApp-apk-dex-static-toolpack.zip.sha256
+          )
+
+      - name: Verify final package
+        run: |
+          set -euxo pipefail
+          unzip -t dist/AutoCrackApp-apk-dex-static-toolpack.zip
+          test "$(unzip -Z1 dist/AutoCrackApp-apk-dex-static-toolpack.zip | wc -l)" -eq 2
+          unzip -p dist/AutoCrackApp-apk-dex-static-toolpack.zip manifest.json \
+            | jq -e '.commands | map(.name) == ["jadx", "apktool"]' >/dev/null
+
+      - name: Upload reverse-analysis toolpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-apk-dex-static-toolpack
+          path: |
+            dist/AutoCrackApp-apk-dex-static-toolpack.zip
+            dist/AutoCrackApp-apk-dex-static-toolpack.zip.sha256
+            dist/manifest.json
+          if-no-files-found: error
+          retention-days: 14
