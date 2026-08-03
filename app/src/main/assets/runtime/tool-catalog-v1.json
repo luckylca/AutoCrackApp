@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.9",
+  "catalogVersion": "0.5.10",
   "priorityModes": ["FULL_ROOT", "SHIZUKU"],
   "tools": [
     {
@@ -228,6 +228,63 @@
         "dynamic-symbols-demangled.txt",
         "strings-min6.txt",
         "checksec.json or checksec.txt"
+      ]
+    },
+    {
+      "id": "native.rizin",
+      "title": "Run read-only Rizin static-analysis commands",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none",
+      "commandTemplate": "rizin -2 -q -c <read-only-commands> <workspace-elf-or-so>",
+      "output": "Rizin text or JSON output"
+    },
+    {
+      "id": "native.rz_functions",
+      "title": "Inventory functions in an ELF or Android SO with Rizin",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none",
+      "commandTemplate": "rz-functions <workspace-elf-or-so>",
+      "output": "Rizin function list JSON"
+    },
+    {
+      "id": "native.rz_disasm",
+      "title": "Generate bounded JSON disassembly at an address or symbol",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none",
+      "commandTemplate": "rz-disasm <workspace-elf-or-so> <address-or-symbol> [1..4096]",
+      "output": "Rizin disassembly JSON"
+    },
+    {
+      "id": "native.rz_deep_report",
+      "title": "Generate a structured Rizin deep-analysis report",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ", "WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "workspace_write",
+      "commandTemplate": "rz-deep-report <workspace-elf-or-so> </workspace/report-directory>",
+      "expectedArtifacts": [
+        "summary.json",
+        "summary.txt",
+        "info.json",
+        "sections.json",
+        "segments.json",
+        "imports.json",
+        "exports.json",
+        "symbols.json",
+        "strings.json",
+        "relocations.json",
+        "functions.json",
+        "callgraph.json",
+        "entry-disasm.json",
+        "sha256.txt",
+        "file.txt",
+        "rizin.stderr"
       ]
     },
     {
