@@ -1,0 +1,466 @@
+name: Build Rizin deep analysis toolpack
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rizin-toolpack-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-rizin-toolpack:
+    name: Build pinned ARM64 Rizin deep-analysis package
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+
+    env:
+      RIZIN_VERSION: "0.9.1"
+      RIZIN_COMMIT: "c3a90e9226d977f58f4e9c75f78fa6b07afe13c7"
+      TOOLPACK_ID: rizin-deep-static
+      TOOLPACK_VERSION: rizin-0.9.1_autocrack-1.0.0
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install host packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends jq python3 unzip
+
+      - name: Build pinned static Rizin for Debian ARM64
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/sources dist/payload/lib/rizin dist/payload/bin
+
+          docker run --rm --platform linux/arm64 \
+            -e RIZIN_VERSION \
+            -e RIZIN_COMMIT \
+            -v "$PWD/dist:/work" \
+            debian:bookworm-slim /bin/bash -euxc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                bash ca-certificates curl git build-essential pkg-config \
+                python3 python3-pip ninja-build cmake bison flex xz-utils file
+              python3 -m pip install --break-system-packages "meson==1.6.1"
+
+              SOURCE_URL="https://github.com/rizinorg/rizin/archive/${RIZIN_COMMIT}.tar.gz"
+              curl --fail --location --retry 4 --retry-all-errors \
+                --output /work/sources/rizin-source.tar.gz "$SOURCE_URL"
+              printf "%s" "$SOURCE_URL" > /work/sources/rizin-source.url
+              sha256sum /work/sources/rizin-source.tar.gz \
+                | awk "{print \$1}" > /work/sources/rizin-source.sha256
+
+              mkdir -p /tmp/rizin-source
+              tar -xzf /work/sources/rizin-source.tar.gz \
+                -C /tmp/rizin-source --strip-components=1
+              cd /tmp/rizin-source
+
+              meson setup build \
+                --buildtype=release \
+                --default-library=static \
+                --prefix=/opt/rizin \
+                -Dstatic_runtime=true \
+                -Dblob=true
+              ninja -C build -j2
+              DESTDIR=/tmp/rizin-stage meson install -C build
+
+              test -x /tmp/rizin-stage/opt/rizin/bin/rizin
+              /tmp/rizin-stage/opt/rizin/bin/rizin -v \
+                | grep -F "$RIZIN_VERSION"
+              if ldd /tmp/rizin-stage/opt/rizin/bin/rizin 2>&1 \
+                  | grep -q "not a dynamic executable"; then
+                echo RIZIN_STATIC_BINARY_OK
+              else
+                file /tmp/rizin-stage/opt/rizin/bin/rizin
+                exit 21
+              fi
+
+              cp -aL /tmp/rizin-stage/opt/rizin/. /work/payload/lib/rizin/
+            '
+
+          test -x dist/payload/lib/rizin/bin/rizin
+          cat dist/sources/rizin-source.sha256
+
+      - name: Add bounded AutoCrack Rizin commands
+        run: |
+          set -euxo pipefail
+
+          cat > dist/payload/bin/rizin <<'EOF'
+          #!/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          exec "$ROOT/lib/rizin/bin/rizin" "$@"
+          EOF
+
+          cat > dist/payload/bin/rz-functions <<'EOF'
+          #!/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          RIZIN="$ROOT/lib/rizin/bin/rizin"
+
+          if [ "${1:-}" = "--self-test" ]; then
+            "$RIZIN" -v | grep -F "0.9.1" >/dev/null
+            echo RZ_FUNCTIONS_SELF_TEST_OK
+            exit 0
+          fi
+
+          [ "$#" -eq 1 ] || { echo "Usage: rz-functions <ELF-or-SO-file>" >&2; exit 2; }
+          TARGET=$1
+          [ -f "$TARGET" ] || { echo "Input file not found: $TARGET" >&2; exit 3; }
+          exec "$RIZIN" -2 -q -c 'aaa; aflj' "$TARGET"
+          EOF
+
+          cat > dist/payload/bin/rz-disasm <<'EOF'
+          #!/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          RIZIN="$ROOT/lib/rizin/bin/rizin"
+
+          if [ "${1:-}" = "--self-test" ]; then
+            "$RIZIN" -v | grep -F "0.9.1" >/dev/null
+            echo RZ_DISASM_SELF_TEST_OK
+            exit 0
+          fi
+
+          if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+            echo "Usage: rz-disasm <ELF-or-SO-file> <address-or-symbol> [instruction-count]" >&2
+            exit 2
+          fi
+
+          TARGET=$1
+          LOCATION=$2
+          COUNT=${3:-128}
+          [ -f "$TARGET" ] || { echo "Input file not found: $TARGET" >&2; exit 3; }
+          case "$LOCATION" in
+            *[!A-Za-z0-9_.$:+@-]*) echo "Unsafe address or symbol: $LOCATION" >&2; exit 4 ;;
+          esac
+          case "$COUNT" in
+            ''|*[!0-9]*) echo "Instruction count must be an integer" >&2; exit 5 ;;
+          esac
+          [ "$COUNT" -ge 1 ] && [ "$COUNT" -le 4096 ] || {
+            echo "Instruction count must be between 1 and 4096" >&2
+            exit 6
+          }
+
+          exec "$RIZIN" -2 -q -c "aaa; s $LOCATION; pdj $COUNT" "$TARGET"
+          EOF
+
+          cat > dist/payload/bin/rz-deep-report <<'EOF'
+          #!/bin/sh
+          set -eu
+          ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+          RIZIN="$ROOT/lib/rizin/bin/rizin"
+
+          if [ "${1:-}" = "--self-test" ]; then
+            for command_name in python3 file sha256sum; do
+              command -v "$command_name" >/dev/null || {
+                echo "Missing required command: $command_name" >&2
+                exit 10
+              }
+            done
+            "$RIZIN" -v | grep -F "0.9.1" >/dev/null
+            echo RZ_DEEP_REPORT_SELF_TEST_OK
+            exit 0
+          fi
+
+          if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+            echo "Usage: rz-deep-report <ELF-or-SO-file> [output-directory-under-/workspace]" >&2
+            exit 2
+          fi
+
+          TARGET=$1
+          [ -f "$TARGET" ] || { echo "Input file not found: $TARGET" >&2; exit 3; }
+          file "$TARGET" | grep -q 'ELF' || { echo "Not an ELF file: $TARGET" >&2; exit 4; }
+
+          BASE=$(basename -- "$TARGET")
+          SAFE_BASE=$(printf '%s' "$BASE" | tr -c 'A-Za-z0-9._-' '_')
+          OUT=${2:-/workspace/rizin-report-$SAFE_BASE}
+          case "$OUT" in
+            /workspace/*) ;;
+            *) echo "Output directory must be under /workspace: $OUT" >&2; exit 5 ;;
+          esac
+
+          mkdir -p "$OUT"
+          : > "$OUT/rizin.stderr"
+          sha256sum "$TARGET" > "$OUT/sha256.txt"
+          file "$TARGET" > "$OUT/file.txt"
+
+          run_json() {
+            output_name=$1
+            commands=$2
+            "$RIZIN" -q -c "$commands" "$TARGET" \
+              > "$OUT/$output_name" 2>> "$OUT/rizin.stderr"
+            python3 -m json.tool "$OUT/$output_name" >/dev/null
+          }
+
+          run_json info.json 'ij'
+          run_json sections.json 'iSj'
+          run_json segments.json 'iSSj'
+          run_json imports.json 'iij'
+          run_json exports.json 'iEj'
+          run_json symbols.json 'isj'
+          run_json strings.json 'izj'
+          run_json relocations.json 'irj'
+          run_json functions.json 'aaa; aflj'
+          run_json callgraph.json 'aaa; agCj'
+          run_json entry-disasm.json 'aaa; s entry0; pdj 128'
+
+          python3 - "$OUT" "$TARGET" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          target = sys.argv[2]
+
+          def read_json(name, default):
+              try:
+                  return json.loads((out / name).read_text(encoding="utf-8"))
+              except Exception:
+                  return default
+
+          info = read_json("info.json", {})
+          imports = read_json("imports.json", [])
+          exports = read_json("exports.json", [])
+          symbols = read_json("symbols.json", [])
+          strings = read_json("strings.json", [])
+          relocations = read_json("relocations.json", [])
+          functions = read_json("functions.json", [])
+          callgraph = read_json("callgraph.json", [])
+          entry_disasm = read_json("entry-disasm.json", [])
+
+          summary = {
+              "tool": "AutoCrackApp Rizin deep report",
+              "input": target,
+              "output": str(out),
+              "sha256": (out / "sha256.txt").read_text().split()[0],
+              "file": (out / "file.txt").read_text().strip(),
+              "binary": info.get("bin", {}) if isinstance(info, dict) else {},
+              "counts": {
+                  "imports": len(imports) if isinstance(imports, list) else 0,
+                  "exports": len(exports) if isinstance(exports, list) else 0,
+                  "symbols": len(symbols) if isinstance(symbols, list) else 0,
+                  "strings": len(strings) if isinstance(strings, list) else 0,
+                  "relocations": len(relocations) if isinstance(relocations, list) else 0,
+                  "functions": len(functions) if isinstance(functions, list) else 0,
+                  "callgraphNodes": len(callgraph) if isinstance(callgraph, list) else 0,
+                  "entryInstructions": len(entry_disasm) if isinstance(entry_disasm, list) else 0,
+              },
+          }
+          (out / "summary.json").write_text(
+              json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          (out / "summary.txt").write_text(
+              "\n".join([
+                  "AutoCrackApp Rizin deep report",
+                  f"input={target}",
+                  f"output={out}",
+                  f"sha256={summary['sha256']}",
+                  f"functions={summary['counts']['functions']}",
+                  f"imports={summary['counts']['imports']}",
+                  f"exports={summary['counts']['exports']}",
+                  f"strings={summary['counts']['strings']}",
+                  f"relocations={summary['counts']['relocations']}",
+              ]) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+          echo "RZ_DEEP_REPORT_OK output=$OUT"
+          EOF
+
+          chmod 0755 \
+            dist/payload/bin/rizin \
+            dist/payload/bin/rz-functions \
+            dist/payload/bin/rz-disasm \
+            dist/payload/bin/rz-deep-report
+
+      - name: Build deterministic payload and provisional manifest
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          payload_root = Path("dist/payload")
+          payload_zip = Path("dist/payload.zip")
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+
+          with zipfile.ZipFile(payload_zip, "w", compression=zipfile.ZIP_STORED) as archive:
+              for path in sorted(p for p in payload_root.rglob("*") if p.is_file()):
+                  relative = path.relative_to(payload_root).as_posix()
+                  mode = 0o755 if relative.startswith("bin/") or os.access(path, os.X_OK) else 0o644
+                  info = zipfile.ZipInfo(relative, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | mode) << 16
+                  archive.writestr(info, path.read_bytes())
+
+          payload_bytes = payload_zip.read_bytes()
+          payload_sha = hashlib.sha256(payload_bytes).hexdigest()
+          payload_size = len(payload_bytes)
+          source_sha = Path("dist/sources/rizin-source.sha256").read_text().strip()
+          source_url = Path("dist/sources/rizin-source.url").read_text().strip()
+
+          manifest = {
+              "schemaVersion": 1,
+              "id": os.environ["TOOLPACK_ID"],
+              "title": "Rizin deep ELF and native analysis",
+              "version": os.environ["TOOLPACK_VERSION"],
+              "architecture": "arm64",
+              "payloadEntry": "payload.zip",
+              "payloadSha256": payload_sha,
+              "payloadSizeBytes": payload_size,
+              "requiredPaths": [
+                  "bin/rizin",
+                  "bin/rz-functions",
+                  "bin/rz-disasm",
+                  "bin/rz-deep-report",
+                  "lib/rizin/bin/rizin",
+              ],
+              "commands": [
+                  {"name": "rizin", "relativePath": "bin/rizin"},
+                  {"name": "rz-functions", "relativePath": "bin/rz-functions"},
+                  {"name": "rz-disasm", "relativePath": "bin/rz-disasm"},
+                  {"name": "rz-deep-report", "relativePath": "bin/rz-deep-report"},
+              ],
+              "selfTests": [
+                  {
+                      "id": "rizin-version",
+                      "title": "Rizin ARM64",
+                      "command": "rizin -v",
+                      "expectedExitCodes": [0],
+                      "outputContains": [os.environ["RIZIN_VERSION"]],
+                  },
+                  {
+                      "id": "rz-functions-self-test",
+                      "title": "Rizin function inventory",
+                      "command": "rz-functions --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["RZ_FUNCTIONS_SELF_TEST_OK"],
+                  },
+                  {
+                      "id": "rz-disasm-self-test",
+                      "title": "Rizin bounded disassembly",
+                      "command": "rz-disasm --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["RZ_DISASM_SELF_TEST_OK"],
+                  },
+                  {
+                      "id": "rz-deep-report-self-test",
+                      "title": "Rizin deep report generator",
+                      "command": "rz-deep-report --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["RZ_DEEP_REPORT_SELF_TEST_OK"],
+                  },
+              ],
+              "sources": [
+                  {
+                      "name": "rizin",
+                      "version": os.environ["RIZIN_VERSION"],
+                      "url": source_url,
+                      "sha256": source_sha,
+                  }
+              ],
+          }
+          Path("dist/manifest.json").write_text(
+              json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          Path("dist/payload.sha256").write_text(payload_sha + "\n", encoding="utf-8")
+          Path("dist/payload.size").write_text(str(payload_size) + "\n", encoding="utf-8")
+          print(f"RIZIN_SOURCE_SHA256={source_sha}")
+          print(f"RIZIN_PAYLOAD_SHA256={payload_sha}")
+          print(f"RIZIN_PAYLOAD_SIZE={payload_size}")
+          PY
+
+      - name: Run ARM64 Rizin command and report tests
+        run: |
+          set -euxo pipefail
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist/payload:/opt/rizin-toolpack:ro" \
+            debian:bookworm-slim /bin/bash -euxc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends bash coreutils file python3
+              export PATH=/opt/rizin-toolpack/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+              mkdir -p /workspace
+              rizin -v | grep -F "0.9.1"
+              rz-functions --self-test | grep -F RZ_FUNCTIONS_SELF_TEST_OK
+              rz-disasm --self-test | grep -F RZ_DISASM_SELF_TEST_OK
+              rz-deep-report --self-test | grep -F RZ_DEEP_REPORT_SELF_TEST_OK
+              rz-functions /bin/ls > /workspace/functions.json
+              python3 -m json.tool /workspace/functions.json >/dev/null
+              rz-disasm /bin/ls entry0 16 > /workspace/entry.json
+              python3 -m json.tool /workspace/entry.json >/dev/null
+              rz-deep-report /bin/ls /workspace/ls-rizin-report \
+                | grep -F RZ_DEEP_REPORT_OK
+              python3 -m json.tool /workspace/ls-rizin-report/summary.json >/dev/null
+              test -s /workspace/ls-rizin-report/functions.json
+              test -s /workspace/ls-rizin-report/imports.json
+              test -s /workspace/ls-rizin-report/callgraph.json
+              test -s /workspace/ls-rizin-report/entry-disasm.json
+              test -s /workspace/ls-rizin-report/summary.txt
+            '
+
+      - name: Package and verify final toolpack
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          output = Path("dist/AutoCrackApp-rizin-deep-static-toolpack.zip")
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+          with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+              for name in ("manifest.json", "payload.zip"):
+                  path = Path("dist") / name
+                  info = zipfile.ZipInfo(name, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | 0o644) << 16
+                  archive.writestr(info, path.read_bytes())
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          Path(str(output) + ".sha256").write_text(
+              f"{digest}  {output.name}\n", encoding="utf-8"
+          )
+          print(f"RIZIN_TOOLPACK_SHA256={digest}")
+          PY
+
+          unzip -t dist/AutoCrackApp-rizin-deep-static-toolpack.zip
+          test "$(unzip -Z1 dist/AutoCrackApp-rizin-deep-static-toolpack.zip | wc -l)" -eq 2
+          jq -e '.commands | map(.name) == ["rizin", "rz-functions", "rz-disasm", "rz-deep-report"]' \
+            dist/manifest.json >/dev/null
+
+      - name: Upload Rizin deep-analysis toolpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-rizin-deep-static-toolpack
+          path: |
+            dist/AutoCrackApp-rizin-deep-static-toolpack.zip
+            dist/AutoCrackApp-rizin-deep-static-toolpack.zip.sha256
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/sources/rizin-source.sha256
+          if-no-files-found: error
+          retention-days: 14
