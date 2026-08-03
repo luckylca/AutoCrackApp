@@ -121,5 +121,49 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "elf-native-static" to TrustedToolpack(
+            title = "ELF and native static analysis",
+            version = "checksec-3.2.0_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "4fe3c74c7af905a8586d8ec3cc8157f8e312aec9eef73708818429f5f6910983",
+            payloadSizeBytes = 4_459_830L,
+            requiredPaths = setOf(
+                "bin/checksec",
+                "bin/elf-deps",
+                "bin/elf-report",
+            ),
+            commands = mapOf(
+                "checksec" to "bin/checksec",
+                "elf-deps" to "bin/elf-deps",
+                "elf-report" to "bin/elf-report",
+            ),
+            selfTests = mapOf(
+                "checksec-version" to TrustedSelfTest(
+                    title = "Checksec ARM64",
+                    command = "checksec --version",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("3.2.0"),
+                ),
+                "elf-deps-self-test" to TrustedSelfTest(
+                    title = "ELF dependency reporter",
+                    command = "elf-deps --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("ELF_DEPS_SELF_TEST_OK"),
+                ),
+                "elf-report-self-test" to TrustedSelfTest(
+                    title = "ELF full report generator",
+                    command = "elf-report --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("ELF_REPORT_SELF_TEST_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "checksec" to TrustedSource(
+                    version = "3.2.0",
+                    url = "https://github.com/slimm609/checksec/releases/download/3.2.0/checksec_3.2.0_arm64.deb",
+                    sha256 = "4834ac10b87a4faa143fdbf8cc7458be68dbeb9d2e2ec005b669ced7eae9615d",
+                ),
+            ),
+        ),
     )
 }
