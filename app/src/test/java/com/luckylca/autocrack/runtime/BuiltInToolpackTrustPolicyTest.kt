@@ -15,6 +15,11 @@ class BuiltInToolpackTrustPolicyTest {
     }
 
     @Test
+    fun acceptsThePinnedRizinToolpack() {
+        BuiltInToolpackTrustPolicy.requireTrusted(trustedRizinManifest())
+    }
+
+    @Test
     fun rejectsPayloadSubstitution() {
         val manifest = trustedApkDexManifest().copy(
             payloadSha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -80,6 +85,49 @@ class BuiltInToolpackTrustPolicyTest {
             sources = listOf(
                 trustedElfNativeManifest().sources.single().copy(
                     sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                ),
+            ),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            BuiltInToolpackTrustPolicy.requireTrusted(manifest)
+        }
+    }
+
+    @Test
+    fun rejectsRizinPayloadSubstitution() {
+        val manifest = trustedRizinManifest().copy(
+            payloadSha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            BuiltInToolpackTrustPolicy.requireTrusted(manifest)
+        }
+    }
+
+    @Test
+    fun rejectsRizinCommandSubstitution() {
+        val manifest = trustedRizinManifest().copy(
+            commands = trustedRizinManifest().commands.map { command ->
+                if (command.name == "rz-deep-report") {
+                    command.copy(relativePath = "bin/rizin")
+                } else {
+                    command
+                }
+            },
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            BuiltInToolpackTrustPolicy.requireTrusted(manifest)
+        }
+    }
+
+    @Test
+    fun rejectsRizinSourceSubstitution() {
+        val manifest = trustedRizinManifest().copy(
+            sources = listOf(
+                trustedRizinManifest().sources.single().copy(
+                    sha256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
                 ),
             ),
         )
@@ -195,6 +243,68 @@ class BuiltInToolpackTrustPolicyTest {
                 version = "3.2.0",
                 url = "https://github.com/slimm609/checksec/releases/download/3.2.0/checksec_3.2.0_arm64.deb",
                 sha256 = "4834ac10b87a4faa143fdbf8cc7458be68dbeb9d2e2ec005b669ced7eae9615d",
+            ),
+        ),
+    )
+
+    private fun trustedRizinManifest(): ToolpackPackageManifest = ToolpackPackageManifest(
+        schemaVersion = 1,
+        id = "rizin-deep-static",
+        title = "Rizin deep ELF and native analysis",
+        version = "rizin-0.9.1_autocrack-1.0.0",
+        architecture = "arm64",
+        payloadEntry = "payload.zip",
+        payloadSha256 = "3c353c4282ac5266b73390451324f17fb883a5f7563711ccb907ec414c61327d",
+        payloadSizeBytes = 60_113_398L,
+        requiredPaths = listOf(
+            "bin/rizin",
+            "bin/rz-functions",
+            "bin/rz-disasm",
+            "bin/rz-deep-report",
+            "lib/rizin/rizin",
+        ),
+        commands = listOf(
+            ToolpackCommand("rizin", "bin/rizin"),
+            ToolpackCommand("rz-functions", "bin/rz-functions"),
+            ToolpackCommand("rz-disasm", "bin/rz-disasm"),
+            ToolpackCommand("rz-deep-report", "bin/rz-deep-report"),
+        ),
+        selfTests = listOf(
+            ToolpackSelfTest(
+                id = "rizin-version",
+                title = "Rizin ARM64",
+                command = "rizin -v",
+                expectedExitCodes = setOf(0),
+                outputContains = listOf("0.9.1"),
+            ),
+            ToolpackSelfTest(
+                id = "rz-functions-self-test",
+                title = "Rizin function inventory",
+                command = "rz-functions --self-test",
+                expectedExitCodes = setOf(0),
+                outputContains = listOf("RZ_FUNCTIONS_SELF_TEST_OK"),
+            ),
+            ToolpackSelfTest(
+                id = "rz-disasm-self-test",
+                title = "Rizin bounded disassembly",
+                command = "rz-disasm --self-test",
+                expectedExitCodes = setOf(0),
+                outputContains = listOf("RZ_DISASM_SELF_TEST_OK"),
+            ),
+            ToolpackSelfTest(
+                id = "rz-deep-report-self-test",
+                title = "Rizin deep report generator",
+                command = "rz-deep-report --self-test",
+                expectedExitCodes = setOf(0),
+                outputContains = listOf("RZ_DEEP_REPORT_SELF_TEST_OK"),
+            ),
+        ),
+        sources = listOf(
+            ToolpackSourceArtifact(
+                name = "rizin",
+                version = "0.9.1",
+                url = "https://github.com/rizinorg/rizin/releases/download/v0.9.1/rizin-v0.9.1-android-aarch64.tar.gz",
+                sha256 = "49b96162df17fb0eba443884f8eb0792145646d05c96ac6542e7776a0960fff2",
             ),
         ),
     )
