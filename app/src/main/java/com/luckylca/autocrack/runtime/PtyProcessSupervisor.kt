@@ -18,11 +18,10 @@ internal class PtyProcessSupervisor(
 
         return try {
             val result = hostEngine.execute(
-                ShellCommandRequest(
-                    command = PtyProcessProbeScriptBuilder.build(rootPid, snapshotFile.path),
+                PtyProcessProbeScriptBuilder.buildRequest(
+                    rootPid = rootPid,
+                    snapshotPath = snapshotFile.path,
                     workingDirectory = layout.runtimeRoot.path,
-                    timeoutMillis = PROCESS_PROBE_TIMEOUT_MILLIS,
-                    identity = HostExecutionIdentity.ROOT,
                 ),
             )
             val snapshotRead = readSnapshot(snapshotFile)
@@ -83,13 +82,24 @@ internal class PtyProcessSupervisor(
     )
 
     private companion object {
-        const val PROCESS_PROBE_TIMEOUT_MILLIS = 10_000L
         const val MAX_PROCESS_SNAPSHOT_BYTES = 4L * 1024L * 1024L
         const val ROOT_GONE_MARKER = "ROOT_GONE"
     }
 }
 
 internal object PtyProcessProbeScriptBuilder {
+    fun buildRequest(
+        rootPid: Int,
+        snapshotPath: String,
+        workingDirectory: String,
+    ): ShellCommandRequest = ShellCommandRequest(
+        command = build(rootPid, snapshotPath),
+        workingDirectory = workingDirectory,
+        timeoutMillis = PROCESS_PROBE_TIMEOUT_MILLIS,
+        identity = HostExecutionIdentity.ROOT,
+        outputMode = ShellOutputMode.DISCARD,
+    )
+
     fun build(rootPid: Int, snapshotPath: String): String {
         require(rootPid > 1) { "PTY 根进程 PID 非法" }
         require(snapshotPath.isNotBlank()) { "进程表快照路径不能为空" }
@@ -107,7 +117,8 @@ internal object PtyProcessProbeScriptBuilder {
             }
 
             # Capture the Root-only process table into an app-created private file.
-            # This avoids Android Process pipe shutdown races for larger snapshots.
+            # Shell stdout/stderr are discarded so Android pipe shutdown cannot cancel
+            # the Root writer before the snapshot receives its final completeness marker.
             {
               echo PROCESS_TABLE_BEGIN
               for PROC_DIR in /proc/[0-9]*; do
@@ -125,6 +136,8 @@ internal object PtyProcessProbeScriptBuilder {
             } > "${'$'}SNAPSHOT_FILE"
         """.trimIndent()
     }
+
+    private const val PROCESS_PROBE_TIMEOUT_MILLIS = 10_000L
 }
 
 internal object PtyProcessProbeParser {
