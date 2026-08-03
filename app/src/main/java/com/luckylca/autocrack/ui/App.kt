@@ -29,6 +29,7 @@ private enum class AppScreen {
     TOOLS,
     RUNTIME,
     LINUX,
+    TOOLPACKS,
     TERMINAL,
 }
 
@@ -46,6 +47,7 @@ fun AutoCrackApp() {
                     AppScreen.TOOLS -> AnalysisToolsScreen()
                     AppScreen.RUNTIME -> RuntimeFoundationScreen()
                     AppScreen.LINUX -> ChrootRuntimeScreen()
+                    AppScreen.TOOLPACKS -> ToolpackScreen()
                     AppScreen.TERMINAL -> PtyTerminalScreen()
                 }
 
@@ -69,6 +71,9 @@ fun AutoCrackApp() {
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.LINUX }) {
                         Text("Linux")
+                    }
+                    FilledTonalButton(onClick = { screen = AppScreen.TOOLPACKS }) {
+                        Text("工具包")
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.TERMINAL }) {
                         Text("终端")
