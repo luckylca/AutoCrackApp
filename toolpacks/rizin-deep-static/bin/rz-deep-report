@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-RIZIN="$ROOT/lib/rizin/rizin"
+RIZIN="$ROOT/bin/rizin"
 
 if [ "${1:-}" = "--self-test" ]; then
   for command_name in python3 file sha256sum; do
@@ -40,7 +40,6 @@ file "$TARGET" > "$OUT/file.txt"
 run_json() {
   output_name=$1
   commands=$2
-  echo "RIZIN_JSON_BEGIN name=$output_name commands=$commands" >&2
   "$RIZIN" -q -c "$commands" "$TARGET" \
     > "$OUT/$output_name" 2>> "$OUT/rizin.stderr"
   if ! python3 -m json.tool "$OUT/$output_name" >/dev/null; then
@@ -49,7 +48,6 @@ run_json() {
     tail -n 20 "$OUT/rizin.stderr" >&2 || true
     exit 20
   fi
-  echo "RIZIN_JSON_OK name=$output_name" >&2
 }
 
 run_json info.json 'ij'
@@ -61,7 +59,7 @@ run_json symbols.json 'isj'
 run_json strings.json 'izj'
 run_json relocations.json 'irj'
 run_json functions.json 'aaa; aflj'
-run_json callgraph.json 'aaa; agCj'
+run_json callgraph.json 'aaa; agC json'
 run_json entry-disasm.json 'aaa; s entry0; pdj 128'
 
 python3 - "$OUT" "$TARGET" <<'PY'
@@ -85,8 +83,15 @@ symbols = read_json("symbols.json", [])
 strings = read_json("strings.json", [])
 relocations = read_json("relocations.json", [])
 functions = read_json("functions.json", [])
-callgraph = read_json("callgraph.json", [])
+callgraph = read_json("callgraph.json", {})
 entry_disasm = read_json("entry-disasm.json", [])
+
+if isinstance(callgraph, dict):
+    callgraph_nodes = len(callgraph.get("nodes", []))
+elif isinstance(callgraph, list):
+    callgraph_nodes = len(callgraph)
+else:
+    callgraph_nodes = 0
 
 summary = {
     "tool": "AutoCrackApp Rizin deep report",
@@ -102,7 +107,7 @@ summary = {
         "strings": len(strings) if isinstance(strings, list) else 0,
         "relocations": len(relocations) if isinstance(relocations, list) else 0,
         "functions": len(functions) if isinstance(functions, list) else 0,
-        "callgraphNodes": len(callgraph) if isinstance(callgraph, list) else 0,
+        "callgraphNodes": callgraph_nodes,
         "entryInstructions": len(entry_disasm) if isinstance(entry_disasm, list) else 0,
     },
 }
@@ -121,6 +126,7 @@ summary = {
         f"exports={summary['counts']['exports']}",
         f"strings={summary['counts']['strings']}",
         f"relocations={summary['counts']['relocations']}",
+        f"callgraphNodes={summary['counts']['callgraphNodes']}",
     ]) + "\n",
     encoding="utf-8",
 )
