@@ -23,6 +23,8 @@ jobs:
       JADX_SHA256: "38a5766d3c8170c41566b4b13ea0ede2430e3008421af4927235c2880234d51a"
       APKTOOL_VERSION: "3.0.2"
       APKTOOL_SHA256: "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd"
+      EXPECTED_PAYLOAD_SHA256: "33bcc0d69da0a72ca232e345fe78b5e2da5b96925fd9ea499f47dd5020e03734"
+      EXPECTED_PAYLOAD_SIZE: "73549035"
       TOOLPACK_ID: apk-dex-static
 
     steps:
@@ -55,7 +57,7 @@ jobs:
           printf '%s' "$JADX_URL" > dist/sources/jadx.url
           printf '%s' "$APKTOOL_URL" > dist/sources/apktool.url
 
-      - name: Assemble relocatable payload
+      - name: Assemble deterministic relocatable payload
         run: |
           set -euxo pipefail
           unzip -q dist/sources/jadx.zip -d dist/payload/lib/jadx
@@ -85,17 +87,18 @@ jobs:
             zip -X -q -r ../payload.zip .
           )
 
+          ACTUAL_PAYLOAD_SHA256=$(sha256sum dist/payload.zip | awk '{print $1}')
+          ACTUAL_PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
+          test "$ACTUAL_PAYLOAD_SHA256" = "$EXPECTED_PAYLOAD_SHA256"
+          test "$ACTUAL_PAYLOAD_SIZE" = "$EXPECTED_PAYLOAD_SIZE"
+
       - name: Generate pinned manifest and package
         run: |
           set -euxo pipefail
           export JADX_URL
           export APKTOOL_URL
-          export PAYLOAD_SHA256
-          export PAYLOAD_SIZE
           JADX_URL=$(cat dist/sources/jadx.url)
           APKTOOL_URL=$(cat dist/sources/apktool.url)
-          PAYLOAD_SHA256=$(sha256sum dist/payload.zip | awk '{print $1}')
-          PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
 
           python3 - <<'PY'
           import json
@@ -111,8 +114,8 @@ jobs:
               "version": f"jadx-{jadx_version}_apktool-{apktool_version}",
               "architecture": "all",
               "payloadEntry": "payload.zip",
-              "payloadSha256": os.environ["PAYLOAD_SHA256"],
-              "payloadSizeBytes": int(os.environ["PAYLOAD_SIZE"]),
+              "payloadSha256": os.environ["EXPECTED_PAYLOAD_SHA256"],
+              "payloadSizeBytes": int(os.environ["EXPECTED_PAYLOAD_SIZE"]),
               "requiredPaths": [
                   "bin/jadx",
                   "bin/apktool",
@@ -168,8 +171,8 @@ jobs:
           PY
 
           jq -e '.schemaVersion == 1' dist/manifest.json >/dev/null
-          jq -e '.payloadSha256 | test("^[0-9a-f]{64}$")' dist/manifest.json >/dev/null
-          jq -e '.sources | length == 2' dist/manifest.json >/dev/null
+          jq -e --arg sha "$EXPECTED_PAYLOAD_SHA256" '.payloadSha256 == $sha' dist/manifest.json >/dev/null
+          jq -e --argjson size "$EXPECTED_PAYLOAD_SIZE" '.payloadSizeBytes == $size' dist/manifest.json >/dev/null
           jq -e --arg sha "$JADX_SHA256" '.sources[0].sha256 == $sha' dist/manifest.json >/dev/null
           jq -e --arg sha "$APKTOOL_SHA256" '.sources[1].sha256 == $sha' dist/manifest.json >/dev/null
 
