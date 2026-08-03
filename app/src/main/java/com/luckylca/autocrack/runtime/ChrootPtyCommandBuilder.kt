@@ -14,7 +14,8 @@ object ChrootPtyCommandBuilder {
             "COLORTERM" to "truecolor",
             "LANG" to "C.UTF-8",
             "LC_ALL" to "C.UTF-8",
-            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "JAVA_HOME" to JAVA_HOME,
+            "PATH" to "$JAVA_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "AUTOC_WORKSPACE" to "/workspace",
         )
         val interactiveShell = buildString {
@@ -42,4 +43,6 @@ object ChrootPtyCommandBuilder {
                 .append(ShellEscaper.quote(innerCommand))
         }
     }
+
+    private const val JAVA_HOME = "/usr/lib/jvm/java-17-openjdk-arm64"
 }

@@ -45,11 +45,14 @@ jobs:
               apt-get update
               apt-get install -y --no-install-recommends \
                 bash ca-certificates coreutils findutils grep sed gawk file \
-                tar zip unzip xz-utils zstd curl wget jq sqlite3 \
-                python3-minimal binutils procps util-linux
+                tar zip unzip xz-utils zstd curl wget git jq sqlite3 \
+                python3-minimal binutils patchelf procps util-linux \
+                openjdk-17-jre-headless
+              test -x /usr/lib/jvm/java-17-openjdk-arm64/bin/java
+              /usr/bin/java -version
               apt-get clean
               rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
-              mkdir -p /workspace /root /opt/autocrack
+              mkdir -p /workspace /root /opt/autocrack /opt/autocrack/toolpacks/packs
               printf "%s\n" "AutoCrackApp Debian arm64 runtime" > /opt/autocrack/README
             '
           docker export autocrack-rootfs > dist/rootfs/rootfs.tar
@@ -83,6 +86,8 @@ jobs:
                   "/bin/bash",
                   "/usr/bin/env",
                   "/usr/bin/file",
+                  "/usr/lib/jvm/java-17-openjdk-arm64/bin/java",
+                  "/usr/bin/patchelf",
                   "/usr/bin/readelf",
                   "/usr/bin/python3",
                   "/usr/bin/script",
@@ -99,6 +104,8 @@ jobs:
 
           tar -tJf "$ARCHIVE" > dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)bin/bash$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/java$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/lib/jvm/java-17-openjdk-arm64/bin/java$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/readelf$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/script$' dist/rootfs/rootfs-entries.txt
           (

@@ -2,6 +2,7 @@ package com.luckylca.autocrack.runtime
 
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -16,14 +17,16 @@ class ChrootRuntimeEngine(
             "Debian rootfs 尚未安装"
         }
         require(layout.rootfsRoot.isDirectory) { "rootfs current 目录不存在" }
-        val workspace = layout.createRuntimeWorkspace()
-        val mountResult = prepareMounts(workspace)
-        require(mountResult.succeeded) {
-            "准备 chroot 挂载失败：exit=${mountResult.exitCode}, ${mountResult.stderr}"
-        }
 
+        ChrootExecutionGate.acquire(ChrootExecutionKind.ONE_SHOT)
         val startedAt = System.currentTimeMillis()
         return try {
+            val workspace = layout.createRuntimeWorkspace()
+            val mountResult = performPrepareMounts(workspace)
+            require(mountResult.succeeded) {
+                "准备 chroot 挂载失败：exit=${mountResult.exitCode}, ${mountResult.stderr}"
+            }
+
             val hostResult = hostEngine.execute(
                 ShellCommandRequest(
                     command = ChrootCommandBuilder.build(
@@ -44,11 +47,36 @@ class ChrootRuntimeEngine(
             appendAudit(result, startedAt)
             result
         } finally {
-            cleanupMounts()
+            withContext(NonCancellable) {
+                try {
+                    performCleanupMounts()
+                } finally {
+                    ChrootExecutionGate.release(ChrootExecutionKind.ONE_SHOT)
+                }
+            }
         }
     }
 
-    suspend fun prepareMounts(workspace: File = layout.createRuntimeWorkspace()): ShellCommandResult {
+    internal suspend fun prepareMountsForPersistentPty(
+        workspace: File = layout.createRuntimeWorkspace(),
+    ): ShellCommandResult {
+        ChrootExecutionGate.requireOwner(ChrootExecutionKind.PERSISTENT_PTY)
+        return performPrepareMounts(workspace)
+    }
+
+    internal suspend fun cleanupMountsForPersistentPty(): ShellCommandResult {
+        ChrootExecutionGate.requireOwner(ChrootExecutionKind.PERSISTENT_PTY)
+        return performCleanupMounts()
+    }
+
+    suspend fun cleanupMounts(): ShellCommandResult {
+        ChrootExecutionGate.requireIdle()
+        return performCleanupMounts()
+    }
+
+    private suspend fun performPrepareMounts(
+        workspace: File = layout.createRuntimeWorkspace(),
+    ): ShellCommandResult {
         require(layout.readRootfsState() == RuntimeRootfsState.INSTALLED) {
             "Debian rootfs 尚未安装"
         }
@@ -69,7 +97,7 @@ class ChrootRuntimeEngine(
         )
     }
 
-    suspend fun cleanupMounts(): ShellCommandResult {
+    private suspend fun performCleanupMounts(): ShellCommandResult {
         val command = MountScriptBuilder.cleanup(layout.rootfsRoot.path)
         return hostEngine.execute(
             ShellCommandRequest(
@@ -148,7 +176,8 @@ object ChrootCommandBuilder {
             "TERM" to "xterm-256color",
             "LANG" to "C.UTF-8",
             "LC_ALL" to "C.UTF-8",
-            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "JAVA_HOME" to "/usr/lib/jvm/java-17-openjdk-arm64",
+            "PATH" to "/usr/lib/jvm/java-17-openjdk-arm64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "AUTOC_WORKSPACE" to "/workspace",
         ).apply { putAll(request.environment) }
 
