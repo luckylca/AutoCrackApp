@@ -1,5 +1,6 @@
 package com.luckylca.autocrack.runtime
 
+import android.system.Os
 import java.io.File
 
 internal class PtyProcessSupervisor(
@@ -20,6 +21,7 @@ internal class PtyProcessSupervisor(
             ".snapshot",
             layout.tempRoot,
         )
+        val processSnapshotStat = Os.stat(processSnapshotFile.path)
 
         return try {
             val processResult = hostEngine.execute(
@@ -28,6 +30,8 @@ internal class PtyProcessSupervisor(
                     snapshotPath = processSnapshotFile.path,
                     rootfsPath = layout.rootfsRoot.path,
                     workingDirectory = layout.runtimeRoot.path,
+                    snapshotOwnerUid = processSnapshotStat.st_uid,
+                    snapshotOwnerGid = processSnapshotStat.st_gid,
                 ),
             )
             val processSnapshot = readSnapshot(
@@ -132,6 +136,9 @@ internal class PtyProcessSupervisor(
         if (snapshot.text?.lineSequence()?.any { it.trim() == PS_UNAVAILABLE_MARKER } == true) {
             return "Debian rootfs 中缺少 /usr/bin/ps"
         }
+        if (snapshot.text?.lineSequence()?.any { it.trim() == SNAPSHOT_PERMISSION_FAILED_MARKER } == true) {
+            return "恢复进程表快照的 App 文件权限失败"
+        }
         if (snapshot.text == null || !PtyProcessProbeParser.hasCompleteTable(snapshot.text)) {
             return result.failure ?: when {
                 result.timedOut -> "进程树探测超时"
@@ -186,6 +193,7 @@ internal class PtyProcessSupervisor(
         const val MAX_COMMAND_LINE_PIDS = 256
         const val ROOT_GONE_MARKER = "ROOT_GONE"
         const val PS_UNAVAILABLE_MARKER = "PS_UNAVAILABLE"
+        const val SNAPSHOT_PERMISSION_FAILED_MARKER = "SNAPSHOT_PERMISSION_FAILED"
     }
 }
 
@@ -195,8 +203,16 @@ internal object PtyProcessProbeScriptBuilder {
         snapshotPath: String,
         rootfsPath: String,
         workingDirectory: String,
+        snapshotOwnerUid: Int,
+        snapshotOwnerGid: Int,
     ): ShellCommandRequest = ShellCommandRequest(
-        command = buildProcessTableSnapshot(rootPid, snapshotPath, rootfsPath),
+        command = buildProcessTableSnapshot(
+            rootPid = rootPid,
+            snapshotPath = snapshotPath,
+            rootfsPath = rootfsPath,
+            snapshotOwnerUid = snapshotOwnerUid,
+            snapshotOwnerGid = snapshotOwnerGid,
+        ),
         workingDirectory = workingDirectory,
         timeoutMillis = PROCESS_TABLE_PROBE_TIMEOUT_MILLIS,
         identity = HostExecutionIdentity.ROOT,
@@ -207,15 +223,21 @@ internal object PtyProcessProbeScriptBuilder {
         rootPid: Int,
         snapshotPath: String,
         rootfsPath: String,
+        snapshotOwnerUid: Int,
+        snapshotOwnerGid: Int,
     ): String {
         require(rootPid > 1) { "PTY 根进程 PID 非法" }
         require(snapshotPath.isNotBlank()) { "进程表快照路径不能为空" }
         require(rootfsPath.isNotBlank()) { "rootfs 路径不能为空" }
+        require(snapshotOwnerUid > 0) { "进程表快照 UID 非法" }
+        require(snapshotOwnerGid > 0) { "进程表快照 GID 非法" }
         return """
             set -u
             ROOT_PID=$rootPid
             ROOTFS=${ShellEscaper.quote(rootfsPath)}
             SNAPSHOT_FILE=${ShellEscaper.quote(snapshotPath)}
+            SNAPSHOT_UID=$snapshotOwnerUid
+            SNAPSHOT_GID=$snapshotOwnerGid
             TMP_FILE="${'$'}SNAPSHOT_FILE.tmp.${'$'}${'$'}"
             cleanup_snapshot() { rm -f "${'$'}TMP_FILE"; }
             trap cleanup_snapshot EXIT HUP INT TERM
@@ -240,6 +262,16 @@ internal object PtyProcessProbeScriptBuilder {
               printf 'PROCESS_PS_EXIT=%s\n' "${'$'}PS_EXIT"
               printf 'PROCESS_TABLE_END\n'
             } > "${'$'}TMP_FILE"
+
+            # KernelSU executes this script as root. A plain mv would replace the
+            # App-owned placeholder with a root-owned inode (often mode 0600), which
+            # makes the Kotlin process fail with EACCES. Restore the exact App UID/GID
+            # before the atomic rename, while keeping the snapshot private.
+            if ! chown "${'$'}SNAPSHOT_UID:${'$'}SNAPSHOT_GID" "${'$'}TMP_FILE" ||
+               ! chmod 0600 "${'$'}TMP_FILE"; then
+              printf 'SNAPSHOT_PERMISSION_FAILED\n' > "${'$'}SNAPSHOT_FILE"
+              exit 5
+            fi
             mv "${'$'}TMP_FILE" "${'$'}SNAPSHOT_FILE"
             trap - EXIT HUP INT TERM
             exit "${'$'}PS_EXIT"
