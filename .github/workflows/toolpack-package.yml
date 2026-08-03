@@ -23,8 +23,8 @@ jobs:
       JADX_SHA256: "38a5766d3c8170c41566b4b13ea0ede2430e3008421af4927235c2880234d51a"
       APKTOOL_VERSION: "3.0.2"
       APKTOOL_SHA256: "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd"
-      EXPECTED_PAYLOAD_SHA256: "33bcc0d69da0a72ca232e345fe78b5e2da5b96925fd9ea499f47dd5020e03734"
-      EXPECTED_PAYLOAD_SIZE: "73549035"
+      EXPECTED_PAYLOAD_SHA256: "806db79bbb1013a8df171f0c92d6514d21532b7a66fc15a0f970e0340bab1afe"
+      EXPECTED_PAYLOAD_SIZE: "73549038"
       TOOLPACK_ID: apk-dex-static
 
     steps:
@@ -67,7 +67,7 @@ jobs:
           #!/bin/sh
           set -eu
           ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-          exec "$ROOT/lib/jadx/bin/jadx" "$@"
+          exec /bin/sh "$ROOT/lib/jadx/bin/jadx" "$@"
           EOF
 
           cat > dist/payload/bin/apktool <<'EOF'
@@ -91,6 +91,13 @@ jobs:
           ACTUAL_PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
           test "$ACTUAL_PAYLOAD_SHA256" = "$EXPECTED_PAYLOAD_SHA256"
           test "$ACTUAL_PAYLOAD_SIZE" = "$EXPECTED_PAYLOAD_SIZE"
+
+          JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/default-java}
+          export JAVA_HOME
+          PATH="$JAVA_HOME/bin:$PATH"
+          export PATH
+          dist/payload/bin/jadx --version | grep -Fx "$JADX_VERSION"
+          dist/payload/bin/apktool --version | grep -Fx "$APKTOOL_VERSION"
 
       - name: Generate pinned manifest and package
         run: |
