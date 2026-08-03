@@ -22,6 +22,19 @@ class PtyProcessSupervisorTest {
     }
 
     @Test
+    fun fileBackedProbeDiscardsShellPipes() {
+        val request = PtyProcessProbeScriptBuilder.buildRequest(
+            rootPid = 30891,
+            snapshotPath = "/data/user/0/example/files/runtime/tmp/proc.snapshot",
+            workingDirectory = "/data/user/0/example/files/runtime",
+        )
+
+        assertEquals(ShellOutputMode.DISCARD, request.outputMode)
+        assertEquals(HostExecutionIdentity.ROOT, request.identity)
+        assertEquals(10_000L, request.timeoutMillis)
+    }
+
+    @Test
     fun rejectsIncompleteProcessTable() {
         val output = """
             PROCESS_TABLE_BEGIN
