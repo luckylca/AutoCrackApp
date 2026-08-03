@@ -63,7 +63,7 @@ internal fun PtyProcessSupervisorPanel(
             )
             HorizontalDivider()
             Text(
-                "只显示当前 AutoCrackApp PTY 根进程及其后代；不会扫描或操作无关应用进程。",
+                "只显示和操作当前 AutoCrackApp PTY 根进程及其后代；不会处理无关应用进程。",
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
@@ -106,7 +106,7 @@ internal fun PtyProcessSupervisorPanel(
                             runCatching {
                                 check(manager.terminateProcessGroup()) { "SIGTERM 发送失败" }
                             }.onSuccess {
-                                status = "已向 PTY 进程组发送 SIGTERM"
+                                status = "已向 PTY 全部进程组发送 SIGTERM"
                             }.onFailure { error ->
                                 status = error.message ?: error::class.java.name
                             }
@@ -123,14 +123,14 @@ internal fun PtyProcessSupervisorPanel(
                 onClick = {
                     if (!forceKillArmed) {
                         forceKillArmed = true
-                        status = "5 秒内再次点击以发送 SIGKILL"
+                        status = "5 秒内再次点击以强制结束整个 PTY 进程树"
                     } else {
                         forceKillArmed = false
                         scope.launch {
                             runCatching {
                                 check(manager.killProcessGroup()) { "SIGKILL 发送失败" }
                             }.onSuccess {
-                                status = "已向 PTY 进程组发送 SIGKILL"
+                                status = "已向 PTY 全部进程组发送 SIGKILL"
                             }.onFailure { error ->
                                 status = error.message ?: error::class.java.name
                             }
@@ -138,7 +138,7 @@ internal fun PtyProcessSupervisorPanel(
                     }
                 },
             ) {
-                Text(if (forceKillArmed) "再次点击：强制结束" else "强制结束进程组")
+                Text(if (forceKillArmed) "再次点击：强制结束" else "强制结束进程树")
             }
 
             Text(status, style = MaterialTheme.typography.bodySmall)
