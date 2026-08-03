@@ -15,8 +15,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.5.7.3-phase5.7.3-file-backed-proc-snapshot"
+        versionCode = 18
+        versionName = "0.5.7.4-phase5.7.4-discard-output-probe"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
