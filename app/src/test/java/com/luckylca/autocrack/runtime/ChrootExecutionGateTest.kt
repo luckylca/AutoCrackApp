@@ -4,6 +4,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -27,7 +28,7 @@ class ChrootExecutionGateTest {
         }
 
         assertEquals(ChrootExecutionKind.PERSISTENT_PTY, ChrootExecutionGate.current())
-        assert(failure.message.orEmpty().contains("持久 PTY"))
+        assertTrue(failure.message.orEmpty().contains("持久 PTY"))
     }
 
     @Test
@@ -39,7 +40,7 @@ class ChrootExecutionGateTest {
         }
 
         assertEquals(ChrootExecutionKind.ONE_SHOT, ChrootExecutionGate.current())
-        assert(failure.message.orEmpty().contains("一次性 Debian 命令"))
+        assertTrue(failure.message.orEmpty().contains("一次性 Debian 命令"))
     }
 
     @Test
