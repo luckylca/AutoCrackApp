@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.4",
+  "catalogVersion": "0.5.8",
   "priorityModes": ["FULL_ROOT", "SHIZUKU"],
   "tools": [
     {
@@ -15,8 +15,8 @@
     {
       "id": "shell.exec",
       "title": "Execute a one-shot shell command",
-      "runtime": "root_host_foundation",
-      "requiresCapabilities": ["ROOT_SHELL"],
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["ROOT_SHELL", "CHROOT"],
       "changesState": "depends_on_command",
       "confirmation": "manual_now_agent_policy_later",
       "inputs": {
@@ -27,7 +27,7 @@
         "timeoutMillis": "100..1800000"
       },
       "output": "ShellCommandResult",
-      "audit": "runtime/audit/shell-exec.jsonl"
+      "audit": "runtime/audit/chroot-exec.jsonl"
     },
     {
       "id": "shell.cancel_all",
@@ -37,6 +37,39 @@
       "changesState": true,
       "confirmation": "none",
       "output": "cancelled_process_count"
+    },
+    {
+      "id": "pty.open",
+      "title": "Open a persistent Debian PTY session",
+      "runtime": "native_pty",
+      "requiresCapabilities": ["ROOT_SHELL", "CHROOT", "PTY"],
+      "changesState": true,
+      "confirmation": "none",
+      "audit": "runtime/audit/pty-sessions.jsonl"
+    },
+    {
+      "id": "pty.process_tree",
+      "title": "Inspect the active PTY process subtree",
+      "runtime": "host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none"
+    },
+    {
+      "id": "pty.terminate",
+      "title": "Send SIGTERM to every process group in the active PTY subtree",
+      "runtime": "host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_SIGNAL"],
+      "changesState": true,
+      "confirmation": "required"
+    },
+    {
+      "id": "pty.kill",
+      "title": "Send SIGKILL to every process group in the active PTY subtree",
+      "runtime": "host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_SIGNAL"],
+      "changesState": true,
+      "confirmation": "two_step_required"
     },
     {
       "id": "fs.list",
@@ -96,12 +129,63 @@
     },
     {
       "id": "runtime.rootfs.install",
-      "title": "Install the pinned Debian arm64 rootfs",
+      "title": "Install or update the pinned Debian arm64 rootfs",
       "runtime": "host_bridge",
       "requiresCapabilities": ["ROOT_SHELL", "MOUNT", "CHROOT"],
       "changesState": true,
       "confirmation": "required",
-      "status": "planned_for_0.5.5"
+      "status": "available"
+    },
+    {
+      "id": "toolpack.install",
+      "title": "Verify and install a versioned reverse-analysis toolpack",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["CHROOT", "WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "required",
+      "inputs": {
+        "package": "manifest.json + payload.zip",
+        "verification": "payload and upstream SHA-256"
+      },
+      "audit": "runtime/toolpacks/toolpack-audit.jsonl"
+    },
+    {
+      "id": "toolpack.self_test",
+      "title": "Run manifest-defined read-only tool self-tests",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT"],
+      "changesState": false,
+      "confirmation": "none",
+      "output": "ToolpackSelfTestReport"
+    },
+    {
+      "id": "toolpack.uninstall",
+      "title": "Remove an installed reverse-analysis toolpack and its command shims",
+      "runtime": "app_workspace",
+      "requiresCapabilities": ["CHROOT", "WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "required",
+      "audit": "runtime/toolpacks/toolpack-audit.jsonl"
+    },
+    {
+      "id": "apk.jadx",
+      "title": "Decompile APK or DEX input with JADX CLI",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_APK_DEX_STATIC"],
+      "changesState": true,
+      "confirmation": "workspace_write",
+      "commandTemplate": "jadx --output-dir <artifact-dir> <input-apk-or-dex>",
+      "expectedArtifacts": ["workspace-relative output directory"]
+    },
+    {
+      "id": "apk.apktool",
+      "title": "Decode Android resources and smali with Apktool",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_APK_DEX_STATIC"],
+      "changesState": true,
+      "confirmation": "workspace_write",
+      "commandTemplate": "apktool decode --force --output <artifact-dir> <input-apk>",
+      "expectedArtifacts": ["workspace-relative decoded project"]
     },
     {
       "id": "shizuku.user_service",
