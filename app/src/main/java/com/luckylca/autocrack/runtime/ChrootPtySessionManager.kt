@@ -297,17 +297,44 @@ class ChrootPtySessionManager private constructor(context: Context) {
 
     private suspend fun signalProcessGroup(signal: Int, event: String): Boolean {
         val session = activeSession ?: return false
-        val succeeded = withContext(Dispatchers.IO) {
-            NativePtyBridge.nativeSignal(session.info.handle, signal)
+        val signalResult = PtyProcessTreeSignaler(
+            layout = layout,
+            hostEngine = hostEngine,
+            processSupervisor = processSupervisor,
+        ).signal(
+            rootPid = session.info.pid,
+            signal = signal,
+            fallbackTree = mutableSnapshot.value.processTree,
+        )
+        mutableSnapshot.update { current ->
+            if (current.sessionId == session.info.sessionId) {
+                current.copy(
+                    processTree = signalResult.processTree,
+                    state = if (
+                        signalResult.succeeded && current.state == PtySessionState.RUNNING
+                    ) {
+                        PtySessionState.CLOSING
+                    } else {
+                        current.state
+                    },
+                )
+            } else {
+                current
+            }
         }
         appendAudit(
             event = event,
             session = session,
             detail = JSONObject()
                 .put("signal", signal)
-                .put("succeeded", succeeded),
+                .put("succeeded", signalResult.succeeded)
+                .put("processCount", signalResult.processTree.processes.size)
+                .put("processTreeFailure", signalResult.processTree.failure ?: JSONObject.NULL)
+                .put("processGroupIds", JSONArray(signalResult.processGroupIds))
+                .put("shellExitCode", signalResult.shellResult.exitCode ?: JSONObject.NULL)
+                .put("shellFailure", signalResult.shellResult.failure ?: JSONObject.NULL),
         )
-        return succeeded
+        return signalResult.succeeded
     }
 
     private suspend fun readLoop(session: ManagedSession) {
