@@ -165,5 +165,58 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "rizin-deep-static" to TrustedToolpack(
+            title = "Rizin deep ELF and native analysis",
+            version = "rizin-0.9.1_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "3c353c4282ac5266b73390451324f17fb883a5f7563711ccb907ec414c61327d",
+            payloadSizeBytes = 60_113_398L,
+            requiredPaths = setOf(
+                "bin/rizin",
+                "bin/rz-functions",
+                "bin/rz-disasm",
+                "bin/rz-deep-report",
+                "lib/rizin/rizin",
+            ),
+            commands = mapOf(
+                "rizin" to "bin/rizin",
+                "rz-functions" to "bin/rz-functions",
+                "rz-disasm" to "bin/rz-disasm",
+                "rz-deep-report" to "bin/rz-deep-report",
+            ),
+            selfTests = mapOf(
+                "rizin-version" to TrustedSelfTest(
+                    title = "Rizin ARM64",
+                    command = "rizin -v",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("0.9.1"),
+                ),
+                "rz-functions-self-test" to TrustedSelfTest(
+                    title = "Rizin function inventory",
+                    command = "rz-functions --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("RZ_FUNCTIONS_SELF_TEST_OK"),
+                ),
+                "rz-disasm-self-test" to TrustedSelfTest(
+                    title = "Rizin bounded disassembly",
+                    command = "rz-disasm --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("RZ_DISASM_SELF_TEST_OK"),
+                ),
+                "rz-deep-report-self-test" to TrustedSelfTest(
+                    title = "Rizin deep report generator",
+                    command = "rz-deep-report --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("RZ_DEEP_REPORT_SELF_TEST_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "rizin" to TrustedSource(
+                    version = "0.9.1",
+                    url = "https://github.com/rizinorg/rizin/releases/download/v0.9.1/rizin-v0.9.1-android-aarch64.tar.gz",
+                    sha256 = "49b96162df17fb0eba443884f8eb0792145646d05c96ac6542e7776a0960fff2",
+                ),
+            ),
+        ),
     )
 }
