@@ -76,8 +76,8 @@ internal object BuiltInToolpackTrustPolicy {
             title = "APK and DEX static analysis",
             version = "jadx-1.5.5_apktool-3.0.2",
             architecture = "all",
-            payloadSha256 = "33bcc0d69da0a72ca232e345fe78b5e2da5b96925fd9ea499f47dd5020e03734",
-            payloadSizeBytes = 73_549_035L,
+            payloadSha256 = "806db79bbb1013a8df171f0c92d6514d21532b7a66fc15a0f970e0340bab1afe",
+            payloadSizeBytes = 73_549_038L,
             requiredPaths = setOf(
                 "bin/jadx",
                 "bin/apktool",
