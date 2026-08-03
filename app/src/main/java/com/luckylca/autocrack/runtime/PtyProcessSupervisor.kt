@@ -10,8 +10,8 @@ internal class PtyProcessSupervisor(
         require(rootPid > 1) { "PTY 根进程 PID 非法" }
         layout.initialize()
         val refreshedAt = System.currentTimeMillis()
-        val statSnapshotFile = File.createTempFile(
-            "pty-proc-stat-$rootPid-",
+        val processSnapshotFile = File.createTempFile(
+            "pty-process-table-$rootPid-",
             ".snapshot",
             layout.tempRoot,
         )
@@ -22,25 +22,26 @@ internal class PtyProcessSupervisor(
         )
 
         return try {
-            val statResult = hostEngine.execute(
-                PtyProcessProbeScriptBuilder.buildStatRequest(
+            val processResult = hostEngine.execute(
+                PtyProcessProbeScriptBuilder.buildProcessTableRequest(
                     rootPid = rootPid,
-                    snapshotPath = statSnapshotFile.path,
+                    snapshotPath = processSnapshotFile.path,
+                    rootfsPath = layout.rootfsRoot.path,
                     workingDirectory = layout.runtimeRoot.path,
                 ),
             )
-            val statSnapshot = readSnapshot(
-                file = statSnapshotFile,
-                maxBytes = MAX_PROCESS_STAT_SNAPSHOT_BYTES,
-                label = "进程状态",
+            val processSnapshot = readSnapshot(
+                file = processSnapshotFile,
+                maxBytes = MAX_PROCESS_TABLE_SNAPSHOT_BYTES,
+                label = "进程表",
             )
-            val baseProcesses = statSnapshot.text
+            val baseProcesses = processSnapshot.text
                 ?.takeIf(PtyProcessProbeParser::hasCompleteTable)
                 ?.let { PtyProcessProbeParser.parse(it, rootPid) }
                 .orEmpty()
-            val fatalFailure = statSnapshotFailure(
-                result = statResult,
-                snapshot = statSnapshot,
+            val fatalFailure = processSnapshotFailure(
+                result = processResult,
+                snapshot = processSnapshot,
                 processes = baseProcesses,
             )
             if (fatalFailure != null) {
@@ -69,7 +70,7 @@ internal class PtyProcessSupervisor(
                 failure = failure,
             )
         } finally {
-            runCatching { statSnapshotFile.delete() }
+            runCatching { processSnapshotFile.delete() }
             runCatching { commandLineSnapshotFile.delete() }
         }
     }
@@ -119,7 +120,7 @@ internal class PtyProcessSupervisor(
         )
     }
 
-    private fun statSnapshotFailure(
+    private fun processSnapshotFailure(
         result: ShellCommandResult,
         snapshot: SnapshotRead,
         processes: List<PtyProcessInfo>,
@@ -128,15 +129,22 @@ internal class PtyProcessSupervisor(
         if (snapshot.text?.lineSequence()?.any { it.trim() == ROOT_GONE_MARKER } == true) {
             return "PTY 根进程已退出"
         }
+        if (snapshot.text?.lineSequence()?.any { it.trim() == PS_UNAVAILABLE_MARKER } == true) {
+            return "Debian rootfs 中缺少 /usr/bin/ps"
+        }
         if (snapshot.text == null || !PtyProcessProbeParser.hasCompleteTable(snapshot.text)) {
             return result.failure ?: when {
                 result.timedOut -> "进程树探测超时"
                 result.cancelled -> "进程树探测被取消"
                 !result.succeeded -> "进程树探测失败：exit=${result.exitCode ?: "unknown"}"
-                else -> "进程状态快照缺少完整起止标记"
+                else -> "进程表快照缺少完整起止标记"
             }
         }
-        if (processes.isEmpty()) return "没有在 /proc 快照中找到 PTY 根进程"
+        val psExitCode = PtyProcessProbeParser.parseProcessTableExitCode(snapshot.text)
+        if (psExitCode != null && psExitCode != 0) {
+            return "Debian ps 进程表快照失败：exit=$psExitCode"
+        }
+        if (processes.isEmpty()) return "没有在 Debian ps 快照中找到 PTY 根进程"
         return null
     }
 
@@ -173,56 +181,68 @@ internal class PtyProcessSupervisor(
     )
 
     private companion object {
-        const val MAX_PROCESS_STAT_SNAPSHOT_BYTES = 4L * 1024L * 1024L
+        const val MAX_PROCESS_TABLE_SNAPSHOT_BYTES = 4L * 1024L * 1024L
         const val MAX_COMMAND_LINE_SNAPSHOT_BYTES = 1024L * 1024L
         const val MAX_COMMAND_LINE_PIDS = 256
         const val ROOT_GONE_MARKER = "ROOT_GONE"
+        const val PS_UNAVAILABLE_MARKER = "PS_UNAVAILABLE"
     }
 }
 
 internal object PtyProcessProbeScriptBuilder {
-    fun buildStatRequest(
+    fun buildProcessTableRequest(
         rootPid: Int,
         snapshotPath: String,
+        rootfsPath: String,
         workingDirectory: String,
     ): ShellCommandRequest = ShellCommandRequest(
-        command = buildStatSnapshot(rootPid, snapshotPath),
+        command = buildProcessTableSnapshot(rootPid, snapshotPath, rootfsPath),
         workingDirectory = workingDirectory,
-        timeoutMillis = PROCESS_STAT_PROBE_TIMEOUT_MILLIS,
+        timeoutMillis = PROCESS_TABLE_PROBE_TIMEOUT_MILLIS,
         identity = HostExecutionIdentity.ROOT,
         outputMode = ShellOutputMode.DISCARD,
     )
 
-    fun buildStatSnapshot(rootPid: Int, snapshotPath: String): String {
+    fun buildProcessTableSnapshot(
+        rootPid: Int,
+        snapshotPath: String,
+        rootfsPath: String,
+    ): String {
         require(rootPid > 1) { "PTY 根进程 PID 非法" }
-        require(snapshotPath.isNotBlank()) { "进程状态快照路径不能为空" }
+        require(snapshotPath.isNotBlank()) { "进程表快照路径不能为空" }
+        require(rootfsPath.isNotBlank()) { "rootfs 路径不能为空" }
         return """
             set -u
             ROOT_PID=$rootPid
+            ROOTFS=${ShellEscaper.quote(rootfsPath)}
             SNAPSHOT_FILE=${ShellEscaper.quote(snapshotPath)}
+            TMP_FILE="${'$'}SNAPSHOT_FILE.tmp.${'$'}${'$'}"
+            cleanup_snapshot() { rm -f "${'$'}TMP_FILE"; }
+            trap cleanup_snapshot EXIT HUP INT TERM
+
             if [ ! -r "/proc/${'$'}ROOT_PID/stat" ]; then
               printf 'ROOT_GONE\n' > "${'$'}SNAPSHOT_FILE"
               exit 3
             fi
+            if [ ! -x "${'$'}ROOTFS/usr/bin/ps" ]; then
+              printf 'PS_UNAVAILABLE\n' > "${'$'}SNAPSHOT_FILE"
+              exit 4
+            fi
 
-            # The global phase reads only stat records with the shell built-in read.
-            # It does not spawn cat/tr once per PID; command lines are fetched later
-            # only for the small PTY descendant set selected by Kotlin.
+            # A single procps invocation replaces per-PID shell traversal. The active
+            # PTY already keeps /proc mounted inside the managed Debian rootfs.
             {
               printf 'PROCESS_TABLE_BEGIN\n'
-              for PROC_DIR in /proc/[0-9]*; do
-                [ -d "${'$'}PROC_DIR" ] || continue
-                PID="${'$'}{PROC_DIR##*/}"
-                STAT_FILE="${'$'}PROC_DIR/stat"
-                [ -r "${'$'}STAT_FILE" ] || continue
-
-                STAT_LINE=''
-                IFS= read -r STAT_LINE < "${'$'}STAT_FILE" 2>/dev/null || continue
-                [ -n "${'$'}STAT_LINE" ] || continue
-                printf 'R|%s|%s\n' "${'$'}PID" "${'$'}STAT_LINE"
-              done
+              chroot "${'$'}ROOTFS" /usr/bin/env -i \
+                LC_ALL=C PATH=/usr/bin:/bin \
+                /usr/bin/ps -e -o pid=,ppid=,pgid=,sid=,stat=,comm=
+              PS_EXIT=${'$'}?
+              printf 'PROCESS_PS_EXIT=%s\n' "${'$'}PS_EXIT"
               printf 'PROCESS_TABLE_END\n'
-            } > "${'$'}SNAPSHOT_FILE"
+            } > "${'$'}TMP_FILE"
+            mv "${'$'}TMP_FILE" "${'$'}SNAPSHOT_FILE"
+            trap - EXIT HUP INT TERM
+            exit "${'$'}PS_EXIT"
         """.trimIndent()
     }
 
@@ -260,7 +280,7 @@ internal object PtyProcessProbeScriptBuilder {
         """.trimIndent()
     }
 
-    private const val PROCESS_STAT_PROBE_TIMEOUT_MILLIS = 10_000L
+    private const val PROCESS_TABLE_PROBE_TIMEOUT_MILLIS = 5_000L
     private const val COMMAND_LINE_PROBE_TIMEOUT_MILLIS = 5_000L
     private const val MAX_COMMAND_LINE_PIDS = 256
 }
@@ -278,6 +298,13 @@ internal object PtyProcessProbeParser {
         return begin >= 0 && end > begin
     }
 
+    fun parseProcessTableExitCode(output: String): Int? = output
+        .lineSequence()
+        .map(String::trim)
+        .firstOrNull { it.startsWith(PROCESS_PS_EXIT_PREFIX) }
+        ?.removePrefix(PROCESS_PS_EXIT_PREFIX)
+        ?.toIntOrNull()
+
     fun parse(output: String, rootPid: Int): List<PtyProcessInfo> {
         require(rootPid > 1) { "PTY 根进程 PID 非法" }
         if (!hasCompleteTable(output)) return emptyList()
@@ -289,19 +316,13 @@ internal object PtyProcessProbeParser {
         var inside = false
         val processes = mutableListOf<PtyProcessInfo>()
         output.lineSequence().forEach { rawLine ->
-            val line = rawLine.trimEnd()
+            val line = rawLine.trim()
             when (line) {
                 PROCESS_TABLE_BEGIN -> inside = true
                 PROCESS_TABLE_END -> inside = false
                 else -> {
-                    if (!inside || !line.startsWith("R|")) return@forEach
-                    val fields = line.split('|', limit = 3)
-                    if (fields.size != 3) return@forEach
-                    val expectedPid = fields[1].toIntOrNull() ?: return@forEach
-                    parseStatRecord(
-                        expectedPid = expectedPid,
-                        statLine = fields[2],
-                    )?.let(processes::add)
+                    if (!inside || line.startsWith(PROCESS_PS_EXIT_PREFIX)) return@forEach
+                    parsePsRecord(line)?.let(processes::add)
                 }
             }
         }
@@ -361,29 +382,17 @@ internal object PtyProcessProbeParser {
         return selectedPids.mapNotNull(processByPid::get)
     }
 
-    private fun parseStatRecord(
-        expectedPid: Int,
-        statLine: String,
-    ): PtyProcessInfo? {
-        val openParen = statLine.indexOf('(')
-        val closeParen = statLine.lastIndexOf(") ")
-        if (openParen <= 0 || closeParen <= openParen) return null
-
-        val statPid = statLine.substring(0, openParen).trim().toIntOrNull() ?: return null
-        if (statPid != expectedPid) return null
-
-        val name = statLine.substring(openParen + 1, closeParen).trim()
-        val remainingFields = statLine.substring(closeParen + 2)
-            .trim()
-            .split(WHITESPACE_REGEX)
-        if (remainingFields.size < MINIMUM_STAT_FIELDS) return null
-
-        val stateCode = remainingFields[0]
-        val parentPid = remainingFields[1].toIntOrNull() ?: return null
-        val processGroupId = remainingFields[2].toIntOrNull() ?: return null
-        val sessionId = remainingFields[3].toIntOrNull() ?: return null
+    private fun parsePsRecord(line: String): PtyProcessInfo? {
+        val match = PS_RECORD_REGEX.matchEntire(line) ?: return null
+        val pid = match.groupValues[1].toIntOrNull() ?: return null
+        val parentPid = match.groupValues[2].toIntOrNull() ?: return null
+        val processGroupId = match.groupValues[3].toIntOrNull() ?: return null
+        val sessionId = match.groupValues[4].toIntOrNull() ?: return null
+        val stateCode = match.groupValues[5]
+        val name = match.groupValues[6].trim()
+        if (name.isBlank()) return null
         return PtyProcessInfo(
-            pid = expectedPid,
+            pid = pid,
             parentPid = parentPid,
             processGroupId = processGroupId,
             sessionId = sessionId,
@@ -408,8 +417,8 @@ internal object PtyProcessProbeParser {
         return "$stateCode ($description)"
     }
 
-    private val WHITESPACE_REGEX = Regex("\\s+")
-    private const val MINIMUM_STAT_FIELDS = 4
+    private val PS_RECORD_REGEX = Regex("^\\s*(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\S+)\\s+(.+?)\\s*$")
+    private const val PROCESS_PS_EXIT_PREFIX = "PROCESS_PS_EXIT="
     private const val PROCESS_TABLE_BEGIN = "PROCESS_TABLE_BEGIN"
     private const val PROCESS_TABLE_END = "PROCESS_TABLE_END"
     private const val CMDLINE_TABLE_BEGIN = "CMDLINE_TABLE_BEGIN"
