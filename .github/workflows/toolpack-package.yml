@@ -20,7 +20,9 @@ jobs:
 
     env:
       JADX_VERSION: "1.5.5"
+      JADX_SHA256: "38a5766d3c8170c41566b4b13ea0ede2430e3008421af4927235c2880234d51a"
       APKTOOL_VERSION: "3.0.2"
+      APKTOOL_SHA256: "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd"
       TOOLPACK_ID: apk-dex-static
 
     steps:
@@ -32,7 +34,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends curl jq unzip zip
 
-      - name: Download pinned upstream releases
+      - name: Download and verify pinned upstream releases
         run: |
           set -euxo pipefail
           mkdir -p dist/sources dist/payload/bin dist/payload/lib/jadx dist/payload/lib/apktool
@@ -45,15 +47,13 @@ jobs:
           curl --fail --location --retry 4 --retry-all-errors \
             --output dist/sources/apktool.jar "$APKTOOL_URL"
 
-          test -s dist/sources/jadx.zip
-          test -s dist/sources/apktool.jar
+          printf '%s  %s\n' "$JADX_SHA256" dist/sources/jadx.zip | sha256sum --check --strict -
+          printf '%s  %s\n' "$APKTOOL_SHA256" dist/sources/apktool.jar | sha256sum --check --strict -
           unzip -t dist/sources/jadx.zip
           jar tf dist/sources/apktool.jar >/dev/null
 
           printf '%s' "$JADX_URL" > dist/sources/jadx.url
           printf '%s' "$APKTOOL_URL" > dist/sources/apktool.url
-          sha256sum dist/sources/jadx.zip | awk '{print $1}' > dist/sources/jadx.sha256
-          sha256sum dist/sources/apktool.jar | awk '{print $1}' > dist/sources/apktool.sha256
 
       - name: Assemble relocatable payload
         run: |
@@ -90,14 +90,10 @@ jobs:
           set -euxo pipefail
           export JADX_URL
           export APKTOOL_URL
-          export JADX_SHA256
-          export APKTOOL_SHA256
           export PAYLOAD_SHA256
           export PAYLOAD_SIZE
           JADX_URL=$(cat dist/sources/jadx.url)
           APKTOOL_URL=$(cat dist/sources/apktool.url)
-          JADX_SHA256=$(cat dist/sources/jadx.sha256)
-          APKTOOL_SHA256=$(cat dist/sources/apktool.sha256)
           PAYLOAD_SHA256=$(sha256sum dist/payload.zip | awk '{print $1}')
           PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
 
@@ -174,6 +170,8 @@ jobs:
           jq -e '.schemaVersion == 1' dist/manifest.json >/dev/null
           jq -e '.payloadSha256 | test("^[0-9a-f]{64}$")' dist/manifest.json >/dev/null
           jq -e '.sources | length == 2' dist/manifest.json >/dev/null
+          jq -e --arg sha "$JADX_SHA256" '.sources[0].sha256 == $sha' dist/manifest.json >/dev/null
+          jq -e --arg sha "$APKTOOL_SHA256" '.sources[1].sha256 == $sha' dist/manifest.json >/dev/null
 
           (
             cd dist
