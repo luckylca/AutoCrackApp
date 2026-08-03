@@ -23,8 +23,8 @@ jobs:
       JADX_SHA256: "38a5766d3c8170c41566b4b13ea0ede2430e3008421af4927235c2880234d51a"
       APKTOOL_VERSION: "3.0.2"
       APKTOOL_SHA256: "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd"
-      EXPECTED_PAYLOAD_SHA256: "806db79bbb1013a8df171f0c92d6514d21532b7a66fc15a0f970e0340bab1afe"
-      EXPECTED_PAYLOAD_SIZE: "73549038"
+      EXPECTED_PAYLOAD_SHA256: "6c3e1f03f5c653ef63aa137189dcafeb82e4dd40579b3fbb6a5a2a1eb5f2d484"
+      EXPECTED_PAYLOAD_SIZE: "79209842"
       TOOLPACK_ID: apk-dex-static
 
     steps:
@@ -81,21 +81,33 @@ jobs:
           test -f dist/payload/lib/jadx/bin/jadx
           test -f dist/payload/lib/apktool/apktool.jar
 
-          (
-            cd dist/payload
-            find . -print0 | LC_ALL=C sort -z | xargs -0 touch -h -d '@0'
-            zip -X -q -r ../payload.zip .
-          )
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_STORED, ZipFile, ZipInfo
+
+          root = Path("dist/payload")
+          output = Path("dist/payload.zip")
+          executable_paths = {"bin/jadx", "bin/apktool"}
+          with ZipFile(output, "w", compression=ZIP_STORED) as archive:
+              files = sorted(
+                  (path for path in root.rglob("*") if path.is_file()),
+                  key=lambda path: path.relative_to(root).as_posix(),
+              )
+              for path in files:
+                  relative = path.relative_to(root).as_posix()
+                  info = ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+                  info.create_system = 3
+                  mode = 0o100755 if relative in executable_paths else 0o100644
+                  info.external_attr = mode << 16
+                  info.compress_type = ZIP_STORED
+                  archive.writestr(info, path.read_bytes())
+          PY
 
           ACTUAL_PAYLOAD_SHA256=$(sha256sum dist/payload.zip | awk '{print $1}')
           ACTUAL_PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
           test "$ACTUAL_PAYLOAD_SHA256" = "$EXPECTED_PAYLOAD_SHA256"
           test "$ACTUAL_PAYLOAD_SIZE" = "$EXPECTED_PAYLOAD_SIZE"
 
-          JAVA_HOME=${JAVA_HOME:-/usr/lib/jvm/default-java}
-          export JAVA_HOME
-          PATH="$JAVA_HOME/bin:$PATH"
-          export PATH
           dist/payload/bin/jadx --version | grep -Fx "$JADX_VERSION"
           dist/payload/bin/apktool --version | grep -Fx "$APKTOOL_VERSION"
 
