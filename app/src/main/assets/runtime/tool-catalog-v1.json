@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.8",
+  "catalogVersion": "0.5.9",
   "priorityModes": ["FULL_ROOT", "SHIZUKU"],
   "tools": [
     {
@@ -186,6 +186,49 @@
       "confirmation": "workspace_write",
       "commandTemplate": "apktool decode --force --output <artifact-dir> <input-apk>",
       "expectedArtifacts": ["workspace-relative decoded project"]
+    },
+    {
+      "id": "native.checksec",
+      "title": "Inspect ELF and Android SO hardening properties",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_ELF_NATIVE_STATIC", "WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none",
+      "commandTemplate": "checksec file <workspace-elf-or-so> --output json",
+      "output": "Checksec JSON or text report"
+    },
+    {
+      "id": "native.elf_deps",
+      "title": "Inspect ELF SONAME, dependencies, RPATH, RUNPATH and flags",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_ELF_NATIVE_STATIC", "WORKSPACE_READ"],
+      "changesState": false,
+      "confirmation": "none",
+      "commandTemplate": "elf-deps <workspace-elf-or-so>",
+      "output": "readelf dynamic dependency summary"
+    },
+    {
+      "id": "native.elf_report",
+      "title": "Generate a complete workspace-scoped ELF or SO static report",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": ["CHROOT", "TOOLPACK_ELF_NATIVE_STATIC", "WORKSPACE_READ", "WORKSPACE_WRITE"],
+      "changesState": true,
+      "confirmation": "workspace_write",
+      "commandTemplate": "elf-report <workspace-elf-or-so> </workspace/report-directory>",
+      "expectedArtifacts": [
+        "summary.txt",
+        "sha256.txt",
+        "file.txt",
+        "elf-header.txt",
+        "program-headers.txt",
+        "sections.txt",
+        "dynamic.txt",
+        "symbols.txt",
+        "relocations.txt",
+        "dynamic-symbols-demangled.txt",
+        "strings-min6.txt",
+        "checksec.json or checksec.txt"
+      ]
     },
     {
       "id": "shizuku.user_service",
