@@ -1,0 +1,716 @@
+package com.luckylca.autocrack.runtime
+
+import android.content.Context
+import android.net.Uri
+import android.system.Os
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.security.MessageDigest
+import java.util.Locale
+import java.util.zip.ZipFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+
+data class ToolpackSourceArtifact(
+    val name: String,
+    val version: String,
+    val url: String,
+    val sha256: String,
+) {
+    init {
+        require(name.matches(SAFE_ID_REGEX)) { "非法来源名称：$name" }
+        require(version.isNotBlank() && version.length <= MAX_VERSION_CHARS) {
+            "来源版本非法：$version"
+        }
+        require(url.startsWith("https://")) { "工具来源必须使用 HTTPS：$url" }
+        require(sha256.matches(SHA256_REGEX)) { "来源 SHA-256 格式非法：$name" }
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("name", name)
+        .put("version", version)
+        .put("url", url)
+        .put("sha256", sha256)
+}
+
+data class ToolpackCommand(
+    val name: String,
+    val relativePath: String,
+) {
+    init {
+        require(name.matches(COMMAND_NAME_REGEX)) { "非法工具命令名：$name" }
+        ToolpackPathPolicy.validateRelativePath(relativePath)
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("name", name)
+        .put("relativePath", relativePath)
+}
+
+data class ToolpackSelfTest(
+    val id: String,
+    val title: String,
+    val command: String,
+    val expectedExitCodes: Set<Int>,
+    val outputContains: List<String>,
+) {
+    init {
+        require(id.matches(SAFE_ID_REGEX)) { "非法自检 ID：$id" }
+        require(title.isNotBlank() && title.length <= MAX_TITLE_CHARS) { "自检标题非法：$id" }
+        require(command.isNotBlank() && command.length <= MAX_SELF_TEST_COMMAND_CHARS) {
+            "自检命令非法：$id"
+        }
+        require(expectedExitCodes.isNotEmpty()) { "自检必须声明允许退出码：$id" }
+        expectedExitCodes.forEach { code -> require(code in 0..255) { "自检退出码非法：$code" } }
+        outputContains.forEach { expected ->
+            require(expected.isNotEmpty() && expected.length <= MAX_EXPECTED_OUTPUT_CHARS) {
+                "自检输出断言非法：$id"
+            }
+        }
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id)
+        .put("title", title)
+        .put("command", command)
+        .put("expectedExitCodes", JSONArray(expectedExitCodes.sorted()))
+        .put("outputContains", JSONArray(outputContains))
+}
+
+data class ToolpackPackageManifest(
+    val schemaVersion: Int,
+    val id: String,
+    val title: String,
+    val version: String,
+    val architecture: String,
+    val payloadEntry: String,
+    val payloadSha256: String,
+    val payloadSizeBytes: Long,
+    val requiredPaths: List<String>,
+    val commands: List<ToolpackCommand>,
+    val selfTests: List<ToolpackSelfTest>,
+    val sources: List<ToolpackSourceArtifact>,
+) {
+    init {
+        require(schemaVersion == SUPPORTED_SCHEMA_VERSION) {
+            "不支持的 toolpack manifest schema：$schemaVersion"
+        }
+        require(id.matches(SAFE_ID_REGEX)) { "非法 toolpack id：$id" }
+        require(title.isNotBlank() && title.length <= MAX_TITLE_CHARS) { "toolpack 标题非法" }
+        require(version.matches(SAFE_VERSION_REGEX)) { "非法 toolpack 版本：$version" }
+        require(architecture.lowercase(Locale.US) in SUPPORTED_ARCHITECTURES) {
+            "不支持的 toolpack 架构：$architecture"
+        }
+        require(payloadEntry == PAYLOAD_ENTRY) { "不支持的 payloadEntry：$payloadEntry" }
+        require(payloadSha256.matches(SHA256_REGEX)) { "toolpack payload SHA-256 格式非法" }
+        require(payloadSizeBytes in 1..MAX_PAYLOAD_BYTES) { "toolpack payload 大小非法" }
+        require(requiredPaths.isNotEmpty()) { "toolpack requiredPaths 不能为空" }
+        requiredPaths.forEach(ToolpackPathPolicy::validateRelativePath)
+        require(commands.isNotEmpty()) { "toolpack commands 不能为空" }
+        require(commands.map(ToolpackCommand::name).distinct().size == commands.size) {
+            "toolpack 命令名重复"
+        }
+        require(selfTests.isNotEmpty()) { "toolpack selfTests 不能为空" }
+        require(selfTests.map(ToolpackSelfTest::id).distinct().size == selfTests.size) {
+            "toolpack 自检 ID 重复"
+        }
+        require(sources.isNotEmpty()) { "toolpack sources 不能为空" }
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("schemaVersion", schemaVersion)
+        .put("id", id)
+        .put("title", title)
+        .put("version", version)
+        .put("architecture", architecture)
+        .put("payloadEntry", payloadEntry)
+        .put("payloadSha256", payloadSha256)
+        .put("payloadSizeBytes", payloadSizeBytes)
+        .put("requiredPaths", JSONArray(requiredPaths))
+        .put("commands", JSONArray(commands.map(ToolpackCommand::toJson)))
+        .put("selfTests", JSONArray(selfTests.map(ToolpackSelfTest::toJson)))
+        .put("sources", JSONArray(sources.map(ToolpackSourceArtifact::toJson)))
+
+    companion object {
+        const val SUPPORTED_SCHEMA_VERSION = 1
+        const val PAYLOAD_ENTRY = "payload.zip"
+        const val MAX_PAYLOAD_BYTES = 1_500_000_000L
+        private val SUPPORTED_ARCHITECTURES = setOf("all", "arm64", "aarch64")
+
+        fun parse(text: String): ToolpackPackageManifest {
+            val json = JSONObject(text)
+            return ToolpackPackageManifest(
+                schemaVersion = json.getInt("schemaVersion"),
+                id = json.getString("id"),
+                title = json.getString("title"),
+                version = json.getString("version"),
+                architecture = json.getString("architecture").lowercase(Locale.US),
+                payloadEntry = json.getString("payloadEntry"),
+                payloadSha256 = json.getString("payloadSha256").lowercase(Locale.US),
+                payloadSizeBytes = json.getLong("payloadSizeBytes"),
+                requiredPaths = json.getJSONArray("requiredPaths").toStringList(),
+                commands = json.getJSONArray("commands").toObjectList { item ->
+                    ToolpackCommand(
+                        name = item.getString("name"),
+                        relativePath = item.getString("relativePath"),
+                    )
+                },
+                selfTests = json.getJSONArray("selfTests").toObjectList { item ->
+                    ToolpackSelfTest(
+                        id = item.getString("id"),
+                        title = item.getString("title"),
+                        command = item.getString("command"),
+                        expectedExitCodes = item.getJSONArray("expectedExitCodes")
+                            .toIntList()
+                            .toSet(),
+                        outputContains = item.optJSONArray("outputContains")
+                            ?.toStringList()
+                            .orEmpty(),
+                    )
+                },
+                sources = json.getJSONArray("sources").toObjectList { item ->
+                    ToolpackSourceArtifact(
+                        name = item.getString("name"),
+                        version = item.getString("version"),
+                        url = item.getString("url"),
+                        sha256 = item.getString("sha256").lowercase(Locale.US),
+                    )
+                },
+            )
+        }
+    }
+}
+
+data class ToolpackInstallResult(
+    val manifest: ToolpackPackageManifest,
+    val packagePath: String,
+    val installedPath: String,
+    val payloadBytes: Long,
+    val extractedEntries: Int,
+    val extractedBytes: Long,
+    val durationMillis: Long,
+)
+
+data class InstalledToolpack(
+    val manifest: ToolpackPackageManifest,
+    val packagePath: String,
+    val installedPath: String,
+    val rootfsVersion: String?,
+    val installedAtEpochMillis: Long,
+)
+
+data class ToolpackSelfTestResult(
+    val test: ToolpackSelfTest,
+    val commandResult: ShellCommandResult,
+    val passed: Boolean,
+    val failure: String?,
+)
+
+data class ToolpackSelfTestReport(
+    val manifest: ToolpackPackageManifest,
+    val results: List<ToolpackSelfTestResult>,
+) {
+    val passed: Boolean
+        get() = results.isNotEmpty() && results.all(ToolpackSelfTestResult::passed)
+}
+
+object ToolpackPathPolicy {
+    fun validateRelativePath(path: String) {
+        require(path.isNotBlank()) { "toolpack 路径不能为空" }
+        require(path.length <= MAX_RELATIVE_PATH_CHARS) { "toolpack 路径过长" }
+        require(!path.startsWith('/')) { "toolpack 路径不能是绝对路径：$path" }
+        require('\u0000' !in path) { "toolpack 路径包含 NUL" }
+        require(path.split('/').none { segment -> segment.isEmpty() || segment == "." || segment == ".." }) {
+            "toolpack 路径非法：$path"
+        }
+    }
+
+    fun resolve(root: File, relativePath: String): File {
+        validateRelativePath(relativePath)
+        val canonicalRoot = root.canonicalFile
+        val target = File(canonicalRoot, relativePath).canonicalFile
+        require(target.path.startsWith("${canonicalRoot.path}${File.separator}")) {
+            "toolpack 路径越界：$relativePath"
+        }
+        return target
+    }
+}
+
+class ToolpackPackageInstaller(
+    context: Context,
+    private val layout: RuntimeLayout,
+) {
+    private val appContext = context.applicationContext
+    private val packagesRoot = File(layout.toolpacksRoot, "packages")
+    private val installedRecordsRoot = File(layout.toolpacksRoot, "installed")
+    private val auditFile = File(layout.toolpacksRoot, "toolpack-audit.jsonl")
+    private val rootfsToolpacksRoot = File(layout.rootfsRoot, "opt/autocrack/toolpacks")
+    private val rootfsPacksRoot = File(rootfsToolpacksRoot, "packs")
+    private val rootfsStagingRoot = File(rootfsToolpacksRoot, "staging")
+    private val rootfsCommandRoot = File(layout.rootfsRoot, "usr/local/bin")
+
+    suspend fun install(
+        packageUri: Uri,
+        onProgress: (String) -> Unit = {},
+    ): ToolpackInstallResult = withContext(Dispatchers.IO) {
+        requireRuntimeReady()
+        initializeDirectories()
+        val startedAt = System.currentTimeMillis()
+        val packageFile = File(packagesRoot, "toolpack-${System.currentTimeMillis()}.zip")
+        val payloadFile = File(layout.tempRoot, "toolpack-payload-${System.currentTimeMillis()}.zip")
+        var stagingDirectory: File? = null
+
+        try {
+            onProgress("正在复制工具包到应用私有目录")
+            copyUriToFile(packageUri, packageFile)
+            require(packageFile.length() in 1..MAX_PACKAGE_BYTES) {
+                "工具包大小非法：${packageFile.length()} B"
+            }
+
+            val manifest = ZipFile(packageFile).use { outerZip ->
+                val manifestEntry = outerZip.getEntry(MANIFEST_ENTRY)
+                    ?: error("工具包缺少 $MANIFEST_ENTRY")
+                val parsed = outerZip.getInputStream(manifestEntry)
+                    .bufferedReader(Charsets.UTF_8)
+                    .use { reader -> ToolpackPackageManifest.parse(reader.readText()) }
+                val payloadEntry = outerZip.getEntry(parsed.payloadEntry)
+                    ?: error("工具包缺少 ${parsed.payloadEntry}")
+
+                onProgress("正在校验工具包 payload SHA-256")
+                val digest = MessageDigest.getInstance("SHA-256")
+                var copied = 0L
+                outerZip.getInputStream(payloadEntry).use { input ->
+                    FileOutputStream(payloadFile).buffered().use { output ->
+                        val buffer = ByteArray(COPY_BUFFER_BYTES)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            copied += count
+                            require(copied <= ToolpackPackageManifest.MAX_PAYLOAD_BYTES) {
+                                "工具包 payload 超过允许上限"
+                            }
+                            digest.update(buffer, 0, count)
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+                val actualSha256 = digest.digest().toHex()
+                require(copied == parsed.payloadSizeBytes) {
+                    "工具包 payload 大小不匹配：manifest=${parsed.payloadSizeBytes}, actual=$copied"
+                }
+                require(actualSha256 == parsed.payloadSha256) {
+                    "工具包 payload SHA-256 不匹配：manifest=${parsed.payloadSha256}, actual=$actualSha256"
+                }
+                parsed
+            }
+
+            val staging = File(rootfsStagingRoot, "${manifest.id}-${System.currentTimeMillis()}")
+            stagingDirectory = staging
+            deleteTreeNoFollow(staging)
+            check(staging.mkdirs()) { "无法创建工具包 staging 目录" }
+            onProgress("正在安全解包 ${manifest.title}")
+            val extraction = extractPayload(payloadFile, staging, onProgress)
+
+            onProgress("正在验证工具包必需文件")
+            manifest.requiredPaths.forEach { requiredPath ->
+                val required = ToolpackPathPolicy.resolve(staging, requiredPath)
+                require(required.exists()) { "工具包缺少必需路径：$requiredPath" }
+            }
+            manifest.commands.forEach { command ->
+                val executable = ToolpackPathPolicy.resolve(staging, command.relativePath)
+                require(executable.isFile) { "工具命令不是普通文件：${command.relativePath}" }
+                Os.chmod(executable.path, EXECUTABLE_MODE)
+            }
+
+            val target = File(File(rootfsPacksRoot, manifest.id), manifest.version)
+            onProgress("正在原子激活工具包 ${manifest.version}")
+            activateStaging(staging, target)
+            stagingDirectory = null
+            installCommandShims(manifest, target)
+            val installedAt = System.currentTimeMillis()
+            writeInstalledRecord(
+                InstalledToolpack(
+                    manifest = manifest,
+                    packagePath = packageFile.path,
+                    installedPath = target.path,
+                    rootfsVersion = layout.readRootfsVersion(),
+                    installedAtEpochMillis = installedAt,
+                ),
+            )
+            appendAudit(
+                event = "install",
+                manifest = manifest,
+                detail = JSONObject()
+                    .put("packagePath", packageFile.path)
+                    .put("installedPath", target.path)
+                    .put("payloadBytes", payloadFile.length())
+                    .put("extractedEntries", extraction.first)
+                    .put("extractedBytes", extraction.second),
+            )
+            ToolpackInstallResult(
+                manifest = manifest,
+                packagePath = packageFile.path,
+                installedPath = target.path,
+                payloadBytes = payloadFile.length(),
+                extractedEntries = extraction.first,
+                extractedBytes = extraction.second,
+                durationMillis = System.currentTimeMillis() - startedAt,
+            )
+        } catch (exception: Exception) {
+            stagingDirectory?.let(::deleteTreeNoFollow)
+            appendAudit(
+                event = "install_failed",
+                manifest = null,
+                detail = JSONObject()
+                    .put("packagePath", packageFile.path)
+                    .put("failure", exception.message ?: exception::class.java.name),
+            )
+            throw exception
+        } finally {
+            payloadFile.delete()
+        }
+    }
+
+    suspend fun uninstall(
+        toolpackId: String,
+        onProgress: (String) -> Unit = {},
+    ) = withContext(Dispatchers.IO) {
+        require(toolpackId.matches(SAFE_ID_REGEX)) { "非法 toolpack id：$toolpackId" }
+        val installed = readInstalled(toolpackId) ?: error("工具包未安装：$toolpackId")
+        onProgress("正在移除 ${installed.manifest.title}")
+        installed.manifest.commands.forEach { command ->
+            val shim = File(rootfsCommandRoot, command.name)
+            if (shim.isFile && shim.readText(Charsets.UTF_8).contains(toolpackMarker(toolpackId))) {
+                shim.delete()
+            }
+        }
+        deleteTreeNoFollow(File(installed.installedPath))
+        recordFile(toolpackId).delete()
+        appendAudit(
+            event = "uninstall",
+            manifest = installed.manifest,
+            detail = JSONObject().put("installedPath", installed.installedPath),
+        )
+        onProgress("工具包已卸载")
+    }
+
+    suspend fun listInstalled(): List<InstalledToolpack> = withContext(Dispatchers.IO) {
+        initializeDirectories()
+        installedRecordsRoot.listFiles()
+            .orEmpty()
+            .filter { file -> file.isFile && file.extension == "json" }
+            .mapNotNull { file -> runCatching { parseInstalledRecord(file.readText(Charsets.UTF_8)) }.getOrNull() }
+            .sortedBy { installed -> installed.manifest.id }
+    }
+
+    suspend fun runSelfTests(
+        installed: InstalledToolpack,
+        chrootEngine: ChrootRuntimeEngine,
+        onProgress: (String) -> Unit = {},
+    ): ToolpackSelfTestReport = withContext(Dispatchers.IO) {
+        val results = installed.manifest.selfTests.map { test ->
+            onProgress("正在执行自检：${test.title}")
+            val commandResult = chrootEngine.execute(
+                ShellCommandRequest(
+                    command = test.command,
+                    workingDirectory = "/workspace",
+                    timeoutMillis = SELF_TEST_TIMEOUT_MILLIS,
+                ),
+            )
+            val combinedOutput = commandResult.stdout + "\n" + commandResult.stderr
+            val failure = when {
+                commandResult.exitCode !in test.expectedExitCodes ->
+                    "退出码 ${commandResult.exitCode} 不在 ${test.expectedExitCodes.sorted()} 中"
+                commandResult.timedOut -> "自检超时"
+                commandResult.cancelled -> "自检被取消"
+                commandResult.failure != null -> commandResult.failure
+                else -> test.outputContains
+                    .firstOrNull { expected -> !combinedOutput.contains(expected) }
+                    ?.let { expected -> "输出缺少：$expected" }
+            }
+            ToolpackSelfTestResult(
+                test = test,
+                commandResult = commandResult,
+                passed = failure == null,
+                failure = failure,
+            )
+        }
+        val report = ToolpackSelfTestReport(installed.manifest, results)
+        appendAudit(
+            event = "self_test",
+            manifest = installed.manifest,
+            detail = JSONObject()
+                .put("passed", report.passed)
+                .put(
+                    "results",
+                    JSONArray(results.map { result ->
+                        JSONObject()
+                            .put("id", result.test.id)
+                            .put("passed", result.passed)
+                            .put("exitCode", result.commandResult.exitCode ?: JSONObject.NULL)
+                            .put("failure", result.failure ?: JSONObject.NULL)
+                    }),
+                ),
+        )
+        report
+    }
+
+    private fun requireRuntimeReady() {
+        layout.initialize()
+        require(layout.readRootfsState() == RuntimeRootfsState.INSTALLED) {
+            "必须先安装 Debian rootfs"
+        }
+        require(layout.rootfsRoot.isDirectory) { "rootfs current 目录不存在" }
+    }
+
+    private fun initializeDirectories() {
+        listOf(
+            layout.toolpacksRoot,
+            packagesRoot,
+            installedRecordsRoot,
+            rootfsToolpacksRoot,
+            rootfsPacksRoot,
+            rootfsStagingRoot,
+            rootfsCommandRoot,
+        ).forEach { directory ->
+            if (!directory.exists()) check(directory.mkdirs()) { "无法创建目录：${directory.path}" }
+            require(directory.isDirectory) { "目标不是目录：${directory.path}" }
+        }
+    }
+
+    private fun copyUriToFile(uri: Uri, destination: File) {
+        destination.parentFile?.mkdirs()
+        appContext.contentResolver.openInputStream(uri).use { input ->
+            requireNotNull(input) { "无法打开所选工具包" }
+            FileOutputStream(destination).buffered().use { output ->
+                val buffer = ByteArray(COPY_BUFFER_BYTES)
+                var total = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= MAX_PACKAGE_BYTES) { "工具包超过允许上限" }
+                    output.write(buffer, 0, count)
+                }
+            }
+        }
+    }
+
+    private fun extractPayload(
+        payloadFile: File,
+        destination: File,
+        onProgress: (String) -> Unit,
+    ): Pair<Int, Long> {
+        var entryCount = 0
+        var extractedBytes = 0L
+        ZipFile(payloadFile).use { zip ->
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                entryCount += 1
+                require(entryCount <= MAX_ENTRIES) { "工具包条目数量超过上限" }
+                val target = ToolpackPathPolicy.resolve(destination, entry.name.removeSuffix("/"))
+                if (entry.isDirectory) {
+                    if (!target.exists()) check(target.mkdirs()) { "无法创建目录：${entry.name}" }
+                    continue
+                }
+                target.parentFile?.mkdirs()
+                var fileBytes = 0L
+                zip.getInputStream(entry).use { input ->
+                    FileOutputStream(target).buffered().use { output ->
+                        val buffer = ByteArray(COPY_BUFFER_BYTES)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            fileBytes += count
+                            extractedBytes += count
+                            require(extractedBytes <= MAX_EXTRACTED_BYTES) {
+                                "工具包解包大小超过上限"
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+                if (entry.size >= 0L) {
+                    require(fileBytes == entry.size) { "工具包条目大小不匹配：${entry.name}" }
+                }
+                if (entryCount % PROGRESS_ENTRY_INTERVAL == 0) {
+                    onProgress("已解包 $entryCount 个条目，${extractedBytes / 1_048_576L} MiB")
+                }
+            }
+        }
+        return entryCount to extractedBytes
+    }
+
+    private fun activateStaging(staging: File, target: File) {
+        target.parentFile?.mkdirs()
+        val backup = File(target.parentFile, "${target.name}.backup-${System.currentTimeMillis()}")
+        if (target.exists()) safeMove(target, backup)
+        try {
+            safeMove(staging, target)
+            deleteTreeNoFollow(backup)
+        } catch (exception: Exception) {
+            if (!target.exists() && backup.exists()) safeMove(backup, target)
+            throw exception
+        }
+    }
+
+    private fun installCommandShims(manifest: ToolpackPackageManifest, target: File) {
+        rootfsCommandRoot.mkdirs()
+        manifest.commands.forEach { command ->
+            val relativeTarget = target.relativeTo(layout.rootfsRoot).invariantSeparatorsPath
+            val chrootExecutable = "/$relativeTarget/${command.relativePath}"
+            val shim = File(rootfsCommandRoot, command.name)
+            val temporary = File(rootfsCommandRoot, ".${command.name}.${System.nanoTime()}.tmp")
+            temporary.writeText(
+                buildString {
+                    appendLine("#!/bin/sh")
+                    appendLine(toolpackMarker(manifest.id))
+                    append("exec ")
+                        .append(ShellEscaper.quote(chrootExecutable))
+                        .appendLine(" \"\${'$'}@\"")
+                },
+                Charsets.UTF_8,
+            )
+            Os.chmod(temporary.path, EXECUTABLE_MODE)
+            safeMove(temporary, shim)
+        }
+    }
+
+    private fun writeInstalledRecord(installed: InstalledToolpack) {
+        val json = JSONObject()
+            .put("schemaVersion", INSTALLED_RECORD_SCHEMA_VERSION)
+            .put("manifest", installed.manifest.toJson())
+            .put("packagePath", installed.packagePath)
+            .put("installedPath", installed.installedPath)
+            .put("rootfsVersion", installed.rootfsVersion ?: JSONObject.NULL)
+            .put("installedAtEpochMillis", installed.installedAtEpochMillis)
+        val destination = recordFile(installed.manifest.id)
+        val temporary = File(destination.parentFile, ".${destination.name}.${System.nanoTime()}.tmp")
+        temporary.writeText(json.toString(2), Charsets.UTF_8)
+        safeMove(temporary, destination)
+    }
+
+    private fun readInstalled(toolpackId: String): InstalledToolpack? {
+        val file = recordFile(toolpackId)
+        return if (file.isFile) parseInstalledRecord(file.readText(Charsets.UTF_8)) else null
+    }
+
+    private fun parseInstalledRecord(text: String): InstalledToolpack {
+        val json = JSONObject(text)
+        require(json.getInt("schemaVersion") == INSTALLED_RECORD_SCHEMA_VERSION) {
+            "不支持的已安装工具包记录 schema"
+        }
+        return InstalledToolpack(
+            manifest = ToolpackPackageManifest.parse(json.getJSONObject("manifest").toString()),
+            packagePath = json.getString("packagePath"),
+            installedPath = json.getString("installedPath"),
+            rootfsVersion = json.optString("rootfsVersion")
+                .takeIf { value -> value.isNotBlank() && value != "null" },
+            installedAtEpochMillis = json.getLong("installedAtEpochMillis"),
+        )
+    }
+
+    private fun recordFile(toolpackId: String): File =
+        File(installedRecordsRoot, "$toolpackId.json")
+
+    private fun appendAudit(
+        event: String,
+        manifest: ToolpackPackageManifest?,
+        detail: JSONObject,
+    ) {
+        val json = JSONObject()
+            .put("schemaVersion", 1)
+            .put("event", event)
+            .put("toolpackId", manifest?.id ?: JSONObject.NULL)
+            .put("toolpackVersion", manifest?.version ?: JSONObject.NULL)
+            .put("rootfsVersion", layout.readRootfsVersion() ?: JSONObject.NULL)
+            .put("timestampEpochMillis", System.currentTimeMillis())
+            .put("detail", detail)
+        synchronized(AUDIT_LOCK) {
+            auditFile.parentFile?.mkdirs()
+            auditFile.appendText(json.toString() + "\n", Charsets.UTF_8)
+        }
+    }
+
+    private fun safeMove(source: File, destination: File) {
+        destination.parentFile?.mkdirs()
+        runCatching {
+            Files.move(
+                source.toPath(),
+                destination.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }.getOrElse {
+            Files.move(
+                source.toPath(),
+                destination.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
+    }
+
+    private fun deleteTreeNoFollow(root: File) {
+        if (!root.exists() && !Files.isSymbolicLink(root.toPath())) return
+        Files.walkFileTree(root.toPath(), object : SimpleFileVisitor<Path>() {
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                Files.deleteIfExists(file)
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(directory: Path, exception: java.io.IOException?): FileVisitResult {
+                if (exception != null) throw exception
+                Files.deleteIfExists(directory)
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
+
+    private fun toolpackMarker(id: String): String = "# AutoCrackApp toolpack:$id"
+
+    private companion object {
+        val AUDIT_LOCK = Any()
+        const val MANIFEST_ENTRY = "manifest.json"
+        const val INSTALLED_RECORD_SCHEMA_VERSION = 1
+        const val MAX_PACKAGE_BYTES = 1_600_000_000L
+        const val MAX_EXTRACTED_BYTES = 2_500_000_000L
+        const val MAX_ENTRIES = 100_000
+        const val COPY_BUFFER_BYTES = 128 * 1024
+        const val PROGRESS_ENTRY_INTERVAL = 500
+        const val EXECUTABLE_MODE = 0b111101101
+        const val SELF_TEST_TIMEOUT_MILLIS = 120_000L
+    }
+}
+
+private val SAFE_ID_REGEX = Regex("[A-Za-z0-9._-]{1,120}")
+private val SAFE_VERSION_REGEX = Regex("[A-Za-z0-9._+-]{1,160}")
+private val COMMAND_NAME_REGEX = Regex("[A-Za-z0-9._+-]{1,64}")
+private val SHA256_REGEX = Regex("[a-fA-F0-9]{64}")
+private const val MAX_VERSION_CHARS = 160
+private const val MAX_TITLE_CHARS = 200
+private const val MAX_SELF_TEST_COMMAND_CHARS = 4_096
+private const val MAX_EXPECTED_OUTPUT_CHARS = 512
+private const val MAX_RELATIVE_PATH_CHARS = 512
+
+private fun JSONArray.toStringList(): List<String> = buildList {
+    for (index in 0 until length()) add(getString(index))
+}
+
+private fun JSONArray.toIntList(): List<Int> = buildList {
+    for (index in 0 until length()) add(getInt(index))
+}
+
+private fun <T> JSONArray.toObjectList(transform: (JSONObject) -> T): List<T> = buildList {
+    for (index in 0 until length()) add(transform(getJSONObject(index)))
+}
+
+private fun ByteArray.toHex(): String = joinToString(separator = "") { byte -> "%02x".format(byte) }
