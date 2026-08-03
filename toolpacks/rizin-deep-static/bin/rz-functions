@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-RIZIN="$ROOT/lib/rizin/rizin"
+RIZIN="$ROOT/bin/rizin"
 
 if [ "${1:-}" = "--self-test" ]; then
   "$RIZIN" -v | grep -F "0.9.1" >/dev/null
