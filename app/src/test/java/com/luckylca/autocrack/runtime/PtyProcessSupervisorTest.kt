@@ -14,16 +14,27 @@ class PtyProcessSupervisorTest {
             rootPid = 30891,
             snapshotPath = snapshotPath,
             rootfsPath = rootfsPath,
+            snapshotOwnerUid = 10_321,
+            snapshotOwnerGid = 10_321,
         )
 
         assertTrue(script.contains("ROOT_PID=30891"))
         assertTrue(script.contains("ROOTFS='${rootfsPath}'"))
         assertTrue(script.contains("SNAPSHOT_FILE='${snapshotPath}'"))
+        assertTrue(script.contains("SNAPSHOT_UID=10321"))
+        assertTrue(script.contains("SNAPSHOT_GID=10321"))
         assertTrue(script.contains("chroot \"${'$'}ROOTFS\""))
         assertTrue(script.contains("/usr/bin/ps -e -o pid=,ppid=,pgid=,sid=,stat=,comm="))
         assertTrue(script.contains("PROCESS_TABLE_BEGIN"))
         assertTrue(script.contains("PROCESS_PS_EXIT="))
         assertTrue(script.contains("PROCESS_TABLE_END"))
+        assertTrue(
+            script.contains(
+                "chown \"${'$'}SNAPSHOT_UID:${'$'}SNAPSHOT_GID\" \"${'$'}TMP_FILE\"",
+            ),
+        )
+        assertTrue(script.contains("chmod 0600 \"${'$'}TMP_FILE\""))
+        assertTrue(script.contains("SNAPSHOT_PERMISSION_FAILED"))
         assertTrue(script.contains("mv \"${'$'}TMP_FILE\" \"${'$'}SNAPSHOT_FILE\""))
         assertFalse(script.contains("/proc/[0-9]*"))
         assertFalse(script.contains("IFS= read -r STAT_LINE"))
@@ -36,6 +47,8 @@ class PtyProcessSupervisorTest {
             snapshotPath = "/data/user/0/example/files/runtime/tmp/process.snapshot",
             rootfsPath = "/data/user/0/example/files/runtime/rootfs/current",
             workingDirectory = "/data/user/0/example/files/runtime",
+            snapshotOwnerUid = 10_321,
+            snapshotOwnerGid = 10_321,
         )
 
         assertEquals(ShellOutputMode.DISCARD, request.outputMode)
