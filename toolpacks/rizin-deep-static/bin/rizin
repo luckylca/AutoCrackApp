@@ -1,4 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+TMPDIR=${TMPDIR:-/tmp/autocrack-rizin}
+mkdir -p "$TMPDIR"
+export TMPDIR
 exec "$ROOT/lib/rizin/rizin" "$@"
