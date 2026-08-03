@@ -202,6 +202,8 @@ fun PtyTerminalScreen() {
             Text(actionStatus, style = MaterialTheme.typography.bodySmall)
         }
 
+        PtyProcessSupervisorPanel(manager = manager, snapshot = snapshot)
+
         TerminalCard("终端输出") {
             Text(
                 text = if (snapshot.output.isBlank()) "尚无输出" else snapshot.output,

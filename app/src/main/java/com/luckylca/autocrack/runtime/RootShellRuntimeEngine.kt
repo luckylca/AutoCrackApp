@@ -1,5 +1,6 @@
 package com.luckylca.autocrack.runtime
 
+import java.io.File
 import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -42,17 +43,31 @@ class RootShellRuntimeEngine(
 
             try {
                 coroutineScope {
-                    process = ProcessBuilder(command)
+                    val processBuilder = ProcessBuilder(command)
                         .redirectErrorStream(false)
-                        .start()
+                    if (request.outputMode == ShellOutputMode.DISCARD) {
+                        processBuilder
+                            .redirectOutput(NULL_DEVICE)
+                            .redirectError(NULL_DEVICE)
+                    }
+
+                    process = processBuilder.start()
                     val runningProcess = checkNotNull(process)
                     activeProcesses[requestId] = runningProcess
 
-                    val stdoutDeferred = async(Dispatchers.IO) {
-                        runningProcess.inputStream.readBounded(MAX_RETAINED_OUTPUT_CHARS)
+                    val stdoutDeferred = if (request.outputMode == ShellOutputMode.CAPTURE) {
+                        async(Dispatchers.IO) {
+                            runningProcess.inputStream.readBounded(MAX_RETAINED_OUTPUT_CHARS)
+                        }
+                    } else {
+                        null
                     }
-                    val stderrDeferred = async(Dispatchers.IO) {
-                        runningProcess.errorStream.readBounded(MAX_RETAINED_OUTPUT_CHARS)
+                    val stderrDeferred = if (request.outputMode == ShellOutputMode.CAPTURE) {
+                        async(Dispatchers.IO) {
+                            runningProcess.errorStream.readBounded(MAX_RETAINED_OUTPUT_CHARS)
+                        }
+                    } else {
+                        null
                     }
                     val stdinDeferred = async(Dispatchers.IO) {
                         runningProcess.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
@@ -70,8 +85,8 @@ class RootShellRuntimeEngine(
                     }
 
                     stdinDeferred.await()
-                    stdoutCapture = stdoutDeferred.await()
-                    stderrCapture = stderrDeferred.await()
+                    stdoutDeferred?.let { stdoutCapture = it.await() }
+                    stderrDeferred?.let { stderrCapture = it.await() }
                     if (finished || !runningProcess.isAlive) {
                         exitCode = runCatching { runningProcess.exitValue() }.getOrNull()
                     }
@@ -102,7 +117,11 @@ class RootShellRuntimeEngine(
                 failure = failure,
                 auditFilePath = layout.shellAuditFile.path,
             )
-            appendAudit(result, request.environment.keys.sorted())
+            appendAudit(
+                result = result,
+                environmentKeys = request.environment.keys.sorted(),
+                outputMode = request.outputMode,
+            )
             result
         }
 
@@ -117,13 +136,18 @@ class RootShellRuntimeEngine(
 
     fun activeRequestIds(): List<String> = activeProcesses.keys().toList().sorted()
 
-    private fun appendAudit(result: ShellCommandResult, environmentKeys: List<String>) {
+    private fun appendAudit(
+        result: ShellCommandResult,
+        environmentKeys: List<String>,
+        outputMode: ShellOutputMode,
+    ) {
         val json = JSONObject()
             .put("schemaVersion", 1)
             .put("requestId", result.requestId)
             .put("command", result.command)
             .put("workingDirectory", result.workingDirectory)
             .put("identity", result.identity.name)
+            .put("outputMode", outputMode.name)
             .put("environmentKeys", JSONArray(environmentKeys))
             .put("exitCode", result.exitCode ?: JSONObject.NULL)
             .put("startedAtEpochMillis", result.startedAtEpochMillis)
@@ -185,6 +209,7 @@ class RootShellRuntimeEngine(
     )
 
     private companion object {
+        val NULL_DEVICE = File("/dev/null")
         const val MAX_RETAINED_OUTPUT_CHARS = 1_000_000
         const val INITIAL_BUFFER_CHARS = 16_384
         const val READ_BUFFER_CHARS = 8_192

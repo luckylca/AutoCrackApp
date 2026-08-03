@@ -19,6 +19,11 @@ enum class HostExecutionIdentity {
     APP,
 }
 
+enum class ShellOutputMode {
+    CAPTURE,
+    DISCARD,
+}
+
 data class ShellCommandRequest(
     val command: String,
     val workingDirectory: String,
@@ -26,6 +31,7 @@ data class ShellCommandRequest(
     val stdin: String? = null,
     val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
     val identity: HostExecutionIdentity = HostExecutionIdentity.ROOT,
+    val outputMode: ShellOutputMode = ShellOutputMode.CAPTURE,
 ) {
     init {
         require(command.isNotBlank()) { "命令不能为空" }
