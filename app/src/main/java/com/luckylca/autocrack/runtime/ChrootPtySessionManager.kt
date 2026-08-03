@@ -63,25 +63,28 @@ class ChrootPtySessionManager private constructor(context: Context) {
                 "Debian rootfs 尚未安装"
             }
 
-            synchronized(outputLock) { outputBuffer.clear() }
-            mutableSnapshot.value = PtySessionSnapshot(
-                state = PtySessionState.STARTING,
-                rows = rows,
-                columns = columns,
-                auditPath = ptyAuditFile.path,
-            )
-
-            val staleCleanup = chrootEngine.cleanupMounts()
-            check(staleCleanup.succeeded) {
-                "清理遗留 chroot 挂载失败：exit=${staleCleanup.exitCode}, " +
-                    staleCleanup.stderr.ifBlank { staleCleanup.stdout }
-            }
-            val mountResult = chrootEngine.prepareMounts(layout.createRuntimeWorkspace())
-            check(mountResult.succeeded) {
-                "准备 PTY chroot 挂载失败：exit=${mountResult.exitCode}, ${mountResult.stderr}"
-            }
-
+            ChrootExecutionGate.acquire(ChrootExecutionKind.PERSISTENT_PTY)
             try {
+                synchronized(outputLock) { outputBuffer.clear() }
+                mutableSnapshot.value = PtySessionSnapshot(
+                    state = PtySessionState.STARTING,
+                    rows = rows,
+                    columns = columns,
+                    auditPath = ptyAuditFile.path,
+                )
+
+                val staleCleanup = chrootEngine.cleanupMountsForPersistentPty()
+                check(staleCleanup.succeeded) {
+                    "清理遗留 chroot 挂载失败：exit=${staleCleanup.exitCode}, " +
+                        staleCleanup.stderr.ifBlank { staleCleanup.stdout }
+                }
+                val mountResult = chrootEngine.prepareMountsForPersistentPty(
+                    layout.createRuntimeWorkspace(),
+                )
+                check(mountResult.succeeded) {
+                    "准备 PTY chroot 挂载失败：exit=${mountResult.exitCode}, ${mountResult.stderr}"
+                }
+
                 val command = ChrootPtyCommandBuilder.build(layout.rootfsRoot.path)
                 val handle = withContext(Dispatchers.IO) {
                     NativePtyBridge.nativeOpen(
@@ -140,7 +143,12 @@ class ChrootPtySessionManager private constructor(context: Context) {
                 readerJob = scope.launch { readLoop(managed) }
                 scope.launch { runCatching { refreshProcessTree() } }
             } catch (exception: Exception) {
-                val cleanup = runCatching { chrootEngine.cleanupMounts() }.getOrNull()
+                val cleanup = try {
+                    runCatching { chrootEngine.cleanupMountsForPersistentPty() }.getOrNull()
+                } finally {
+                    activeSession = null
+                    ChrootExecutionGate.release(ChrootExecutionKind.PERSISTENT_PTY)
+                }
                 mutableSnapshot.update {
                     it.copy(
                         state = PtySessionState.FAILED,
@@ -401,26 +409,38 @@ class ChrootPtySessionManager private constructor(context: Context) {
         var cleanupOutput: String? = null
         var cleanupFailure: String? = null
         withContext(NonCancellable) {
-            runCatching { chrootEngine.cleanupMounts() }
-                .onSuccess { result ->
-                    cleanupExitCode = result.exitCode
-                    val combinedOutput = buildString {
-                        if (result.stdout.isNotBlank()) append(result.stdout)
-                        if (result.stderr.isNotBlank()) {
-                            if (isNotEmpty()) append('\n')
-                            append(result.stderr)
+            try {
+                runCatching { chrootEngine.cleanupMountsForPersistentPty() }
+                    .onSuccess { result ->
+                        cleanupExitCode = result.exitCode
+                        val combinedOutput = buildString {
+                            if (result.stdout.isNotBlank()) append(result.stdout)
+                            if (result.stderr.isNotBlank()) {
+                                if (isNotEmpty()) append('\n')
+                                append(result.stderr)
+                            }
+                        }
+                        cleanupOutput = combinedOutput.takeIf(String::isNotBlank)
+                        if (!result.succeeded) {
+                            cleanupFailure = "挂载清理失败：exit=${result.exitCode}, " +
+                                result.stderr.ifBlank { result.stdout }
                         }
                     }
-                    cleanupOutput = combinedOutput.takeIf(String::isNotBlank)
-                    if (!result.succeeded) {
-                        cleanupFailure = "挂载清理失败：exit=${result.exitCode}, " +
-                            result.stderr.ifBlank { result.stdout }
+                    .onFailure { exception ->
+                        cleanupFailure =
+                            "挂载清理异常：${exception.message ?: exception::class.java.name}"
                     }
+            } finally {
+                runCatching {
+                    ChrootExecutionGate.release(ChrootExecutionKind.PERSISTENT_PTY)
+                }.onFailure { exception ->
+                    cleanupFailure = listOfNotNull(
+                        cleanupFailure,
+                        "释放 PTY 执行门失败：${exception.message ?: exception::class.java.name}",
+                    ).joinToString(" | ")
                 }
-                .onFailure { exception ->
-                    cleanupFailure = "挂载清理异常：${exception.message ?: exception::class.java.name}"
-                }
-            PtySessionForegroundService.stop(appContext)
+                PtySessionForegroundService.stop(appContext)
+            }
         }
 
         lifecycleMutex.withLock {
