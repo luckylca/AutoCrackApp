@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.10",
+  "catalogVersion": "0.5.10-hotfix1",
   "priorityModes": ["FULL_ROOT", "SHIZUKU"],
   "tools": [
     {
@@ -232,37 +232,37 @@
     },
     {
       "id": "native.rizin",
-      "title": "Run read-only Rizin static-analysis commands",
+      "title": "Open the pinned Rizin CLI in read-oriented mode",
       "runtime": "debian_chroot",
       "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
       "changesState": false,
       "confirmation": "none",
-      "commandTemplate": "rizin -2 -q -c <read-only-commands> <workspace-elf-or-so>",
-      "output": "Rizin text or JSON output"
+      "commandTemplate": "rizin <workspace-elf-or-so>",
+      "output": "Rizin CLI output"
     },
     {
       "id": "native.rz_functions",
-      "title": "Inventory functions in an ELF or Android SO with Rizin",
+      "title": "Analyze and export the Rizin function inventory",
       "runtime": "debian_chroot",
       "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "rz-functions <workspace-elf-or-so>",
-      "output": "Rizin function list JSON"
+      "output": "Rizin function JSON"
     },
     {
       "id": "native.rz_disasm",
-      "title": "Generate bounded JSON disassembly at an address or symbol",
+      "title": "Generate bounded Rizin disassembly JSON",
       "runtime": "debian_chroot",
       "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "rz-disasm <workspace-elf-or-so> <address-or-symbol> [1..4096]",
-      "output": "Rizin disassembly JSON"
+      "output": "Bounded disassembly JSON"
     },
     {
       "id": "native.rz_deep_report",
-      "title": "Generate a structured Rizin deep-analysis report",
+      "title": "Generate a complete workspace-scoped Rizin static report",
       "runtime": "debian_chroot",
       "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ", "WORKSPACE_WRITE"],
       "changesState": true,
@@ -281,10 +281,7 @@
         "relocations.json",
         "functions.json",
         "callgraph.json",
-        "entry-disasm.json",
-        "sha256.txt",
-        "file.txt",
-        "rizin.stderr"
+        "entry-disasm.json"
       ]
     },
     {
