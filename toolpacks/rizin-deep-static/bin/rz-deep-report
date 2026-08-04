@@ -4,7 +4,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 RIZIN="$ROOT/bin/rizin"
 
 if [ "${1:-}" = "--self-test" ]; then
-  for command_name in python3 file sha256sum; do
+  for command_name in jq file sha256sum; do
     command -v "$command_name" >/dev/null || {
       echo "Missing required command: $command_name" >&2
       exit 10
@@ -42,7 +42,7 @@ run_json() {
   commands=$2
   "$RIZIN" -q -c "$commands" "$TARGET" \
     > "$OUT/$output_name" 2>> "$OUT/rizin.stderr"
-  if ! python3 -m json.tool "$OUT/$output_name" >/dev/null; then
+  if ! jq empty "$OUT/$output_name" >/dev/null 2>&1; then
     output_bytes=$(wc -c < "$OUT/$output_name")
     echo "RIZIN_JSON_INVALID name=$output_name bytes=$output_bytes commands=$commands" >&2
     tail -n 20 "$OUT/rizin.stderr" >&2 || true
@@ -62,74 +62,65 @@ run_json functions.json 'aaa; aflj'
 run_json callgraph.json 'aaa; agC json'
 run_json entry-disasm.json 'aaa; s entry0; pdj 128'
 
-python3 - "$OUT" "$TARGET" <<'PY'
-import json
-import sys
-from pathlib import Path
+SHA256_VALUE=$(awk '{print $1}' "$OUT/sha256.txt")
+FILE_DESCRIPTION=$(cat "$OUT/file.txt")
 
-out = Path(sys.argv[1])
-target = sys.argv[2]
+jq -n \
+  --arg input "$TARGET" \
+  --arg output "$OUT" \
+  --arg sha256 "$SHA256_VALUE" \
+  --arg file "$FILE_DESCRIPTION" \
+  --slurpfile info "$OUT/info.json" \
+  --slurpfile imports "$OUT/imports.json" \
+  --slurpfile exports "$OUT/exports.json" \
+  --slurpfile symbols "$OUT/symbols.json" \
+  --slurpfile strings "$OUT/strings.json" \
+  --slurpfile relocations "$OUT/relocations.json" \
+  --slurpfile functions "$OUT/functions.json" \
+  --slurpfile callgraph "$OUT/callgraph.json" \
+  --slurpfile entry "$OUT/entry-disasm.json" '
+    def value_count($value):
+      if ($value | type) == "array" or ($value | type) == "object"
+      then ($value | length)
+      else 0
+      end;
+    {
+      tool: "AutoCrackApp Rizin deep report",
+      input: $input,
+      output: $output,
+      sha256: $sha256,
+      file: $file,
+      binary: (($info[0] // {}) | if type == "object" then (.bin // {}) else {} end),
+      counts: {
+        imports: value_count($imports[0] // []),
+        exports: value_count($exports[0] // []),
+        symbols: value_count($symbols[0] // []),
+        strings: value_count($strings[0] // []),
+        relocations: value_count($relocations[0] // []),
+        functions: value_count($functions[0] // []),
+        callgraphNodes: (($callgraph[0] // {}) |
+          if type == "object" and ((.nodes // null) | type) == "array"
+          then (.nodes | length)
+          elif type == "array"
+          then length
+          else 0
+          end),
+        entryInstructions: value_count($entry[0] // [])
+      }
+    }
+  ' > "$OUT/summary.json"
 
-def read_json(name, default):
-    try:
-        return json.loads((out / name).read_text(encoding="utf-8"))
-    except Exception:
-        return default
-
-info = read_json("info.json", {})
-imports = read_json("imports.json", [])
-exports = read_json("exports.json", [])
-symbols = read_json("symbols.json", [])
-strings = read_json("strings.json", [])
-relocations = read_json("relocations.json", [])
-functions = read_json("functions.json", [])
-callgraph = read_json("callgraph.json", {})
-entry_disasm = read_json("entry-disasm.json", [])
-
-if isinstance(callgraph, dict):
-    callgraph_nodes = len(callgraph.get("nodes", []))
-elif isinstance(callgraph, list):
-    callgraph_nodes = len(callgraph)
-else:
-    callgraph_nodes = 0
-
-summary = {
-    "tool": "AutoCrackApp Rizin deep report",
-    "input": target,
-    "output": str(out),
-    "sha256": (out / "sha256.txt").read_text().split()[0],
-    "file": (out / "file.txt").read_text().strip(),
-    "binary": info.get("bin", {}) if isinstance(info, dict) else {},
-    "counts": {
-        "imports": len(imports) if isinstance(imports, list) else 0,
-        "exports": len(exports) if isinstance(exports, list) else 0,
-        "symbols": len(symbols) if isinstance(symbols, list) else 0,
-        "strings": len(strings) if isinstance(strings, list) else 0,
-        "relocations": len(relocations) if isinstance(relocations, list) else 0,
-        "functions": len(functions) if isinstance(functions, list) else 0,
-        "callgraphNodes": callgraph_nodes,
-        "entryInstructions": len(entry_disasm) if isinstance(entry_disasm, list) else 0,
-    },
-}
-(out / "summary.json").write_text(
-    json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
-    encoding="utf-8",
-)
-(out / "summary.txt").write_text(
-    "\n".join([
-        "AutoCrackApp Rizin deep report",
-        f"input={target}",
-        f"output={out}",
-        f"sha256={summary['sha256']}",
-        f"functions={summary['counts']['functions']}",
-        f"imports={summary['counts']['imports']}",
-        f"exports={summary['counts']['exports']}",
-        f"strings={summary['counts']['strings']}",
-        f"relocations={summary['counts']['relocations']}",
-        f"callgraphNodes={summary['counts']['callgraphNodes']}",
-    ]) + "\n",
-    encoding="utf-8",
-)
-PY
+jq -r '
+  "AutoCrackApp Rizin deep report",
+  "input=\(.input)",
+  "output=\(.output)",
+  "sha256=\(.sha256)",
+  "functions=\(.counts.functions)",
+  "imports=\(.counts.imports)",
+  "exports=\(.counts.exports)",
+  "strings=\(.counts.strings)",
+  "relocations=\(.counts.relocations)",
+  "callgraphNodes=\(.counts.callgraphNodes)"
+' "$OUT/summary.json" > "$OUT/summary.txt"
 
 echo "RZ_DEEP_REPORT_OK output=$OUT"
