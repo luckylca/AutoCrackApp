@@ -22,7 +22,7 @@ jobs:
       RIZIN_VERSION: "0.9.1"
       RIZIN_RELEASE_SHA256: "49b96162df17fb0eba443884f8eb0792145646d05c96ac6542e7776a0960fff2"
       TOOLPACK_ID: rizin-deep-static
-      TOOLPACK_VERSION: rizin-0.9.1_autocrack-1.0.0
+      TOOLPACK_VERSION: rizin-0.9.1_autocrack-1.0.1
 
     steps:
       - name: Check out repository
@@ -167,28 +167,33 @@ jobs:
           print(f"RIZIN_PAYLOAD_SIZE={payload_size}")
           PY
 
-      - name: Run ARM64 Rizin command and report tests
+      - name: Run ARM64 Rizin permission-repair and report tests
         run: |
           set -euxo pipefail
+          cp -a dist/payload dist/runtime-test-payload
+          chmod 0644 dist/runtime-test-payload/lib/rizin/rizin
+          test ! -x dist/runtime-test-payload/lib/rizin/rizin
+
           docker run --rm --platform linux/arm64 \
-            -v "$PWD/dist/payload:/opt/rizin-toolpack:ro" \
+            -v "$PWD/dist/runtime-test-payload:/opt/rizin-toolpack" \
             debian:bookworm-slim /bin/bash -euxc '
               export DEBIAN_FRONTEND=noninteractive
               apt-get update
-              apt-get install -y --no-install-recommends bash coreutils file python3
+              apt-get install -y --no-install-recommends bash coreutils file jq
               export PATH=/opt/rizin-toolpack/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
               mkdir -p /workspace
               rizin -v | grep -F "0.9.1"
+              test -x /opt/rizin-toolpack/lib/rizin/rizin
               rz-functions --self-test | grep -F RZ_FUNCTIONS_SELF_TEST_OK
               rz-disasm --self-test | grep -F RZ_DISASM_SELF_TEST_OK
               rz-deep-report --self-test | grep -F RZ_DEEP_REPORT_SELF_TEST_OK
               rz-functions /bin/ls > /workspace/functions.json
-              python3 -m json.tool /workspace/functions.json >/dev/null
+              jq empty /workspace/functions.json
               rz-disasm /bin/ls entry0 16 > /workspace/entry.json
-              python3 -m json.tool /workspace/entry.json >/dev/null
+              jq empty /workspace/entry.json
               rz-deep-report /bin/ls /workspace/ls-rizin-report \
                 | grep -F RZ_DEEP_REPORT_OK
-              python3 -m json.tool /workspace/ls-rizin-report/summary.json >/dev/null
+              jq empty /workspace/ls-rizin-report/summary.json
               test -s /workspace/ls-rizin-report/functions.json
               test -s /workspace/ls-rizin-report/imports.json
               test -s /workspace/ls-rizin-report/callgraph.json
@@ -224,6 +229,7 @@ jobs:
 
           unzip -t dist/AutoCrackApp-rizin-deep-static-toolpack.zip
           test "$(unzip -Z1 dist/AutoCrackApp-rizin-deep-static-toolpack.zip | wc -l)" -eq 2
+          jq -e '.version == "rizin-0.9.1_autocrack-1.0.1"' dist/manifest.json >/dev/null
           jq -e '.commands | map(.name) == ["rizin", "rz-functions", "rz-disasm", "rz-deep-report"]' \
             dist/manifest.json >/dev/null
 
