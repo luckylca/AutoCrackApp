@@ -167,10 +167,10 @@ internal object BuiltInToolpackTrustPolicy {
         ),
         "rizin-deep-static" to TrustedToolpack(
             title = "Rizin deep ELF and native analysis",
-            version = "rizin-0.9.1_autocrack-1.0.0",
+            version = "rizin-0.9.1_autocrack-1.0.1",
             architecture = "arm64",
-            payloadSha256 = "3c353c4282ac5266b73390451324f17fb883a5f7563711ccb907ec414c61327d",
-            payloadSizeBytes = 60_113_398L,
+            payloadSha256 = "54d465c8fe84e6f5e5f8be0b56780633f28b2ead84453618fff282ddb50d84b1",
+            payloadSizeBytes = 60_113_392L,
             requiredPaths = setOf(
                 "bin/rizin",
                 "bin/rz-functions",
