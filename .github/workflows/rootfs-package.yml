@@ -46,10 +46,11 @@ jobs:
               apt-get install -y --no-install-recommends \
                 bash ca-certificates coreutils findutils grep sed gawk file \
                 tar zip unzip xz-utils zstd curl wget git jq sqlite3 \
-                python3-minimal binutils patchelf procps util-linux \
+                python3 binutils patchelf procps util-linux \
                 openjdk-17-jre-headless
               test -x /usr/lib/jvm/java-17-openjdk-arm64/bin/java
               /usr/bin/java -version
+              printf "{}\n" | /usr/bin/python3 -m json.tool >/dev/null
               apt-get clean
               rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
               mkdir -p /workspace /root /opt/autocrack /opt/autocrack/toolpacks/packs
@@ -87,9 +88,11 @@ jobs:
                   "/usr/bin/env",
                   "/usr/bin/file",
                   "/usr/lib/jvm/java-17-openjdk-arm64/bin/java",
+                  "/usr/bin/jq",
                   "/usr/bin/patchelf",
                   "/usr/bin/readelf",
                   "/usr/bin/python3",
+                  "/usr/lib/python3.11/json/__init__.py",
                   "/usr/bin/script",
                   "/usr/bin/unzip",
                   "/usr/bin/xz",
@@ -106,6 +109,9 @@ jobs:
           grep -Eq '(^|/)bin/bash$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/java$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/lib/jvm/java-17-openjdk-arm64/bin/java$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/jq$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/python3$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/lib/python3.11/json/__init__.py$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/readelf$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/script$' dist/rootfs/rootfs-entries.txt
           (
