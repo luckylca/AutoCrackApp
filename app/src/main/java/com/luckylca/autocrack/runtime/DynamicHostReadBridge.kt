@@ -21,8 +21,9 @@ class DynamicHostReadBridge(
         filter: String = "",
         maxCount: Int = DEFAULT_PROCESS_LIMIT,
     ): HostProcessListReport {
+        val executor = requireExecutor()
         val command = RootToolCommand.ListHostProcesses(filter = filter, maxCount = maxCount)
-        val result = executeAudited(command, pid = null, filter = filter)
+        val result = executeAudited(executor, command, pid = null, filter = filter)
         return HostProcessListReport(
             filter = filter,
             capturedAtEpochMillis = System.currentTimeMillis(),
@@ -37,11 +38,17 @@ class DynamicHostReadBridge(
 
     suspend fun inspectProcess(pid: Int): HostProcessInspectionReport {
         require(pid > 0) { "PID 必须是正整数" }
-        val identity = executeAudited(RootToolCommand.ReadProcessIdentity(pid), pid)
-        val preflight = executeAudited(RootToolCommand.ReadProcessAttachPreflight(pid), pid)
-        val maps = executeAudited(RootToolCommand.ReadProcessMaps(pid), pid)
-        val threads = executeAudited(RootToolCommand.ListProcessThreads(pid), pid)
+        val executor = requireExecutor()
+        val identity = executeAudited(executor, RootToolCommand.ReadProcessIdentity(pid), pid)
+        val preflight = executeAudited(
+            executor,
+            RootToolCommand.ReadProcessAttachPreflight(pid),
+            pid,
+        )
+        val maps = executeAudited(executor, RootToolCommand.ReadProcessMaps(pid), pid)
+        val threads = executeAudited(executor, RootToolCommand.ListProcessThreads(pid), pid)
         val fileDescriptors = executeAudited(
+            executor,
             RootToolCommand.ListProcessFileDescriptors(pid),
             pid,
         )
@@ -61,18 +68,23 @@ class DynamicHostReadBridge(
         )
     }
 
-    private suspend fun executeAudited(
-        command: RootToolCommand,
-        pid: Int?,
-        filter: String? = null,
-    ): CommandResult {
+    private suspend fun requireExecutor(): RootToolExecutor {
         layout.initialize()
         val rootStatus = rootDetector.inspect()
         require(rootStatus.isRootGranted) {
             rootStatus.diagnostic ?: "动态宿主检查需要 Root 权限"
         }
         val suPath = requireNotNull(rootStatus.suPath) { "Root 已授权但没有可用的 su 路径" }
-        val result = RootToolExecutor(runner, suPath).execute(command)
+        return RootToolExecutor(runner, suPath)
+    }
+
+    private suspend fun executeAudited(
+        executor: RootToolExecutor,
+        command: RootToolCommand,
+        pid: Int?,
+        filter: String? = null,
+    ): CommandResult {
+        val result = executor.execute(command)
         appendAudit(command, pid, filter, result)
         return result
     }
