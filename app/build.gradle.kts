@@ -15,8 +15,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "0.5.9-phase5.9-elf-native-toolpack"
+        versionCode = 28
+        versionName = "0.5.10-phase5.10-rizin-deep-analysis-hotfix1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

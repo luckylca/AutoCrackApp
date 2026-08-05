@@ -1,0 +1,126 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+RIZIN="$ROOT/bin/rizin"
+
+if [ "${1:-}" = "--self-test" ]; then
+  for command_name in jq file sha256sum; do
+    command -v "$command_name" >/dev/null || {
+      echo "Missing required command: $command_name" >&2
+      exit 10
+    }
+  done
+  "$RIZIN" -v | grep -F "0.9.1" >/dev/null
+  echo RZ_DEEP_REPORT_SELF_TEST_OK
+  exit 0
+fi
+
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+  echo "Usage: rz-deep-report <ELF-or-SO-file> [output-directory-under-/workspace]" >&2
+  exit 2
+fi
+
+TARGET=$1
+[ -f "$TARGET" ] || { echo "Input file not found: $TARGET" >&2; exit 3; }
+file "$TARGET" | grep -q 'ELF' || { echo "Not an ELF file: $TARGET" >&2; exit 4; }
+
+BASE=$(basename -- "$TARGET")
+SAFE_BASE=$(printf '%s' "$BASE" | tr -c 'A-Za-z0-9._-' '_')
+OUT=${2:-/workspace/rizin-report-$SAFE_BASE}
+case "$OUT" in
+  /workspace/*) ;;
+  *) echo "Output directory must be under /workspace: $OUT" >&2; exit 5 ;;
+esac
+
+mkdir -p "$OUT"
+: > "$OUT/rizin.stderr"
+sha256sum "$TARGET" > "$OUT/sha256.txt"
+file "$TARGET" > "$OUT/file.txt"
+
+run_json() {
+  output_name=$1
+  commands=$2
+  "$RIZIN" -q -c "$commands" "$TARGET" \
+    > "$OUT/$output_name" 2>> "$OUT/rizin.stderr"
+  if ! jq empty "$OUT/$output_name" >/dev/null 2>&1; then
+    output_bytes=$(wc -c < "$OUT/$output_name")
+    echo "RIZIN_JSON_INVALID name=$output_name bytes=$output_bytes commands=$commands" >&2
+    tail -n 20 "$OUT/rizin.stderr" >&2 || true
+    exit 20
+  fi
+}
+
+run_json info.json 'ij'
+run_json sections.json 'iSj'
+run_json segments.json 'iSSj'
+run_json imports.json 'iij'
+run_json exports.json 'iEj'
+run_json symbols.json 'isj'
+run_json strings.json 'izj'
+run_json relocations.json 'irj'
+run_json functions.json 'aaa; aflj'
+run_json callgraph.json 'aaa; agC json'
+run_json entry-disasm.json 'aaa; s entry0; pdj 128'
+
+SHA256_VALUE=$(awk '{print $1}' "$OUT/sha256.txt")
+FILE_DESCRIPTION=$(cat "$OUT/file.txt")
+
+jq -n \
+  --arg input "$TARGET" \
+  --arg output "$OUT" \
+  --arg sha256 "$SHA256_VALUE" \
+  --arg file "$FILE_DESCRIPTION" \
+  --slurpfile info "$OUT/info.json" \
+  --slurpfile imports "$OUT/imports.json" \
+  --slurpfile exports "$OUT/exports.json" \
+  --slurpfile symbols "$OUT/symbols.json" \
+  --slurpfile strings "$OUT/strings.json" \
+  --slurpfile relocations "$OUT/relocations.json" \
+  --slurpfile functions "$OUT/functions.json" \
+  --slurpfile callgraph "$OUT/callgraph.json" \
+  --slurpfile entry "$OUT/entry-disasm.json" '
+    def value_count($value):
+      if ($value | type) == "array" or ($value | type) == "object"
+      then ($value | length)
+      else 0
+      end;
+    {
+      tool: "AutoCrackApp Rizin deep report",
+      input: $input,
+      output: $output,
+      sha256: $sha256,
+      file: $file,
+      binary: (($info[0] // {}) | if type == "object" then (.bin // {}) else {} end),
+      counts: {
+        imports: value_count($imports[0] // []),
+        exports: value_count($exports[0] // []),
+        symbols: value_count($symbols[0] // []),
+        strings: value_count($strings[0] // []),
+        relocations: value_count($relocations[0] // []),
+        functions: value_count($functions[0] // []),
+        callgraphNodes: (($callgraph[0] // {}) |
+          if type == "object" and ((.nodes // null) | type) == "array"
+          then (.nodes | length)
+          elif type == "array"
+          then length
+          else 0
+          end),
+        entryInstructions: value_count($entry[0] // [])
+      }
+    }
+  ' > "$OUT/summary.json"
+
+jq -r '
+  "AutoCrackApp Rizin deep report",
+  "input=\(.input)",
+  "output=\(.output)",
+  "sha256=\(.sha256)",
+  "functions=\(.counts.functions)",
+  "imports=\(.counts.imports)",
+  "exports=\(.counts.exports)",
+  "strings=\(.counts.strings)",
+  "relocations=\(.counts.relocations)",
+  "callgraphNodes=\(.counts.callgraphNodes)"
+' "$OUT/summary.json" > "$OUT/summary.txt"
+
+echo "RZ_DEEP_REPORT_OK output=$OUT"

@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+BINARY="$ROOT/lib/rizin/rizin"
+TMPDIR=${TMPDIR:-/tmp/autocrack-rizin}
+mkdir -p "$TMPDIR"
+export TMPDIR
+
+# Android's java.util.zip extractor does not preserve Unix executable bits.
+# The command shim itself is restored by AutoCrackApp, so repair the pinned
+# nested native binary once before executing it.
+if [ ! -x "$BINARY" ]; then
+  chmod 0755 "$BINARY" 2>/dev/null || {
+    echo "Unable to restore Rizin executable permission: $BINARY" >&2
+    exit 126
+  }
+fi
+
+exec "$BINARY" "$@"

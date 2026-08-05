@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+RIZIN="$ROOT/bin/rizin"
+
+if [ "${1:-}" = "--self-test" ]; then
+  "$RIZIN" -v | grep -F "0.9.1" >/dev/null
+  echo RZ_FUNCTIONS_SELF_TEST_OK
+  exit 0
+fi
+
+[ "$#" -eq 1 ] || { echo "Usage: rz-functions <ELF-or-SO-file>" >&2; exit 2; }
+TARGET=$1
+[ -f "$TARGET" ] || { echo "Input file not found: $TARGET" >&2; exit 3; }
+exec "$RIZIN" -2 -q -c 'aaa; aflj' "$TARGET"

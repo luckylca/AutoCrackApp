@@ -1,0 +1,32 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+RIZIN="$ROOT/bin/rizin"
+
+if [ "${1:-}" = "--self-test" ]; then
+  "$RIZIN" -v | grep -F "0.9.1" >/dev/null
+  echo RZ_DISASM_SELF_TEST_OK
+  exit 0
+fi
+
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ]; then
+  echo "Usage: rz-disasm <ELF-or-SO-file> <address-or-symbol> [instruction-count]" >&2
+  exit 2
+fi
+
+TARGET=$1
+LOCATION=$2
+COUNT=${3:-128}
+[ -f "$TARGET" ] || { echo "Input file not found: $TARGET" >&2; exit 3; }
+case "$LOCATION" in
+  *[!A-Za-z0-9_.$:+@-]*) echo "Unsafe address or symbol: $LOCATION" >&2; exit 4 ;;
+esac
+case "$COUNT" in
+  ''|*[!0-9]*) echo "Instruction count must be an integer" >&2; exit 5 ;;
+esac
+[ "$COUNT" -ge 1 ] && [ "$COUNT" -le 4096 ] || {
+  echo "Instruction count must be between 1 and 4096" >&2
+  exit 6
+}
+
+exec "$RIZIN" -2 -q -c "aaa; s $LOCATION; pdj $COUNT" "$TARGET"
