@@ -113,6 +113,7 @@ class RootToolCommandFactoryTest {
         assertTrue(shell.contains("attach_attempted=false"))
         assertTrue(shell.contains("state_changed=false"))
         assertTrue(shell.contains("/proc/1234/status"))
+        assertTrue(shell.contains("ptrace_scope"))
         assertReadOnlyDynamicShell(shell)
     }
 
@@ -137,7 +138,8 @@ class RootToolCommandFactoryTest {
 
     private fun assertReadOnlyDynamicShell(shell: String) {
         val normalized = shell.lowercase()
-        assertFalse(normalized.contains("ptrace"))
+        assertFalse(normalized.contains("ptrace("))
+        assertFalse(normalized.contains(" ptrace "))
         assertFalse(normalized.contains("gdbserver"))
         assertFalse(normalized.contains("lldb-server"))
         assertFalse(normalized.contains("kill "))
