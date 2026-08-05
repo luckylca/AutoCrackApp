@@ -112,7 +112,8 @@ class RootToolCommandFactoryTest {
         val shell = command.last()
         assertTrue(shell.contains("attach_attempted=false"))
         assertTrue(shell.contains("state_changed=false"))
-        assertTrue(shell.contains("/proc/1234/status"))
+        assertTrue(shell.contains("proc=/proc/1234"))
+        assertTrue(shell.contains("grep -E"))
         assertTrue(shell.contains("ptrace_scope"))
         assertReadOnlyDynamicShell(shell)
     }
