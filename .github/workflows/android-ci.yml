@@ -54,17 +54,24 @@ jobs:
         run: |
           unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -F "lib/arm64-v8a/libautocrack_pty.so"
 
+      - name: Verify dynamic host catalogs are packaged
+        run: |
+          unzip -p app/build/outputs/apk/debug/app-debug.apk \
+            assets/runtime/dynamic-host-tool-catalog-v1.json \
+            | jq -e '.safetyBoundary.readOnly == true and .safetyBoundary.attachAllowed == false' >/dev/null
+
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.10-rizin-hotfix1-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.11-dynamic-readonly-foundation-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.10-rizin-hotfix1-debug.apk > AutoCrackApp-0.5.10-rizin-hotfix1-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.11-dynamic-readonly-foundation-debug.apk \
+            > AutoCrackApp-0.5.11-dynamic-readonly-foundation-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.10-rizin-hotfix1-debug
+          name: AutoCrackApp-0.5.11-dynamic-readonly-foundation-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -73,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.10-rizin-hotfix1-reports
+          name: AutoCrackApp-0.5.11-dynamic-readonly-foundation-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
