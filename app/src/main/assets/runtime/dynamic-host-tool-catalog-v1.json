@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "0.5.11",
+  "scope": "host_dynamic_readonly",
+  "safetyBoundary": {
+    "ownedOrAuthorizedDevicesOnly": true,
+    "readOnly": true,
+    "attachAllowed": false,
+    "signalsAllowed": false,
+    "injectionAllowed": false,
+    "memoryWriteAllowed": false,
+    "targetFileWriteAllowed": false,
+    "audit": "runtime/audit/dynamic-host-read.jsonl"
+  },
+  "tools": [
+    {
+      "id": "host.process.list",
+      "title": "List Android host processes from procfs",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "filter": "optional literal process/package substring",
+        "maxCount": "1..2000"
+      },
+      "output": "HostProcessListReport",
+      "implementation": "RootToolCommand.ListHostProcesses"
+    },
+    {
+      "id": "host.process.identity",
+      "title": "Read PID identity and security status",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {"pid": "positive integer"},
+      "reads": [
+        "/proc/<pid>/status",
+        "/proc/<pid>/cmdline",
+        "/proc/<pid>/exe",
+        "/proc/<pid>/cwd",
+        "/proc/<pid>/root",
+        "/proc/<pid>/attr/current"
+      ],
+      "output": "CommandResult",
+      "implementation": "RootToolCommand.ReadProcessIdentity"
+    },
+    {
+      "id": "host.process.attach_preflight",
+      "title": "Read debugger attach prerequisites without attaching",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {"pid": "positive integer"},
+      "output": "CommandResult",
+      "guarantees": [
+        "attachAttempted=false",
+        "stateChanged=false",
+        "no ptrace",
+        "no signal",
+        "no target memory access"
+      ],
+      "implementation": "RootToolCommand.ReadProcessAttachPreflight"
+    },
+    {
+      "id": "host.process.maps",
+      "title": "Read process memory maps and aggregate loaded files",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {"pid": "positive integer"},
+      "reads": ["/proc/<pid>/maps"],
+      "output": "CommandResult + HostLoadedModule[]",
+      "implementation": "RootToolCommand.ReadProcessMaps"
+    },
+    {
+      "id": "host.process.threads",
+      "title": "List bounded target threads",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "pid": "positive integer",
+        "maxCount": "1..8192"
+      },
+      "reads": ["/proc/<pid>/task/*/comm", "/proc/<pid>/task/*/status"],
+      "output": "bounded TSV CommandResult",
+      "implementation": "RootToolCommand.ListProcessThreads"
+    },
+    {
+      "id": "host.process.fds",
+      "title": "List bounded target file descriptors",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "pid": "positive integer",
+        "maxCount": "1..4096"
+      },
+      "reads": ["/proc/<pid>/fd/*"],
+      "output": "bounded TSV CommandResult",
+      "implementation": "RootToolCommand.ListProcessFileDescriptors"
+    }
+  ]
+}
