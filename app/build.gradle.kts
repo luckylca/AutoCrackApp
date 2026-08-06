@@ -15,8 +15,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 29
-        versionName = "0.5.11-phase5.11-dynamic-readonly-foundation"
+        versionCode = 30
+        versionName = "0.5.11.1-phase5.11-dynamic-readonly-hotfix1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
