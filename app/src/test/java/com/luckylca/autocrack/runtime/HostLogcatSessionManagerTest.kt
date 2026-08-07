@@ -7,20 +7,32 @@ import org.junit.Test
 
 class HostLogcatSessionManagerTest {
     @Test
-    fun commandFactory_buildsFixedPidScopedLogcatCommand() {
-        val command = HostLogcatCommandFactory.build("/system/bin/su", 21743)
+    fun commandFactory_buildsFixedPidScopedLogcatCommandWithIdentityGate() {
+        val command = HostLogcatCommandFactory.build(
+            suPath = "/system/bin/su",
+            packageName = "com.example.app",
+            pid = 21743,
+        )
 
         assertEquals("/system/bin/su", command[0])
         assertEquals("-c", command[1])
-        assertEquals("exec logcat --pid=21743 -v threadtime", command[2])
-        assertFalse(command[2].contains("kill"))
-        assertFalse(command[2].contains("ptrace"))
-        assertFalse(command[2].contains("/proc/21743/mem"))
+        val shell = command[2]
+        assertTrue(shell.contains("expected_package='com.example.app'"))
+        assertTrue(shell.contains("proc=/proc/21743"))
+        assertTrue(shell.contains("IDENTITY_MISMATCH pid=21743"))
+        assertTrue(shell.contains("exec logcat --pid=21743 -v threadtime"))
+        assertFalse(shell.contains("kill"))
+        assertFalse(shell.contains("ptrace"))
+        assertFalse(shell.contains("/proc/21743/mem"))
     }
 
     @Test(expected = IllegalArgumentException::class)
     fun commandFactory_rejectsNonPositivePid() {
-        HostLogcatCommandFactory.build("/system/bin/su", 0)
+        HostLogcatCommandFactory.build(
+            suPath = "/system/bin/su",
+            packageName = "com.example.app",
+            pid = 0,
+        )
     }
 
     @Test
