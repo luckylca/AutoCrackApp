@@ -22,11 +22,26 @@ object DynamicHostProcessCommandFactory {
 
             printf 'pid\tppid\tuid\tstate\tname\tcmdline\n'
 
+            matches_filter() {
+              pid="${'$'}1"
+              [ -n "${'$'}pid" ] || return 1
+              proc=/proc/"${'$'}pid"
+              [ -d "${'$'}proc" ] || return 1
+
+              name=''
+              IFS= read -r name < "${'$'}proc/comm" 2>/dev/null || true
+              cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | tr '\t\r\n' '   ')
+
+              case "${'$'}name ${'$'}cmdline" in
+                *"${'$'}filter"*) return 0 ;;
+                *) return 1 ;;
+              esac
+            }
+
             emit_pid() {
               pid="${'$'}1"
               [ -n "${'$'}pid" ] || return 0
               [ "${'$'}pid" = "${'$'}self_pid" ] && return 0
-              [ "${'$'}pid" = "${'$'}parent_pid" ] && return 0
               proc=/proc/"${'$'}pid"
               [ -d "${'$'}proc" ] || return 0
 
@@ -64,10 +79,18 @@ object DynamicHostProcessCommandFactory {
             }
 
             if [ -n "${'$'}filter" ]; then
+              # KSU/Magisk su -c may exec the shell directly. In that case PPID is the calling app
+              # itself, so PPID is a legitimate target and must never be excluded as helper noise.
+              parent_candidate=''
+              if [ "${'$'}parent_pid" -gt 0 ] 2>/dev/null && matches_filter "${'$'}parent_pid"; then
+                parent_candidate="${'$'}parent_pid"
+              fi
+
               # Filtered discovery is authoritative from procfs. Android ps column layouts vary
               # between platform/toybox versions, while /proc/<pid>/cmdline keeps the real argv0.
               candidate_pids=${'$'}(
                 {
+                  [ -n "${'$'}parent_candidate" ] && printf '%s\n' "${'$'}parent_candidate"
                   pidof "${'$'}filter" 2>/dev/null || true
                   grep -l -F -- "${'$'}filter" /proc/[0-9]*/cmdline 2>/dev/null || true
                   grep -l -F -- "${'$'}filter" /proc/[0-9]*/comm 2>/dev/null || true
@@ -79,11 +102,16 @@ object DynamicHostProcessCommandFactory {
                   | sed -n '/^[0-9][0-9]*${'$'}/p' \
                   | sort -n -u
               )
+              candidate_count=${'$'}(printf '%s\n' "${'$'}candidate_pids" | awk 'NF { count++ } END { print count + 0 }')
 
               for pid in ${'$'}candidate_pids; do
                 emit_pid "${'$'}pid"
                 [ "${'$'}count" -ge "${'$'}max_count" ] && break
               done
+
+              printf 'AUTOCRACK_DISCOVERY filter=%s self_pid=%s parent_pid=%s parent_matched=%s candidates=%s emitted=%s\n' \
+                "${'$'}filter" "${'$'}self_pid" "${'$'}parent_pid" \
+                "${'$'}{parent_candidate:+1}" "${'$'}candidate_count" "${'$'}count" >&2
               exit 0
             fi
 
