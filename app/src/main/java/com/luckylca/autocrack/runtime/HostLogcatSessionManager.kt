@@ -5,6 +5,7 @@ import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.root.RootToolCommand
+import com.luckylca.autocrack.root.RootToolCommandFactory
 import com.luckylca.autocrack.root.RootToolExecutor
 import java.io.File
 import java.io.IOException
@@ -33,17 +34,27 @@ data class HostLogcatSessionSnapshot(
 )
 
 object HostLogcatCommandFactory {
-    fun build(suPath: String, pid: Int): List<String> {
+    fun build(suPath: String, packageName: String, pid: Int): List<String> {
         require(suPath.isNotBlank()) { "su path must not be blank" }
         require('\u0000' !in suPath && '\n' !in suPath && '\r' !in suPath) {
             "su path contains an invalid character"
         }
+        PackageOutputParser.requireValidPackageName(packageName)
         require(pid > 0) { "PID must be positive" }
-        return listOf(
-            suPath,
-            "-c",
-            "exec logcat --pid=$pid -v threadtime",
-        )
+        val quotedPackage = RootToolCommandFactory.shellQuote(packageName)
+        val shellCommand = """
+            expected_package=$quotedPackage
+            proc=/proc/$pid
+            [ -d "${'$'}proc" ] || { echo 'PROCESS_NOT_FOUND pid=$pid' >&2; exit 3; }
+            cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | tr '\t\r\n' '   ')
+            argv0=${'$'}{cmdline%% *}
+            case "${'$'}argv0" in
+              "${'$'}expected_package"|"${'$'}expected_package":*) ;;
+              *) echo 'IDENTITY_MISMATCH pid=$pid' >&2; exit 5 ;;
+            esac
+            exec logcat --pid=$pid -v threadtime
+        """.trimIndent()
+        return listOf(suPath, "-c", shellCommand)
     }
 }
 
@@ -73,6 +84,7 @@ class HostLogcatSessionManager(
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var activeSession: MutableSession? = null
+    private var starting = false
 
     suspend fun start(packageName: String, pid: Int): HostLogcatSessionSnapshot {
         PackageOutputParser.requireValidPackageName(packageName)
@@ -81,54 +93,57 @@ class HostLogcatSessionManager(
         sessionRoot.mkdirs()
 
         synchronized(lock) {
-            require(activeSession?.process?.isAlive != true) {
-                "已有 Logcat 会话正在运行，请先停止当前会话"
+            require(!starting && activeSession?.process?.isAlive != true) {
+                "已有 Logcat 会话正在运行或启动，请先停止当前会话"
             }
+            starting = true
         }
 
-        val rootStatus = rootDetector.inspect()
-        require(rootStatus.isRootGranted) {
-            rootStatus.diagnostic ?: "Logcat 会话需要 Root 权限"
-        }
-        val suPath = requireNotNull(rootStatus.suPath) { "Root 已授权但没有可用的 su 路径" }
-
-        val identity = RootToolExecutor(runner, suPath).execute(RootToolCommand.ReadProcessIdentity(pid))
-        require(identity.succeeded) {
-            identity.failure ?: identity.stderr.ifBlank { "无法读取 PID $pid 身份" }
-        }
-        require(HostLogcatIdentityMatcher.matches(packageName, identity.stdout)) {
-            "PID $pid 当前身份不属于包 $packageName；已拒绝启动 Logcat 会话"
-        }
-
-        val sessionId = UUID.randomUUID().toString()
-        val logFile = File(sessionRoot, "$sessionId.log")
-        val process = withContext(Dispatchers.IO) {
-            ProcessBuilder(HostLogcatCommandFactory.build(suPath, pid))
-                .redirectErrorStream(false)
-                .start()
-        }
-        val session = MutableSession(
-            sessionId = sessionId,
-            packageName = packageName,
-            pid = pid,
-            process = process,
-            startedAtEpochMillis = System.currentTimeMillis(),
-            logFile = logFile,
-        )
-
-        synchronized(lock) {
-            check(activeSession?.process?.isAlive != true) {
-                "另一个 Logcat 会话已在启动过程中占用会话槽位"
+        try {
+            val rootStatus = rootDetector.inspect()
+            require(rootStatus.isRootGranted) {
+                rootStatus.diagnostic ?: "Logcat 会话需要 Root 权限"
             }
-            activeSession = session
+            val suPath = requireNotNull(rootStatus.suPath) { "Root 已授权但没有可用的 su 路径" }
+
+            val identity = RootToolExecutor(runner, suPath)
+                .execute(RootToolCommand.ReadProcessIdentity(pid))
+            require(identity.succeeded) {
+                identity.failure ?: identity.stderr.ifBlank { "无法读取 PID $pid 身份" }
+            }
+            require(HostLogcatIdentityMatcher.matches(packageName, identity.stdout)) {
+                "PID $pid 当前身份不属于包 $packageName；已拒绝启动 Logcat 会话"
+            }
+
+            val sessionId = UUID.randomUUID().toString()
+            val logFile = File(sessionRoot, "$sessionId.log")
+            val process = withContext(Dispatchers.IO) {
+                ProcessBuilder(HostLogcatCommandFactory.build(suPath, packageName, pid))
+                    .redirectErrorStream(false)
+                    .start()
+            }
+            val session = MutableSession(
+                sessionId = sessionId,
+                packageName = packageName,
+                pid = pid,
+                process = process,
+                startedAtEpochMillis = System.currentTimeMillis(),
+                logFile = logFile,
+            )
+
+            synchronized(lock) {
+                activeSession = session
+            }
+            appendAudit(event = "start", session = session, helperSignalSent = false)
+
+            scope.launch { drainStream(session, stderr = false) }
+            scope.launch { drainStream(session, stderr = true) }
+            scope.launch { awaitExit(session) }
+
+            return snapshot(session)
+        } finally {
+            synchronized(lock) { starting = false }
         }
-        appendAudit(event = "start", session = session, helperSignalSent = false)
-
-        scope.launch { drainStream(session, stderr = false) }
-        scope.launch { drainStream(session, stderr = true) }
-        scope.launch { awaitExit(session) }
-
-        return snapshot(session)
     }
 
     fun snapshot(): HostLogcatSessionSnapshot? = synchronized(lock) {
