@@ -9,7 +9,7 @@ class HostDebuggerRemoteClientTest {
     @Test
     fun framesGdbRemotePacketWithChecksum() {
         assertEquals(
-            "$qSupported#37",
+            "\$qSupported#37",
             String(GdbRemotePacketCodec.frame("qSupported"), Charsets.US_ASCII),
         )
     }
@@ -68,19 +68,11 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
-    fun phase514ClientSourceContainsNoWriteOrBreakpointAdapters() {
-        val source = requireNotNull(
-            javaClass.classLoader?.getResource(
-                "com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.class",
-            ),
-        )
-        // The executable API surface is also guarded by compilation: there are no methods named
-        // writeMemory, writeRegister, insertBreakpoint or removeBreakpoint on the client.
+    fun phase514ClientContainsNoWriteOrBreakpointAdapters() {
         val methodNames = HostDebuggerRemoteClient::class.java.methods.map { method -> method.name }.toSet()
         assertEquals(false, "writeMemory" in methodNames)
         assertEquals(false, "writeRegister" in methodNames)
         assertEquals(false, "insertBreakpoint" in methodNames)
         assertEquals(false, "removeBreakpoint" in methodNames)
-        assertEquals(true, source.toString().isNotBlank())
     }
 }
