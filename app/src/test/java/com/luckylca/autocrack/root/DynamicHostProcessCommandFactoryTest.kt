@@ -1,5 +1,6 @@
 package com.luckylca.autocrack.root
 
+import java.io.File
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,8 +20,12 @@ class DynamicHostProcessCommandFactoryTest {
         assertTrue(shell.contains("grep -l -F -- \"${'$'}filter\" /proc/[0-9]*/cmdline"))
         assertTrue(shell.contains("grep -l -F -- \"${'$'}filter\" /proc/[0-9]*/comm"))
         assertTrue(shell.contains("pidof \"${'$'}filter\""))
+        assertTrue(shell.contains("matches_filter \"${'$'}parent_pid\""))
+        assertTrue(shell.contains("parent_candidate=\"${'$'}parent_pid\""))
+        assertTrue(shell.contains("AUTOCRACK_DISCOVERY"))
         assertTrue(shell.contains("emit_pid \"${'$'}pid\""))
         assertTrue(shell.contains("[ \"${'$'}count\" -ge \"${'$'}max_count\" ] && break"))
+        assertFalse(shell.contains("[ \"${'$'}pid\" = \"${'$'}parent_pid\" ]"))
         assertFalse(shell.contains("ps -A -n -ww -o PID,PPID,UID,STAT,NAME,ARGS"))
         assertReadOnly(shell)
     }
@@ -47,12 +52,43 @@ class DynamicHostProcessCommandFactoryTest {
             val output = result.inputStream.bufferedReader().readText()
             val processRows = output.lineSequence()
                 .filter { line -> line.isNotBlank() && !line.startsWith("pid\t") }
+                .filterNot { line -> line.startsWith("AUTOCRACK_DISCOVERY") }
                 .toList()
             assertTrue("Expected at least one process row:\n$output", processRows.isNotEmpty())
             assertTrue("Expected marker in output:\n$output", output.contains(marker))
         } finally {
             target.destroyForcibly()
             target.waitFor(2, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun filteredDiscoveryKeepsMatchingParentProcess() {
+        val marker = "com.luckylca.autocrack.parentproc"
+        val shell = DynamicHostProcessCommandFactory.build(
+            suPath = "/bin/sh",
+            filter = marker,
+            maxCount = 25,
+        ).last()
+        val script = File.createTempFile("autocrack-parent-discovery-", ".sh")
+        script.writeText(shell)
+
+        try {
+            val quotedScript = shellQuote(script.absolutePath)
+            val result = ProcessBuilder(
+                "/bin/bash",
+                "-c",
+                "exec -a '$marker' /bin/bash -c '/bin/sh $quotedScript'",
+            )
+                .redirectErrorStream(true)
+                .start()
+            assertTrue(result.waitFor(5, TimeUnit.SECONDS))
+            val output = result.inputStream.bufferedReader().readText()
+            assertTrue("Expected matching parent process row:\n$output", output.contains(marker))
+            assertTrue("Expected parent match diagnostic:\n$output", output.contains("parent_matched=1"))
+            assertTrue("Expected emitted process:\n$output", output.contains("emitted=1"))
+        } finally {
+            script.delete()
         }
     }
 
@@ -73,4 +109,7 @@ class DynamicHostProcessCommandFactoryTest {
         assertFalse(normalized.contains("kill "))
         assertFalse(normalized.contains("/proc/") && normalized.contains(" > /proc/"))
     }
+
+    private fun shellQuote(value: String): String =
+        "'" + value.replace("'", "'\"'\"'") + "'"
 }
