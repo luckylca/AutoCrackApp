@@ -188,6 +188,7 @@ object RootToolCommandFactory {
               count=${'$'}((count + 1))
               [ "${'$'}count" -ge "${'$'}max_count" ] && break
             done
+            exit 0
         """.trimIndent()
     }
 
@@ -253,6 +254,8 @@ object RootToolCommandFactory {
               count=${'$'}((count + 1))
               [ "${'$'}count" -ge "${'$'}max_count" ] && break
             done
+            # The final false max-count predicate is not an inspection failure.
+            exit 0
         """.trimIndent()
     }
 
@@ -277,6 +280,8 @@ object RootToolCommandFactory {
               count=${'$'}((count + 1))
               [ "${'$'}count" -ge "${'$'}max_count" ] && break
             done
+            # Some FDs can disappear while enumerating; successful bounded enumeration is exit 0.
+            exit 0
         """.trimIndent()
     }
 
