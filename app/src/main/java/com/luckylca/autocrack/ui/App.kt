@@ -22,7 +22,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.luckylca.autocrack.root.ProcessRootCommandRunner
+import com.luckylca.autocrack.root.RootDetector
+import com.luckylca.autocrack.runtime.DynamicHostReadBridge
+import com.luckylca.autocrack.runtime.HostLogcatSessionManager
+import com.luckylca.autocrack.runtime.RuntimeLayout
 
 private enum class AppScreen {
     MAIN,
@@ -37,8 +43,19 @@ private enum class AppScreen {
 @Composable
 fun AutoCrackApp() {
     val darkTheme = androidx.compose.foundation.isSystemInDarkTheme()
+    val appContext = LocalContext.current.applicationContext
     var screen by remember { mutableStateOf(AppScreen.MAIN) }
     val navigationScroll = rememberScrollState()
+
+    val dynamicLayout = remember(appContext) { RuntimeLayout(appContext).initialize() }
+    val dynamicRunner = remember { ProcessRootCommandRunner() }
+    val dynamicRootDetector = remember(dynamicRunner) { RootDetector(dynamicRunner) }
+    val dynamicReadBridge = remember(dynamicLayout, dynamicRootDetector, dynamicRunner) {
+        DynamicHostReadBridge(dynamicLayout, dynamicRootDetector, dynamicRunner)
+    }
+    val logcatSessionManager = remember(dynamicLayout, dynamicRootDetector, dynamicRunner) {
+        HostLogcatSessionManager(dynamicLayout, dynamicRootDetector, dynamicRunner)
+    }
 
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -50,7 +67,10 @@ fun AutoCrackApp() {
                     AppScreen.LINUX -> ChrootRuntimeScreen()
                     AppScreen.TOOLPACKS -> ToolpackScreen()
                     AppScreen.TERMINAL -> PtyTerminalScreen()
-                    AppScreen.DYNAMIC -> DynamicInspectionScreen()
+                    AppScreen.DYNAMIC -> DynamicInspectionScreen(
+                        bridge = dynamicReadBridge,
+                        logcatSessionManager = logcatSessionManager,
+                    )
                 }
 
                 Row(

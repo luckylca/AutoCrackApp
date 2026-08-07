@@ -58,20 +58,29 @@ jobs:
         run: |
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
-            | jq -e '.safetyBoundary.readOnly == true and .safetyBoundary.attachAllowed == false' >/dev/null
+            | jq -e '
+                .catalogVersion == "0.5.12" and
+                .safetyBoundary.readOnly == true and
+                .safetyBoundary.attachAllowed == false and
+                .safetyBoundary.signalsAllowed == false and
+                .safetyBoundary.injectionAllowed == false and
+                .safetyBoundary.memoryWriteAllowed == false and
+                .safetyBoundary.helperSessionLifecycleAllowed == true and
+                ([.tools[].id] | index("host.logcat.session") != null)
+              ' >/dev/null
 
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.11.3-dynamic-readonly-hotfix3-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.12-host-logcat-session-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.11.3-dynamic-readonly-hotfix3-debug.apk \
-            > AutoCrackApp-0.5.11.3-dynamic-readonly-hotfix3-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.12-host-logcat-session-debug.apk \
+            > AutoCrackApp-0.5.12-host-logcat-session-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.11.3-dynamic-readonly-hotfix3-debug
+          name: AutoCrackApp-0.5.12-host-logcat-session-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -80,7 +89,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.11.3-dynamic-readonly-hotfix3-reports
+          name: AutoCrackApp-0.5.12-host-logcat-session-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml

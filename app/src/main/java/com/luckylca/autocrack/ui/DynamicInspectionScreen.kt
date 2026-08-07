@@ -35,31 +35,29 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.BuildConfig
 import com.luckylca.autocrack.root.CommandResult
-import com.luckylca.autocrack.root.ProcessRootCommandRunner
-import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.runtime.DynamicHostReadBridge
+import com.luckylca.autocrack.runtime.HostLogcatSessionManager
+import com.luckylca.autocrack.runtime.HostLogcatSessionSnapshot
 import com.luckylca.autocrack.runtime.HostProcessInspectionReport
 import com.luckylca.autocrack.runtime.HostProcessListReport
-import com.luckylca.autocrack.runtime.RuntimeLayout
 import kotlinx.coroutines.launch
 
 @Composable
-fun DynamicInspectionScreen() {
+fun DynamicInspectionScreen(
+    bridge: DynamicHostReadBridge,
+    logcatSessionManager: HostLogcatSessionManager,
+) {
     val context = LocalContext.current
-    val layout = remember(context) { RuntimeLayout(context.applicationContext).initialize() }
-    val runner = remember { ProcessRootCommandRunner() }
-    val rootDetector = remember(runner) { RootDetector(runner) }
-    val bridge = remember(layout, rootDetector, runner) {
-        DynamicHostReadBridge(layout, rootDetector, runner)
-    }
     val scope = rememberCoroutineScope()
 
     var processFilter by remember { mutableStateOf("") }
     var pidText by remember { mutableStateOf("") }
+    var logcatPackage by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("尚未执行动态宿主检查") }
     var processReport by remember { mutableStateOf<HostProcessListReport?>(null) }
     var inspectionReport by remember { mutableStateOf<HostProcessInspectionReport?>(null) }
+    var logcatSnapshot by remember { mutableStateOf(logcatSessionManager.snapshot()) }
 
     fun listProcesses() {
         scope.launch {
@@ -103,12 +101,66 @@ fun DynamicInspectionScreen() {
         }
     }
 
+    fun startLogcat() {
+        val pid = pidText.toIntOrNull()
+        val packageName = logcatPackage.trim()
+        if (pid == null || pid <= 0 || packageName.isBlank()) {
+            status = "启动 Logcat 前需要有效包名和正整数 PID"
+            return
+        }
+        scope.launch {
+            loading = true
+            status = "正在核对 PID $pid 身份并启动只读 Logcat 会话"
+            runCatching { logcatSessionManager.start(packageName, pid) }
+                .onSuccess { snapshot ->
+                    logcatSnapshot = snapshot
+                    status = if (snapshot.running) {
+                        "Logcat 会话已启动：${snapshot.sessionId}"
+                    } else {
+                        "Logcat helper 已退出，请刷新查看退出码和 stderr"
+                    }
+                }
+                .onFailure { exception -> status = exception.message ?: "Logcat 会话启动失败" }
+            loading = false
+        }
+    }
+
+    fun refreshLogcat() {
+        logcatSnapshot = logcatSessionManager.snapshot()
+        status = logcatSnapshot?.let { snapshot ->
+            if (snapshot.running) {
+                "Logcat 会话运行中：${snapshot.stdout.length} 字符已保留"
+            } else {
+                "Logcat 会话已结束：exit=${snapshot.exitCode ?: "无"}"
+            }
+        } ?: "当前没有 Logcat 会话"
+    }
+
+    fun stopLogcat() {
+        scope.launch {
+            loading = true
+            status = "正在停止 AutoCrack Logcat helper；不会向目标 PID 发送 signal"
+            runCatching { logcatSessionManager.stop() }
+                .onSuccess { snapshot ->
+                    logcatSnapshot = snapshot
+                    status = snapshot?.let {
+                        "Logcat 会话已停止：exit=${it.exitCode ?: "无"}"
+                    } ?: "当前没有 Logcat 会话"
+                }
+                .onFailure { exception -> status = exception.message ?: "Logcat 会话停止失败" }
+            loading = false
+        }
+    }
+
     fun copyDiagnostics() {
+        refreshLogcat()
         val text = buildDynamicDiagnosticReport(
             processReport = processReport,
             inspectionReport = inspectionReport,
+            logcatSnapshot = logcatSnapshot,
             status = status,
-            auditPath = bridge.auditFile.path,
+            readAuditPath = bridge.auditFile.path,
+            logcatAuditPath = logcatSessionManager.auditFile.path,
         )
         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(
             ClipData.newPlainText("AutoCrackApp Dynamic Host 诊断", text),
@@ -129,7 +181,7 @@ fun DynamicInspectionScreen() {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "${BuildConfig.VERSION_NAME} · 只读 /proc · 不附加、不注入、不写内存",
+                text = "${BuildConfig.VERSION_NAME} · 只读 /proc + PID Logcat · 不附加、不注入、不写内存",
                 color = MaterialTheme.colorScheme.primary,
             )
         }
@@ -156,7 +208,12 @@ fun DynamicInspectionScreen() {
                     report.processes.take(MAX_PROCESS_ROWS).forEach { process ->
                         OutlinedButton(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { pidText = process.pid.toString() },
+                            onClick = {
+                                pidText = process.pid.toString()
+                                val argv0 = process.commandLine.trim().substringBefore(' ')
+                                val candidatePackage = argv0.substringBefore(':')
+                                if ('.' in candidatePackage) logcatPackage = candidatePackage
+                            },
                         ) {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Text(
@@ -198,6 +255,69 @@ fun DynamicInspectionScreen() {
                     "此按钮不会调用 ptrace、gdbserver、lldb-server、kill、写文件或写内存。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+
+        item {
+            DynamicCard("PID Logcat 会话") {
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = logcatPackage,
+                    onValueChange = { logcatPackage = it },
+                    label = { Text("目标包名") },
+                    singleLine = true,
+                )
+                Text(
+                    "启动前会重新核对 /proc/<pid>/cmdline。只启动/停止 AutoCrack 的 logcat helper，绝不向目标 PID 发 signal。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = ::startLogcat,
+                    enabled = !loading && pidText.isNotBlank() && logcatPackage.isNotBlank() &&
+                        logcatSnapshot?.running != true,
+                ) {
+                    Text("启动 PID-scoped Logcat")
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = ::refreshLogcat,
+                    enabled = !loading,
+                ) {
+                    Text("刷新 Logcat 状态/输出")
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = ::stopLogcat,
+                    enabled = !loading && logcatSnapshot?.running == true,
+                ) {
+                    Text("停止 Logcat helper")
+                }
+                logcatSnapshot?.let { snapshot ->
+                    DynamicInfoRow("Session", snapshot.sessionId)
+                    DynamicInfoRow("PID", snapshot.pid.toString())
+                    DynamicInfoRow("运行中", snapshot.running.toString())
+                    DynamicInfoRow("退出码", snapshot.exitCode?.toString() ?: "无")
+                    DynamicInfoRow("截断", snapshot.outputTruncated.toString())
+                    DynamicInfoRow("日志文件", snapshot.logFile.path)
+                    snapshot.failure?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    if (snapshot.stdout.isNotBlank()) {
+                        SelectionContainer {
+                            Text(
+                                snapshot.stdout.takeLast(MAX_LOGCAT_VISIBLE_CHARS),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    if (snapshot.stderr.isNotBlank()) {
+                        Text(
+                            snapshot.stderr.takeLast(MAX_LOGCAT_VISIBLE_CHARS),
+                            color = MaterialTheme.colorScheme.error,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
             }
         }
 
@@ -249,8 +369,9 @@ fun DynamicInspectionScreen() {
 
         item {
             DynamicCard("审计与诊断") {
-                DynamicInfoRow("审计文件", bridge.auditFile.path)
-                Text("每条记录都标记 readOnly=true、stateChanged=false、attachAttempted=false。")
+                DynamicInfoRow("只读检查审计", bridge.auditFile.path)
+                DynamicInfoRow("Logcat 审计", logcatSessionManager.auditFile.path)
+                Text("目标操作保持只读；Logcat start/stop 仅改变 AutoCrack helper 会话状态。")
                 Button(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = ::copyDiagnostics,
@@ -334,14 +455,17 @@ private fun CommandResult.failureOrOutput(fallback: String): String = when {
 private fun buildDynamicDiagnosticReport(
     processReport: HostProcessListReport?,
     inspectionReport: HostProcessInspectionReport?,
+    logcatSnapshot: HostLogcatSessionSnapshot?,
     status: String,
-    auditPath: String,
+    readAuditPath: String,
+    logcatAuditPath: String,
 ): String = buildString {
     appendLine("AutoCrackApp Dynamic Host 诊断")
     appendLine("版本：${BuildConfig.VERSION_NAME}")
     appendLine("状态：$status")
-    appendLine("审计：$auditPath")
-    appendLine("安全边界：read-only /proc；未执行 attach、inject、signal 或 memory write")
+    appendLine("只读审计：$readAuditPath")
+    appendLine("Logcat 审计：$logcatAuditPath")
+    appendLine("安全边界：read-only /proc + logcat；未执行 attach、inject、target signal 或 memory write")
     processReport?.let { report ->
         appendLine()
         appendLine("进程枚举：exit=${report.commandResult.exitCode} count=${report.processes.size}")
@@ -365,6 +489,17 @@ private fun buildDynamicDiagnosticReport(
             )
         }
     }
+    logcatSnapshot?.let { snapshot ->
+        appendLine()
+        appendLine("[logcat] session=${snapshot.sessionId}")
+        appendLine("package=${snapshot.packageName} pid=${snapshot.pid}")
+        appendLine("running=${snapshot.running} exit=${snapshot.exitCode} failure=${snapshot.failure ?: "无"}")
+        appendLine("outputTruncated=${snapshot.outputTruncated}")
+        appendLine("logFile=${snapshot.logFile.path}")
+        appendLine("targetStateChanged=false attachAttempted=false targetSignalAttempted=false memoryWriteAttempted=false")
+        if (snapshot.stdout.isNotBlank()) appendLine(snapshot.stdout)
+        if (snapshot.stderr.isNotBlank()) appendLine("stderr:\n${snapshot.stderr}")
+    }
 }
 
 private fun StringBuilder.appendResult(name: String, result: CommandResult) {
@@ -377,3 +512,4 @@ private fun StringBuilder.appendResult(name: String, result: CommandResult) {
 private const val MAX_PROCESS_ROWS = 100
 private const val MAX_MODULE_ROWS = 150
 private const val MAX_VISIBLE_OUTPUT_CHARS = 20_000
+private const val MAX_LOGCAT_VISIBLE_CHARS = 20_000
