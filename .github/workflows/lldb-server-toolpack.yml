@@ -73,7 +73,11 @@ jobs:
           readelf -h dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.elf-header.txt
           readelf -l dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.program-headers.txt
           file dist/payload/bin/lldb-server-android | grep -F 'ARM aarch64'
-          readelf -l dist/payload/bin/lldb-server-android | grep -F '/system/bin/linker64'
+          file dist/payload/bin/lldb-server-android | grep -F 'statically linked'
+          if readelf -l dist/payload/bin/lldb-server-android | grep -q ' INTERP '; then
+            echo 'Unexpected dynamic interpreter in pinned Android lldb-server' >&2
+            exit 1
+          fi
           printf '%s\n' "$LLDB_SERVER" > dist/source/lldb-server.ndk-path.txt
           printf '%s\n' 'https://github.com/android/ndk/releases/tag/r27d' > dist/source/lldb-server.source-url.txt
 
