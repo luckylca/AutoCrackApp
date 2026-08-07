@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.11",
-  "scope": "host_dynamic_readonly",
+  "catalogVersion": "0.5.12",
+  "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
     "readOnly": true,
@@ -10,7 +10,9 @@
     "injectionAllowed": false,
     "memoryWriteAllowed": false,
     "targetFileWriteAllowed": false,
-    "audit": "runtime/audit/dynamic-host-read.jsonl"
+    "helperSessionLifecycleAllowed": true,
+    "audit": "runtime/audit/dynamic-host-read.jsonl",
+    "sessionAudit": "runtime/audit/dynamic-logcat.jsonl"
   },
   "tools": [
     {
@@ -59,7 +61,7 @@
         "attachAttempted=false",
         "stateChanged=false",
         "no ptrace",
-        "no signal",
+        "no target signal",
         "no target memory access"
       ],
       "implementation": "RootToolCommand.ReadProcessAttachPreflight"
@@ -105,6 +107,35 @@
       "reads": ["/proc/<pid>/fd/*"],
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessFileDescriptors"
+    },
+    {
+      "id": "host.logcat.session",
+      "title": "Run a PID-scoped Android logcat helper session",
+      "runtime": "typed_root_host_session",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "LOGCAT_READ"],
+      "changesState": true,
+      "changesTargetState": false,
+      "confirmation": "explicit_user_action",
+      "inputs": {
+        "packageName": "validated Android package name",
+        "pid": "positive integer whose current argv0 must match packageName or packageName:*"
+      },
+      "command": "logcat --pid=<pid> -v threadtime",
+      "output": "HostLogcatSessionSnapshot",
+      "artifacts": [
+        "runtime/sessions/logcat/<sessionId>.log",
+        "runtime/audit/dynamic-logcat.jsonl"
+      ],
+      "guarantees": [
+        "revalidate PID/package identity immediately before start",
+        "read target logs only",
+        "attachAttempted=false",
+        "injectionAttempted=false",
+        "targetSignalAttempted=false",
+        "memoryWriteAttempted=false",
+        "stop only signals the AutoCrack logcat helper"
+      ],
+      "implementation": "HostLogcatSessionManager"
     }
   ]
 }
