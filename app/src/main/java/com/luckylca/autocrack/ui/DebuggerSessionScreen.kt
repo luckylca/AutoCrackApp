@@ -73,7 +73,9 @@ fun DebuggerSessionScreen(
 
     fun expectedControlPhrase(): String? {
         val server = serverSnapshot ?: return null
-        return runCatching { HostDebuggerControlAuthorization.expected(server.packageName, server.pid) }.getOrNull()
+        return runCatching {
+            HostDebuggerControlAuthorization.expected(server.packageName, server.pid)
+        }.getOrNull()
     }
 
     fun listProcesses() {
@@ -245,8 +247,11 @@ fun DebuggerSessionScreen(
                 serverSnapshot = result
                 controlSnapshot = controlBridge.snapshot()
                 status = result?.let {
-                    if (it.detachVerified) "Detach 已验证：TracerPid=${it.tracerPidCurrent}；请确认目标恢复响应"
-                    else "helper 已结束但尚未验证 detach；不要开始新的 attach"
+                    if (it.detachVerified) {
+                        "Detach 已验证：TracerPid=${it.tracerPidCurrent}；请确认目标恢复响应"
+                    } else {
+                        "helper 已结束但尚未验证 detach；不要开始新的 attach"
+                    }
                 } ?: "当前没有 debugger session"
             }.onFailure { exception -> status = exception.message ?: "安全 detach 失败" }
             loading = false
@@ -268,12 +273,21 @@ fun DebuggerSessionScreen(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(top = 72.dp, start = 16.dp, end = 16.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(top = 72.dp, start = 16.dp, end = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            Text("Controlled LLDB Debugger", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("${BuildConfig.VERSION_NAME} · server attach + bounded loopback client", color = MaterialTheme.colorScheme.primary)
+            Text(
+                "Controlled LLDB Debugger",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "${BuildConfig.VERSION_NAME} · server attach + bounded loopback client",
+                color = MaterialTheme.colorScheme.primary,
+            )
             Text(
                 "边界：可读取寄存器/限长内存并执行 continue/step/interrupt；没有寄存器写、内存写、断点或任意 raw packet 接口。",
                 color = MaterialTheme.colorScheme.error,
@@ -281,21 +295,38 @@ fun DebuggerSessionScreen(
         }
         item {
             DebuggerCard("1. 选择明确授权的目标") {
-                OutlinedTextField(Modifier.fillMaxWidth(), processFilter, { processFilter = it }, label = { Text("包名/进程过滤") }, singleLine = true)
-                Button(Modifier.fillMaxWidth(), ::listProcesses, enabled = !loading) { Text("只读枚举候选进程") }
+                OutlinedTextField(
+                    value = processFilter,
+                    onValueChange = { processFilter = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("包名/进程过滤") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = ::listProcesses,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading,
+                ) { Text("只读枚举候选进程") }
                 processReport?.processes?.take(MAX_PROCESS_ROWS)?.forEach { process ->
                     OutlinedButton(
-                        modifier = Modifier.fillMaxWidth(),
                         onClick = {
                             pidText = process.pid.toString()
                             packageName = process.commandLine.trim().substringBefore(' ').substringBefore(':')
                             attachAuthorization = ""
                             controlAuthorization = ""
                         },
+                        modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Column(Modifier.fillMaxWidth()) {
-                            Text("PID=${process.pid} UID=${process.uid ?: -1} ${process.name}", fontFamily = FontFamily.Monospace)
-                            Text(process.commandLine.ifBlank { "<empty cmdline>" }, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                "PID=${process.pid} UID=${process.uid ?: -1} ${process.name}",
+                                fontFamily = FontFamily.Monospace,
+                            )
+                            Text(
+                                process.commandLine.ifBlank { "<empty cmdline>" },
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                            )
                         }
                     }
                 }
@@ -303,15 +334,51 @@ fun DebuggerSessionScreen(
         }
         item {
             DebuggerCard("2. 第一层授权：attach LLDB server") {
-                OutlinedTextField(Modifier.fillMaxWidth(), packageName, { packageName = it; attachAuthorization = ""; controlAuthorization = "" }, label = { Text("目标包名") }, singleLine = true)
-                OutlinedTextField(Modifier.fillMaxWidth(), pidText, { pidText = it.filter(Char::isDigit); attachAuthorization = ""; controlAuthorization = "" }, label = { Text("目标 PID") }, singleLine = true)
-                OutlinedTextField(Modifier.fillMaxWidth(), portText, { portText = it.filter(Char::isDigit) }, label = { Text("Loopback 端口") }, singleLine = true)
+                OutlinedTextField(
+                    value = packageName,
+                    onValueChange = {
+                        packageName = it
+                        attachAuthorization = ""
+                        controlAuthorization = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("目标包名") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = pidText,
+                    onValueChange = {
+                        pidText = it.filter(Char::isDigit)
+                        attachAuthorization = ""
+                        controlAuthorization = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("目标 PID") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = portText,
+                    onValueChange = { portText = it.filter(Char::isDigit) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Loopback 端口") },
+                    singleLine = true,
+                )
                 expectedAttachPhrase()?.let { phrase ->
                     Text("Attach 授权短语：", fontWeight = FontWeight.SemiBold)
                     SelectionContainer { Text(phrase, fontFamily = FontFamily.Monospace) }
                 }
-                OutlinedTextField(Modifier.fillMaxWidth(), attachAuthorization, { attachAuthorization = it }, label = { Text("ATTACH 授权短语") }, singleLine = true)
-                Button(Modifier.fillMaxWidth(), ::startDebugger, enabled = !loading && serverSnapshot?.running != true) { Text("显式授权并启动 LLDB server attach") }
+                OutlinedTextField(
+                    value = attachAuthorization,
+                    onValueChange = { attachAuthorization = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("ATTACH 授权短语") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = ::startDebugger,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && serverSnapshot?.running != true,
+                ) { Text("显式授权并启动 LLDB server attach") }
             }
         }
         item {
@@ -320,60 +387,149 @@ fun DebuggerSessionScreen(
                     Text("执行控制会恢复目标运行，请再次输入：", fontWeight = FontWeight.SemiBold)
                     SelectionContainer { Text(phrase, fontFamily = FontFamily.Monospace) }
                 }
-                OutlinedTextField(Modifier.fillMaxWidth(), controlAuthorization, { controlAuthorization = it }, label = { Text("CONTROL 授权短语") }, singleLine = true)
-                Button(Modifier.fillMaxWidth(), ::connectClient, enabled = !loading && serverSnapshot?.attachedObserved == true && !controlSnapshot.connected) { Text("授权并连接 127.0.0.1 LLDB client") }
+                OutlinedTextField(
+                    value = controlAuthorization,
+                    onValueChange = { controlAuthorization = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("CONTROL 授权短语") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = ::connectClient,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && serverSnapshot?.attachedObserved == true && !controlSnapshot.connected,
+                ) { Text("授权并连接 127.0.0.1 LLDB client") }
                 ControlSnapshot(controlSnapshot)
             }
         }
         item {
             DebuggerCard("4. 只读观察") {
-                OutlinedTextField(Modifier.fillMaxWidth(), registerLimitText, { registerLimitText = it.filter(Char::isDigit) }, label = { Text("寄存器数量（1..128）") }, singleLine = true)
-                OutlinedButton(Modifier.fillMaxWidth(), ::readRegisters, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("读取寄存器（只读）") }
+                OutlinedTextField(
+                    value = registerLimitText,
+                    onValueChange = { registerLimitText = it.filter(Char::isDigit) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("寄存器数量（1..128）") },
+                    singleLine = true,
+                )
+                OutlinedButton(
+                    onClick = ::readRegisters,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning,
+                ) { Text("读取寄存器（只读）") }
                 controlSnapshot.registers.take(MAX_REGISTER_ROWS).forEach { register ->
-                    Text("#${register.index} ${register.name} ${register.bitSize ?: "?"}bit = ${register.rawHex}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "#${register.index} ${register.name} ${register.bitSize ?: "?"}bit = ${register.rawHex}",
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
-                OutlinedTextField(Modifier.fillMaxWidth(), memoryAddressText, { memoryAddressText = it }, label = { Text("内存地址（hex，例如 0x7abc...）") }, singleLine = true)
-                OutlinedTextField(Modifier.fillMaxWidth(), memoryLengthText, { memoryLengthText = it.filter(Char::isDigit) }, label = { Text("读取字节数（1..512）") }, singleLine = true)
-                OutlinedButton(Modifier.fillMaxWidth(), ::readMemory, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("读取内存（只读、限长）") }
-                controlSnapshot.lastMemoryHex?.let { hex -> SelectionContainer { Text("0x${controlSnapshot.lastMemoryAddress?.toString(16)}: $hex", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) } }
+                OutlinedTextField(
+                    value = memoryAddressText,
+                    onValueChange = { memoryAddressText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("内存地址（hex，例如 0x7abc...）") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = memoryLengthText,
+                    onValueChange = { memoryLengthText = it.filter(Char::isDigit) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("读取字节数（1..512）") },
+                    singleLine = true,
+                )
+                OutlinedButton(
+                    onClick = ::readMemory,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning,
+                ) { Text("读取内存（只读、限长）") }
+                controlSnapshot.lastMemoryHex?.let { hex ->
+                    SelectionContainer {
+                        Text(
+                            "0x${controlSnapshot.lastMemoryAddress?.toString(16)}: $hex",
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         }
         item {
             DebuggerCard("5. 执行控制") {
                 Text("continue/step 会改变目标执行状态，但不会修改寄存器值、内存内容或插入断点。")
-                Button(Modifier.fillMaxWidth(), ::stepTarget, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("Single step 1 instruction") }
-                Button(Modifier.fillMaxWidth(), ::continueTarget, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("Continue target") }
-                OutlinedButton(Modifier.fillMaxWidth(), ::interruptTarget, enabled = !loading && controlSnapshot.connected && controlSnapshot.targetRunning) { Text("Interrupt and stop again") }
+                Button(
+                    onClick = ::stepTarget,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning,
+                ) { Text("Single step 1 instruction") }
+                Button(
+                    onClick = ::continueTarget,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning,
+                ) { Text("Continue target") }
+                OutlinedButton(
+                    onClick = ::interruptTarget,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && controlSnapshot.connected && controlSnapshot.targetRunning,
+                ) { Text("Interrupt and stop again") }
             }
         }
         item {
             DebuggerCard("6. 状态与安全 detach") {
-                OutlinedButton(Modifier.fillMaxWidth(), ::refreshDebugger, enabled = !loading) { Text("刷新 TracerPid / client 状态") }
-                Button(Modifier.fillMaxWidth(), ::detachDebugger, enabled = !loading && serverSnapshot?.running == true) { Text("安全关闭 client/helper 并验证 detach") }
+                OutlinedButton(
+                    onClick = ::refreshDebugger,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading,
+                ) { Text("刷新 TracerPid / client 状态") }
+                Button(
+                    onClick = ::detachDebugger,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !loading && serverSnapshot?.running == true,
+                ) { Text("安全关闭 client/helper 并验证 detach") }
                 serverSnapshot?.let { DebuggerSnapshot(it) }
             }
         }
-        if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(status) }
-        else item { Text(status, fontFamily = FontFamily.Monospace) }
+        if (loading) {
+            item {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(status)
+            }
+        } else {
+            item { Text(status, fontFamily = FontFamily.Monospace) }
+        }
         item {
             DebuggerCard("审计与诊断") {
                 Text("Server 审计：${manager.auditFile.path}", fontFamily = FontFamily.Monospace)
                 Text("Control 审计：${controlBridge.auditFile.path}", fontFamily = FontFamily.Monospace)
                 Text("control 审计固定记录 registerWrite=false / memoryWrite=false / breakpoint=false / rawPacket=false。")
-                Button(Modifier.fillMaxWidth(), ::copyDiagnostics) { Text("复制完整 Debugger 诊断") }
+                Button(
+                    onClick = ::copyDiagnostics,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("复制完整 Debugger 诊断") }
             }
         }
-        item { Spacer(Modifier.height(24.dp)) }
+        item { Spacer(modifier = Modifier.height(24.dp)) }
     }
 }
 
 @Composable
 private fun ControlSnapshot(snapshot: HostDebuggerControlSnapshot) {
-    Text("clientConnected=${snapshot.connected} controlAuthorized=${snapshot.controlAuthorizationVerified} targetRunning=${snapshot.targetRunning}", fontFamily = FontFamily.Monospace)
+    Text(
+        "clientConnected=${snapshot.connected} controlAuthorized=${snapshot.controlAuthorizationVerified} targetRunning=${snapshot.targetRunning}",
+        fontFamily = FontFamily.Monospace,
+    )
     Text("lastStop=${snapshot.lastStopReply ?: "无"}", fontFamily = FontFamily.Monospace)
-    Text("continue=${snapshot.continueCommandSent} step=${snapshot.stepCommandSent} interrupt=${snapshot.interruptCommandSent}", fontFamily = FontFamily.Monospace)
-    Text("registerRead=${snapshot.registerReadCommandSent} memoryRead=${snapshot.memoryReadCommandSent}", fontFamily = FontFamily.Monospace)
-    Text("registerWrite=${snapshot.registerWriteCommandSent} memoryWrite=${snapshot.memoryWriteCommandSent} breakpoint=${snapshot.breakpointCommandSent}", fontFamily = FontFamily.Monospace)
+    Text(
+        "continue=${snapshot.continueCommandSent} step=${snapshot.stepCommandSent} interrupt=${snapshot.interruptCommandSent}",
+        fontFamily = FontFamily.Monospace,
+    )
+    Text(
+        "registerRead=${snapshot.registerReadCommandSent} memoryRead=${snapshot.memoryReadCommandSent}",
+        fontFamily = FontFamily.Monospace,
+    )
+    Text(
+        "registerWrite=${snapshot.registerWriteCommandSent} memoryWrite=${snapshot.memoryWriteCommandSent} breakpoint=${snapshot.breakpointCommandSent}",
+        fontFamily = FontFamily.Monospace,
+    )
     snapshot.failure?.let { Text("controlFailure=$it", color = MaterialTheme.colorScheme.error) }
 }
 
@@ -381,19 +537,49 @@ private fun ControlSnapshot(snapshot: HostDebuggerControlSnapshot) {
 private fun DebuggerSnapshot(snapshot: HostDebuggerSessionSnapshot) {
     Text("Session=${snapshot.sessionId}", fontFamily = FontFamily.Monospace)
     Text("package=${snapshot.packageName} pid=${snapshot.pid} port=${snapshot.port}", fontFamily = FontFamily.Monospace)
-    Text("serverRunning=${snapshot.running} helperPid=${snapshot.helperPid ?: "无"} exit=${snapshot.exitCode ?: "无"}", fontFamily = FontFamily.Monospace)
-    Text("attachedObserved=${snapshot.attachedObserved} tracerBefore=${snapshot.tracerPidBefore} tracerCurrent=${snapshot.tracerPidCurrent ?: "未知"}", fontFamily = FontFamily.Monospace)
-    Text("targetStateChanged=${snapshot.targetStateChanged} detachVerified=${snapshot.detachVerified}", fontFamily = FontFamily.Monospace)
-    Text("targetSignalAttempted=${snapshot.targetSignalAttempted} helperSignalSent=${snapshot.helperSignalSent}", fontFamily = FontFamily.Monospace)
+    Text(
+        "serverRunning=${snapshot.running} helperPid=${snapshot.helperPid ?: "无"} exit=${snapshot.exitCode ?: "无"}",
+        fontFamily = FontFamily.Monospace,
+    )
+    Text(
+        "attachedObserved=${snapshot.attachedObserved} tracerBefore=${snapshot.tracerPidBefore} tracerCurrent=${snapshot.tracerPidCurrent ?: "未知"}",
+        fontFamily = FontFamily.Monospace,
+    )
+    Text(
+        "targetStateChanged=${snapshot.targetStateChanged} detachVerified=${snapshot.detachVerified}",
+        fontFamily = FontFamily.Monospace,
+    )
+    Text(
+        "targetSignalAttempted=${snapshot.targetSignalAttempted} helperSignalSent=${snapshot.helperSignalSent}",
+        fontFamily = FontFamily.Monospace,
+    )
     snapshot.failure?.let { Text("failure=$it", color = MaterialTheme.colorScheme.error) }
-    if (snapshot.stdout.isNotBlank()) SelectionContainer { Text(snapshot.stdout.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace) }
-    if (snapshot.stderr.isNotBlank()) SelectionContainer { Text(snapshot.stderr.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.error) }
+    if (snapshot.stdout.isNotBlank()) {
+        SelectionContainer {
+            Text(snapshot.stdout.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace)
+        }
+    }
+    if (snapshot.stderr.isNotBlank()) {
+        SelectionContainer {
+            Text(
+                snapshot.stderr.takeLast(MAX_OUTPUT_CHARS),
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
 }
 
 @Composable
 private fun DebuggerCard(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             HorizontalDivider()
             content()
@@ -421,7 +607,8 @@ private fun buildDebuggerDiagnostic(
     appendLine("Control审计：$controlAuditPath")
     appendLine("边界：loopback only；寄存器/内存只读；允许显式授权 continue/step/interrupt；无 register write / memory write / breakpoint / raw packet adapter")
     server?.let { result ->
-        appendLine(); appendLine("[server] session=${result.sessionId}")
+        appendLine()
+        appendLine("[server] session=${result.sessionId}")
         appendLine("package=${result.packageName} pid=${result.pid} port=${result.port}")
         appendLine("running=${result.running} exit=${result.exitCode ?: "无"} failure=${result.failure ?: "无"}")
         appendLine("helperPid=${result.helperPid ?: "无"} helperSignalSent=${result.helperSignalSent}")
@@ -431,7 +618,8 @@ private fun buildDebuggerDiagnostic(
         appendLine("targetStateChanged=${result.targetStateChanged} detachVerified=${result.detachVerified}")
         appendLine("targetSignalAttempted=${result.targetSignalAttempted}")
     }
-    appendLine(); appendLine("[client-control]")
+    appendLine()
+    appendLine("[client-control]")
     appendLine("session=${control.sessionId ?: "无"} package=${control.packageName ?: "无"} pid=${control.pid ?: "无"} port=${control.port ?: "无"}")
     appendLine("controlAuthorizationVerified=${control.controlAuthorizationVerified}")
     appendLine("clientConnected=${control.connected} targetRunning=${control.targetRunning}")
@@ -449,7 +637,9 @@ private fun buildDebuggerDiagnostic(
     appendLine("controlFailure=${control.failure ?: "无"}")
     if (control.registers.isNotEmpty()) {
         appendLine("registers:")
-        control.registers.forEach { appendLine("  #${it.index} ${it.name} ${it.bitSize ?: "?"}bit=${it.rawHex}") }
+        control.registers.forEach {
+            appendLine("  #${it.index} ${it.name} ${it.bitSize ?: "?"}bit=${it.rawHex}")
+        }
     }
     control.lastMemoryHex?.let { appendLine("memoryHex=$it") }
 }
