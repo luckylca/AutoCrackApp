@@ -37,16 +37,13 @@ object DynamicHostProcessCommandFactory {
                 /^Uid:/ { uid = ${'$'}2 }
                 END {
                   if (name != "" && ppid != "" && uid != "") {
-                    printf "%s\t%s\t%s\t%s", ppid, uid, state, name
+                    printf "%s %s %s %s", ppid, uid, state, name
                   }
                 }
               ' "${'$'}proc/status" 2>/dev/null) || return 0
               [ -n "${'$'}fields" ] || return 0
 
-              old_ifs=${'$'}IFS
-              IFS='\t'
               set -- ${'$'}fields
-              IFS=${'$'}old_ifs
               ppid=${'$'}{1:-}
               uid=${'$'}{2:-}
               state=${'$'}{3:-}
