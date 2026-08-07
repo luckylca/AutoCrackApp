@@ -22,6 +22,8 @@ class DynamicHostProcessCommandFactoryTest {
         assertTrue(shell.contains("pidof \"${'$'}filter\""))
         assertTrue(shell.contains("matches_filter \"${'$'}parent_pid\""))
         assertTrue(shell.contains("parent_candidate=\"${'$'}parent_pid\""))
+        assertTrue(shell.contains("parent_matched=0"))
+        assertTrue(shell.contains("parent_matched=1"))
         assertTrue(shell.contains("AUTOCRACK_DISCOVERY"))
         assertTrue(shell.contains("emit_pid \"${'$'}pid\""))
         assertTrue(shell.contains("[ \"${'$'}count\" -ge \"${'$'}max_count\" ] && break"))
