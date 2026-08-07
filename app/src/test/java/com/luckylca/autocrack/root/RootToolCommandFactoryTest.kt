@@ -1,6 +1,7 @@
 package com.luckylca.autocrack.root
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -63,5 +64,86 @@ class RootToolCommandFactoryTest {
                 ),
             )
         }
+    }
+
+    @Test
+    fun buildProcessList_quotesFilterAndRemainsReadOnly() {
+        val command = RootToolCommandFactory.build(
+            suPath = "/system/bin/su",
+            command = RootToolCommand.ListHostProcesses(
+                filter = "com.example'app",
+                maxCount = 25,
+            ),
+        )
+
+        val shell = command.last()
+        assertTrue(shell.contains("filter='com.example'\"'\"'app'"))
+        assertTrue(shell.contains("/proc/[0-9]*"))
+        assertReadOnlyDynamicShell(shell)
+    }
+
+    @Test
+    fun buildProcessList_rejectsControlCharactersInFilter() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RootToolCommandFactory.build(
+                suPath = "/system/bin/su",
+                command = RootToolCommand.ListHostProcesses(filter = "com.example\nid"),
+            )
+        }
+    }
+
+    @Test
+    fun buildProcessInspection_rejectsInvalidPid() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RootToolCommandFactory.build(
+                suPath = "/system/bin/su",
+                command = RootToolCommand.ReadProcessMaps(pid = 0),
+            )
+        }
+    }
+
+    @Test
+    fun buildAttachPreflight_explicitlyDoesNotAttachOrChangeState() {
+        val command = RootToolCommandFactory.build(
+            suPath = "/system/bin/su",
+            command = RootToolCommand.ReadProcessAttachPreflight(pid = 1234),
+        )
+
+        val shell = command.last()
+        assertTrue(shell.contains("attach_attempted=false"))
+        assertTrue(shell.contains("state_changed=false"))
+        assertTrue(shell.contains("proc=/proc/1234"))
+        assertTrue(shell.contains("grep -E"))
+        assertTrue(shell.contains("ptrace_scope"))
+        assertReadOnlyDynamicShell(shell)
+    }
+
+    @Test
+    fun buildThreadAndFdCommands_applyBoundedLimits() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RootToolCommandFactory.build(
+                suPath = "/system/bin/su",
+                command = RootToolCommand.ListProcessThreads(pid = 123, maxCount = 0),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RootToolCommandFactory.build(
+                suPath = "/system/bin/su",
+                command = RootToolCommand.ListProcessFileDescriptors(
+                    pid = 123,
+                    maxCount = 10_000,
+                ),
+            )
+        }
+    }
+
+    private fun assertReadOnlyDynamicShell(shell: String) {
+        val normalized = shell.lowercase()
+        assertFalse(normalized.contains("ptrace("))
+        assertFalse(normalized.contains(" ptrace "))
+        assertFalse(normalized.contains("gdbserver"))
+        assertFalse(normalized.contains("lldb-server"))
+        assertFalse(normalized.contains("kill "))
+        assertFalse(normalized.contains("/proc/") && normalized.contains(" > /proc/"))
     }
 }

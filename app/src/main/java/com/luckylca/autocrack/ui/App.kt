@@ -31,6 +31,7 @@ private enum class AppScreen {
     LINUX,
     TOOLPACKS,
     TERMINAL,
+    DYNAMIC,
 }
 
 @Composable
@@ -49,6 +50,7 @@ fun AutoCrackApp() {
                     AppScreen.LINUX -> ChrootRuntimeScreen()
                     AppScreen.TOOLPACKS -> ToolpackScreen()
                     AppScreen.TERMINAL -> PtyTerminalScreen()
+                    AppScreen.DYNAMIC -> DynamicInspectionScreen()
                 }
 
                 Row(
@@ -77,6 +79,9 @@ fun AutoCrackApp() {
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.TERMINAL }) {
                         Text("终端")
+                    }
+                    FilledTonalButton(onClick = { screen = AppScreen.DYNAMIC }) {
+                        Text("动态")
                     }
                 }
             }
