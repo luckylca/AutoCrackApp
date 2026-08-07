@@ -35,6 +35,9 @@ import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.BuildConfig
 import com.luckylca.autocrack.runtime.DynamicHostReadBridge
 import com.luckylca.autocrack.runtime.HostDebuggerAuthorization
+import com.luckylca.autocrack.runtime.HostDebuggerControlAuthorization
+import com.luckylca.autocrack.runtime.HostDebuggerControlBridge
+import com.luckylca.autocrack.runtime.HostDebuggerControlSnapshot
 import com.luckylca.autocrack.runtime.HostDebuggerSessionManager
 import com.luckylca.autocrack.runtime.HostDebuggerSessionSnapshot
 import com.luckylca.autocrack.runtime.HostProcessListReport
@@ -44,23 +47,33 @@ import kotlinx.coroutines.launch
 fun DebuggerSessionScreen(
     bridge: DynamicHostReadBridge,
     manager: HostDebuggerSessionManager,
+    controlBridge: HostDebuggerControlBridge,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-
     var processFilter by remember { mutableStateOf("") }
     var packageName by remember { mutableStateOf("") }
     var pidText by remember { mutableStateOf("") }
     var portText by remember { mutableStateOf(HostDebuggerSessionManager.DEFAULT_PORT.toString()) }
-    var authorization by remember { mutableStateOf("") }
+    var attachAuthorization by remember { mutableStateOf("") }
+    var controlAuthorization by remember { mutableStateOf("") }
+    var registerLimitText by remember { mutableStateOf("16") }
+    var memoryAddressText by remember { mutableStateOf("") }
+    var memoryLengthText by remember { mutableStateOf("32") }
     var processReport by remember { mutableStateOf<HostProcessListReport?>(null) }
-    var snapshot by remember { mutableStateOf(manager.snapshot()) }
+    var serverSnapshot by remember { mutableStateOf(manager.snapshot()) }
+    var controlSnapshot by remember { mutableStateOf(controlBridge.snapshot()) }
     var loading by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("尚未执行调试器操作") }
 
-    fun expectedPhrase(): String? {
+    fun expectedAttachPhrase(): String? {
         val pid = pidText.toIntOrNull() ?: return null
         return runCatching { HostDebuggerAuthorization.expected(packageName.trim(), pid) }.getOrNull()
+    }
+
+    fun expectedControlPhrase(): String? {
+        val server = serverSnapshot ?: return null
+        return runCatching { HostDebuggerControlAuthorization.expected(server.packageName, server.pid) }.getOrNull()
     }
 
     fun listProcesses() {
@@ -91,20 +104,17 @@ fun DebuggerSessionScreen(
         }
         scope.launch {
             loading = true
-            status = "正在进行最终 PID 身份复核并显式 attach；目标会暂时停止"
+            status = "正在最终复核 PID 身份并 attach；目标会暂时停止"
             runCatching {
-                manager.start(
-                    packageName = targetPackage,
-                    pid = pid,
-                    port = port,
-                    authorizationPhrase = authorization,
-                )
+                manager.start(targetPackage, pid, port, attachAuthorization)
             }.onSuccess { result ->
-                snapshot = result
+                serverSnapshot = result
+                controlSnapshot = controlBridge.snapshot()
+                controlAuthorization = ""
                 status = if (result.attachedObserved) {
-                    "LLDB server 已附加：TracerPid=${result.tracerPidCurrent}，目标当前处于调试停止状态"
+                    "LLDB server 已附加：TracerPid=${result.tracerPidCurrent}；可进行第二层 CONTROL 授权"
                 } else if (result.running) {
-                    "LLDB server helper 已启动，但尚未确认 TracerPid；请刷新状态"
+                    "LLDB server helper 已启动，但尚未确认 TracerPid；请刷新"
                 } else {
                     "LLDB server 已退出：exit=${result.exitCode ?: "无"}"
                 }
@@ -118,9 +128,10 @@ fun DebuggerSessionScreen(
             loading = true
             runCatching { manager.refresh() }
                 .onSuccess { result ->
-                    snapshot = result
+                    serverSnapshot = result
+                    controlSnapshot = controlBridge.snapshot()
                     status = result?.let {
-                        "Debugger 状态：running=${it.running}, tracer=${it.tracerPidCurrent ?: "未知"}, detachVerified=${it.detachVerified}"
+                        "Debugger：serverRunning=${it.running}, tracer=${it.tracerPidCurrent ?: "未知"}, clientConnected=${controlSnapshot.connected}"
                     } ?: "当前没有 debugger session"
                 }
                 .onFailure { exception -> status = exception.message ?: "刷新 debugger 状态失败" }
@@ -128,28 +139,128 @@ fun DebuggerSessionScreen(
         }
     }
 
+    fun connectClient() {
+        scope.launch {
+            loading = true
+            status = "正在连接 127.0.0.1 LLDB gdb-remote；不会发送写入或断点命令"
+            runCatching { controlBridge.connect(controlAuthorization) }
+                .onSuccess { result ->
+                    controlSnapshot = result
+                    status = "LLDB client 已连接：stop=${result.lastStopReply ?: "未知"} capabilities=${result.capabilities.size}"
+                }
+                .onFailure { exception -> status = exception.message ?: "LLDB client 连接失败" }
+            loading = false
+        }
+    }
+
+    fun readRegisters() {
+        val limit = registerLimitText.toIntOrNull()
+        if (limit == null) {
+            status = "寄存器数量必须是整数"
+            return
+        }
+        scope.launch {
+            loading = true
+            status = "正在读取寄存器；不会写寄存器"
+            runCatching { controlBridge.readRegisters(limit) }
+                .onSuccess { result ->
+                    controlSnapshot = result
+                    status = "寄存器读取完成：${result.registers.size} 个"
+                }
+                .onFailure { exception -> status = exception.message ?: "寄存器读取失败" }
+            loading = false
+        }
+    }
+
+    fun readMemory() {
+        val address = parseHexAddress(memoryAddressText)
+        val length = memoryLengthText.toIntOrNull()
+        if (address == null || length == null) {
+            status = "请输入有效十六进制地址和读取长度"
+            return
+        }
+        scope.launch {
+            loading = true
+            status = "正在执行限长内存读取；不会写入目标内存"
+            runCatching { controlBridge.readMemory(address, length) }
+                .onSuccess { result ->
+                    controlSnapshot = result
+                    status = "内存读取完成：0x${address.toString(16)}，${result.lastMemoryHex?.length?.div(2) ?: 0} B"
+                }
+                .onFailure { exception -> status = exception.message ?: "内存读取失败" }
+            loading = false
+        }
+    }
+
+    fun stepTarget() {
+        scope.launch {
+            loading = true
+            status = "正在单步执行 1 条指令并等待再次停止"
+            runCatching { controlBridge.step() }
+                .onSuccess { result ->
+                    controlSnapshot = result
+                    status = "单步完成：stop=${result.lastStopReply ?: "未知"}"
+                }
+                .onFailure { exception -> status = exception.message ?: "单步失败" }
+            loading = false
+        }
+    }
+
+    fun continueTarget() {
+        scope.launch {
+            loading = true
+            status = "正在恢复目标运行；之后可用协议 interrupt 让目标再次停止"
+            runCatching { controlBridge.continueTarget() }
+                .onSuccess { result ->
+                    controlSnapshot = result
+                    status = "continue 已发送；targetRunning=${result.targetRunning}"
+                }
+                .onFailure { exception -> status = exception.message ?: "continue 失败" }
+            loading = false
+        }
+    }
+
+    fun interruptTarget() {
+        scope.launch {
+            loading = true
+            status = "正在发送 gdb-remote interrupt；这不是 kill(targetPid)"
+            runCatching { controlBridge.interrupt() }
+                .onSuccess { result ->
+                    controlSnapshot = result
+                    status = "interrupt 已发送：targetRunning=${result.targetRunning}, stop=${result.lastStopReply ?: "等待中"}"
+                }
+                .onFailure { exception -> status = exception.message ?: "interrupt 失败" }
+            loading = false
+        }
+    }
+
     fun detachDebugger() {
         scope.launch {
             loading = true
-            status = "正在终止 AutoCrack LLDB helper 并验证 TracerPid 恢复为 0"
-            runCatching { manager.stop() }
-                .onSuccess { result ->
-                    snapshot = result
-                    status = result?.let {
-                        if (it.detachVerified) {
-                            "Detach 已验证：TracerPid=${it.tracerPidCurrent}；请确认目标应用恢复响应"
-                        } else {
-                            "LLDB helper 已结束，但尚未确认安全 detach；不要继续新的 attach"
-                        }
-                    } ?: "当前没有 debugger session"
-                }
-                .onFailure { exception -> status = exception.message ?: "安全 detach 失败" }
+            status = "正在关闭 loopback client、终止受信任 LLDB helper 并验证 TracerPid=0"
+            runCatching {
+                controlSnapshot = controlBridge.prepareForDetach()
+                manager.stop()
+            }.onSuccess { result ->
+                serverSnapshot = result
+                controlSnapshot = controlBridge.snapshot()
+                status = result?.let {
+                    if (it.detachVerified) "Detach 已验证：TracerPid=${it.tracerPidCurrent}；请确认目标恢复响应"
+                    else "helper 已结束但尚未验证 detach；不要开始新的 attach"
+                } ?: "当前没有 debugger session"
+            }.onFailure { exception -> status = exception.message ?: "安全 detach 失败" }
             loading = false
         }
     }
 
     fun copyDiagnostics() {
-        val text = buildDebuggerDiagnostic(status, snapshot, manager.auditFile.path)
+        val text = buildDebuggerDiagnostic(
+            status,
+            serverSnapshot,
+            controlSnapshot,
+            manager.auditFile.path,
+            controlBridge.auditFile.path,
+        )
         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(
             ClipData.newPlainText("AutoCrackApp Debugger 诊断", text),
         )
@@ -157,208 +268,132 @@ fun DebuggerSessionScreen(
     }
 
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 72.dp, start = 16.dp, end = 16.dp),
+        modifier = Modifier.fillMaxSize().padding(top = 72.dp, start = 16.dp, end = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
+            Text("Controlled LLDB Debugger", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("${BuildConfig.VERSION_NAME} · server attach + bounded loopback client", color = MaterialTheme.colorScheme.primary)
             Text(
-                "Controlled LLDB Server",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "${BuildConfig.VERSION_NAME} · 显式授权 attach/detach · 仅 127.0.0.1",
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                "警告：attach 会立即暂停目标进程。这一阶段只验证 server attach/detach，不连接 LLDB client，不发送断点、寄存器或内存命令。",
+                "边界：可读取寄存器/限长内存并执行 continue/step/interrupt；没有寄存器写、内存写、断点或任意 raw packet 接口。",
                 color = MaterialTheme.colorScheme.error,
             )
         }
-
         item {
             DebuggerCard("1. 选择明确授权的目标") {
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = processFilter,
-                    onValueChange = { processFilter = it },
-                    label = { Text("包名/进程过滤") },
-                    singleLine = true,
-                )
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = ::listProcesses,
-                    enabled = !loading,
-                ) {
-                    Text("只读枚举候选进程")
-                }
+                OutlinedTextField(Modifier.fillMaxWidth(), processFilter, { processFilter = it }, label = { Text("包名/进程过滤") }, singleLine = true)
+                Button(Modifier.fillMaxWidth(), ::listProcesses, enabled = !loading) { Text("只读枚举候选进程") }
                 processReport?.processes?.take(MAX_PROCESS_ROWS)?.forEach { process ->
                     OutlinedButton(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
                             pidText = process.pid.toString()
-                            val argv0 = process.commandLine.trim().substringBefore(' ')
-                            packageName = argv0.substringBefore(':')
-                            authorization = ""
+                            packageName = process.commandLine.trim().substringBefore(' ').substringBefore(':')
+                            attachAuthorization = ""
+                            controlAuthorization = ""
                         },
                     ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                "PID=${process.pid} UID=${process.uid ?: -1} ${process.name}",
-                                fontFamily = FontFamily.Monospace,
-                            )
-                            Text(
-                                process.commandLine.ifBlank { "<empty cmdline>" },
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 2,
-                            )
+                        Column(Modifier.fillMaxWidth()) {
+                            Text("PID=${process.pid} UID=${process.uid ?: -1} ${process.name}", fontFamily = FontFamily.Monospace)
+                            Text(process.commandLine.ifBlank { "<empty cmdline>" }, style = MaterialTheme.typography.bodySmall, maxLines = 2)
                         }
                     }
                 }
             }
         }
-
         item {
-            DebuggerCard("2. 显式授权 attach") {
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = packageName,
-                    onValueChange = {
-                        packageName = it
-                        authorization = ""
-                    },
-                    label = { Text("目标包名") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = pidText,
-                    onValueChange = {
-                        pidText = it.filter(Char::isDigit)
-                        authorization = ""
-                    },
-                    label = { Text("目标 PID") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = portText,
-                    onValueChange = { portText = it.filter(Char::isDigit) },
-                    label = { Text("Loopback 端口") },
-                    singleLine = true,
-                )
-                expectedPhrase()?.let { phrase ->
-                    Text("请输入以下完整授权短语：", fontWeight = FontWeight.SemiBold)
-                    SelectionContainer {
-                        Text(phrase, fontFamily = FontFamily.Monospace)
-                    }
+            DebuggerCard("2. 第一层授权：attach LLDB server") {
+                OutlinedTextField(Modifier.fillMaxWidth(), packageName, { packageName = it; attachAuthorization = ""; controlAuthorization = "" }, label = { Text("目标包名") }, singleLine = true)
+                OutlinedTextField(Modifier.fillMaxWidth(), pidText, { pidText = it.filter(Char::isDigit); attachAuthorization = ""; controlAuthorization = "" }, label = { Text("目标 PID") }, singleLine = true)
+                OutlinedTextField(Modifier.fillMaxWidth(), portText, { portText = it.filter(Char::isDigit) }, label = { Text("Loopback 端口") }, singleLine = true)
+                expectedAttachPhrase()?.let { phrase ->
+                    Text("Attach 授权短语：", fontWeight = FontWeight.SemiBold)
+                    SelectionContainer { Text(phrase, fontFamily = FontFamily.Monospace) }
                 }
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = authorization,
-                    onValueChange = { authorization = it },
-                    label = { Text("授权短语") },
-                    singleLine = true,
-                )
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = ::startDebugger,
-                    enabled = !loading && snapshot?.running != true,
-                ) {
-                    Text("显式授权并启动 LLDB server attach")
-                }
+                OutlinedTextField(Modifier.fillMaxWidth(), attachAuthorization, { attachAuthorization = it }, label = { Text("ATTACH 授权短语") }, singleLine = true)
+                Button(Modifier.fillMaxWidth(), ::startDebugger, enabled = !loading && serverSnapshot?.running != true) { Text("显式授权并启动 LLDB server attach") }
             }
         }
-
         item {
-            DebuggerCard("3. 会话状态与安全 detach") {
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = ::refreshDebugger,
-                    enabled = !loading,
-                ) {
-                    Text("刷新 TracerPid / helper 状态")
+            DebuggerCard("3. 第二层授权：连接 LLDB client") {
+                expectedControlPhrase()?.let { phrase ->
+                    Text("执行控制会恢复目标运行，请再次输入：", fontWeight = FontWeight.SemiBold)
+                    SelectionContainer { Text(phrase, fontFamily = FontFamily.Monospace) }
                 }
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = ::detachDebugger,
-                    enabled = !loading && snapshot?.running == true,
-                ) {
-                    Text("安全终止 LLDB helper 并验证 detach")
-                }
-                snapshot?.let { result -> DebuggerSnapshot(result) }
+                OutlinedTextField(Modifier.fillMaxWidth(), controlAuthorization, { controlAuthorization = it }, label = { Text("CONTROL 授权短语") }, singleLine = true)
+                Button(Modifier.fillMaxWidth(), ::connectClient, enabled = !loading && serverSnapshot?.attachedObserved == true && !controlSnapshot.connected) { Text("授权并连接 127.0.0.1 LLDB client") }
+                ControlSnapshot(controlSnapshot)
             }
         }
-
-        if (loading) {
-            item {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Text(status)
+        item {
+            DebuggerCard("4. 只读观察") {
+                OutlinedTextField(Modifier.fillMaxWidth(), registerLimitText, { registerLimitText = it.filter(Char::isDigit) }, label = { Text("寄存器数量（1..128）") }, singleLine = true)
+                OutlinedButton(Modifier.fillMaxWidth(), ::readRegisters, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("读取寄存器（只读）") }
+                controlSnapshot.registers.take(MAX_REGISTER_ROWS).forEach { register ->
+                    Text("#${register.index} ${register.name} ${register.bitSize ?: "?"}bit = ${register.rawHex}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                }
+                OutlinedTextField(Modifier.fillMaxWidth(), memoryAddressText, { memoryAddressText = it }, label = { Text("内存地址（hex，例如 0x7abc...）") }, singleLine = true)
+                OutlinedTextField(Modifier.fillMaxWidth(), memoryLengthText, { memoryLengthText = it.filter(Char::isDigit) }, label = { Text("读取字节数（1..512）") }, singleLine = true)
+                OutlinedButton(Modifier.fillMaxWidth(), ::readMemory, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("读取内存（只读、限长）") }
+                controlSnapshot.lastMemoryHex?.let { hex -> SelectionContainer { Text("0x${controlSnapshot.lastMemoryAddress?.toString(16)}: $hex", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) } }
             }
-        } else {
-            item { Text(status, fontFamily = FontFamily.Monospace) }
         }
-
+        item {
+            DebuggerCard("5. 执行控制") {
+                Text("continue/step 会改变目标执行状态，但不会修改寄存器值、内存内容或插入断点。")
+                Button(Modifier.fillMaxWidth(), ::stepTarget, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("Single step 1 instruction") }
+                Button(Modifier.fillMaxWidth(), ::continueTarget, enabled = !loading && controlSnapshot.connected && !controlSnapshot.targetRunning) { Text("Continue target") }
+                OutlinedButton(Modifier.fillMaxWidth(), ::interruptTarget, enabled = !loading && controlSnapshot.connected && controlSnapshot.targetRunning) { Text("Interrupt and stop again") }
+            }
+        }
+        item {
+            DebuggerCard("6. 状态与安全 detach") {
+                OutlinedButton(Modifier.fillMaxWidth(), ::refreshDebugger, enabled = !loading) { Text("刷新 TracerPid / client 状态") }
+                Button(Modifier.fillMaxWidth(), ::detachDebugger, enabled = !loading && serverSnapshot?.running == true) { Text("安全关闭 client/helper 并验证 detach") }
+                serverSnapshot?.let { DebuggerSnapshot(it) }
+            }
+        }
+        if (loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()); Text(status) }
+        else item { Text(status, fontFamily = FontFamily.Monospace) }
         item {
             DebuggerCard("审计与诊断") {
-                Text("Debugger 审计：${manager.auditFile.path}", fontFamily = FontFamily.Monospace)
-                Text(
-                    "审计会明确记录 attachAttempted/targetStateChanged/helperSignalSent；不会把 debugger attach 伪装成 read-only。",
-                )
-                Button(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = ::copyDiagnostics,
-                ) {
-                    Text("复制完整 Debugger 诊断")
-                }
+                Text("Server 审计：${manager.auditFile.path}", fontFamily = FontFamily.Monospace)
+                Text("Control 审计：${controlBridge.auditFile.path}", fontFamily = FontFamily.Monospace)
+                Text("control 审计固定记录 registerWrite=false / memoryWrite=false / breakpoint=false / rawPacket=false。")
+                Button(Modifier.fillMaxWidth(), ::copyDiagnostics) { Text("复制完整 Debugger 诊断") }
             }
         }
-
         item { Spacer(Modifier.height(24.dp)) }
     }
+}
+
+@Composable
+private fun ControlSnapshot(snapshot: HostDebuggerControlSnapshot) {
+    Text("clientConnected=${snapshot.connected} controlAuthorized=${snapshot.controlAuthorizationVerified} targetRunning=${snapshot.targetRunning}", fontFamily = FontFamily.Monospace)
+    Text("lastStop=${snapshot.lastStopReply ?: "无"}", fontFamily = FontFamily.Monospace)
+    Text("continue=${snapshot.continueCommandSent} step=${snapshot.stepCommandSent} interrupt=${snapshot.interruptCommandSent}", fontFamily = FontFamily.Monospace)
+    Text("registerRead=${snapshot.registerReadCommandSent} memoryRead=${snapshot.memoryReadCommandSent}", fontFamily = FontFamily.Monospace)
+    Text("registerWrite=${snapshot.registerWriteCommandSent} memoryWrite=${snapshot.memoryWriteCommandSent} breakpoint=${snapshot.breakpointCommandSent}", fontFamily = FontFamily.Monospace)
+    snapshot.failure?.let { Text("controlFailure=$it", color = MaterialTheme.colorScheme.error) }
 }
 
 @Composable
 private fun DebuggerSnapshot(snapshot: HostDebuggerSessionSnapshot) {
     Text("Session=${snapshot.sessionId}", fontFamily = FontFamily.Monospace)
     Text("package=${snapshot.packageName} pid=${snapshot.pid} port=${snapshot.port}", fontFamily = FontFamily.Monospace)
-    Text("running=${snapshot.running} helperPid=${snapshot.helperPid ?: "无"} exit=${snapshot.exitCode ?: "无"}", fontFamily = FontFamily.Monospace)
+    Text("serverRunning=${snapshot.running} helperPid=${snapshot.helperPid ?: "无"} exit=${snapshot.exitCode ?: "无"}", fontFamily = FontFamily.Monospace)
     Text("attachedObserved=${snapshot.attachedObserved} tracerBefore=${snapshot.tracerPidBefore} tracerCurrent=${snapshot.tracerPidCurrent ?: "未知"}", fontFamily = FontFamily.Monospace)
-    Text("stateBefore=${snapshot.targetStateBefore ?: "未知"}", fontFamily = FontFamily.Monospace)
-    Text("stateCurrent=${snapshot.targetStateCurrent ?: "未知"}", fontFamily = FontFamily.Monospace)
     Text("targetStateChanged=${snapshot.targetStateChanged} detachVerified=${snapshot.detachVerified}", fontFamily = FontFamily.Monospace)
     Text("targetSignalAttempted=${snapshot.targetSignalAttempted} helperSignalSent=${snapshot.helperSignalSent}", fontFamily = FontFamily.Monospace)
-    Text("autoCrackClientConnected=${snapshot.autoCrackClientConnected} memoryCommandSent=${snapshot.memoryCommandSent}", fontFamily = FontFamily.Monospace)
-    Text("registerWriteCommandSent=${snapshot.registerWriteCommandSent} breakpointCommandSent=${snapshot.breakpointCommandSent}", fontFamily = FontFamily.Monospace)
     snapshot.failure?.let { Text("failure=$it", color = MaterialTheme.colorScheme.error) }
-    if (snapshot.stdout.isNotBlank()) {
-        SelectionContainer {
-            Text(snapshot.stdout.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace)
-        }
-    }
-    if (snapshot.stderr.isNotBlank()) {
-        SelectionContainer {
-            Text(
-                snapshot.stderr.takeLast(MAX_OUTPUT_CHARS),
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-    }
+    if (snapshot.stdout.isNotBlank()) SelectionContainer { Text(snapshot.stdout.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace) }
+    if (snapshot.stderr.isNotBlank()) SelectionContainer { Text(snapshot.stderr.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.error) }
 }
 
 @Composable
 private fun DebuggerCard(title: String, content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
+    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             HorizontalDivider()
             content()
@@ -366,38 +401,59 @@ private fun DebuggerCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
+private fun parseHexAddress(text: String): Long? {
+    val normalized = text.trim().removePrefix("0x").removePrefix("0X")
+    if (normalized.isBlank()) return null
+    return normalized.toLongOrNull(16)?.takeIf { it >= 0L }
+}
+
 private fun buildDebuggerDiagnostic(
     status: String,
-    snapshot: HostDebuggerSessionSnapshot?,
-    auditPath: String,
+    server: HostDebuggerSessionSnapshot?,
+    control: HostDebuggerControlSnapshot,
+    serverAuditPath: String,
+    controlAuditPath: String,
 ): String = buildString {
     appendLine("AutoCrackApp Controlled Debugger 诊断")
     appendLine("版本：${BuildConfig.VERSION_NAME}")
     appendLine("状态：$status")
-    appendLine("审计：$auditPath")
-    appendLine("边界：显式授权 attach/detach；loopback only；本阶段无 AutoCrack LLDB client、断点/寄存器/内存命令")
-    snapshot?.let { result ->
-        appendLine()
-        appendLine("session=${result.sessionId}")
+    appendLine("Server审计：$serverAuditPath")
+    appendLine("Control审计：$controlAuditPath")
+    appendLine("边界：loopback only；寄存器/内存只读；允许显式授权 continue/step/interrupt；无 register write / memory write / breakpoint / raw packet adapter")
+    server?.let { result ->
+        appendLine(); appendLine("[server] session=${result.sessionId}")
         appendLine("package=${result.packageName} pid=${result.pid} port=${result.port}")
         appendLine("running=${result.running} exit=${result.exitCode ?: "无"} failure=${result.failure ?: "无"}")
         appendLine("helperPid=${result.helperPid ?: "无"} helperSignalSent=${result.helperSignalSent}")
         appendLine("explicitAuthorizationVerified=${result.explicitAuthorizationVerified}")
         appendLine("attachAttempted=${result.attachAttempted} attachedObserved=${result.attachedObserved}")
         appendLine("tracerPidBefore=${result.tracerPidBefore} tracerPidCurrent=${result.tracerPidCurrent ?: "未知"}")
-        appendLine("targetStateBefore=${result.targetStateBefore ?: "未知"}")
-        appendLine("targetStateCurrent=${result.targetStateCurrent ?: "未知"}")
         appendLine("targetStateChanged=${result.targetStateChanged} detachVerified=${result.detachVerified}")
         appendLine("targetSignalAttempted=${result.targetSignalAttempted}")
-        appendLine("autoCrackClientConnected=${result.autoCrackClientConnected}")
-        appendLine("memoryCommandSent=${result.memoryCommandSent}")
-        appendLine("registerWriteCommandSent=${result.registerWriteCommandSent}")
-        appendLine("breakpointCommandSent=${result.breakpointCommandSent}")
-        appendLine("outputTruncated=${result.outputTruncated}")
-        if (result.stdout.isNotBlank()) appendLine("stdout:\n${result.stdout}")
-        if (result.stderr.isNotBlank()) appendLine("stderr:\n${result.stderr}")
     }
+    appendLine(); appendLine("[client-control]")
+    appendLine("session=${control.sessionId ?: "无"} package=${control.packageName ?: "无"} pid=${control.pid ?: "无"} port=${control.port ?: "无"}")
+    appendLine("controlAuthorizationVerified=${control.controlAuthorizationVerified}")
+    appendLine("clientConnected=${control.connected} targetRunning=${control.targetRunning}")
+    appendLine("lastStopReply=${control.lastStopReply ?: "无"}")
+    appendLine("capabilityCount=${control.capabilities.size}")
+    appendLine("continueCommandSent=${control.continueCommandSent}")
+    appendLine("stepCommandSent=${control.stepCommandSent}")
+    appendLine("interruptCommandSent=${control.interruptCommandSent}")
+    appendLine("registerReadCommandSent=${control.registerReadCommandSent} registerCount=${control.registers.size}")
+    appendLine("memoryReadCommandSent=${control.memoryReadCommandSent} memoryAddress=${control.lastMemoryAddress?.let { "0x${it.toString(16)}" } ?: "无"}")
+    appendLine("registerWriteCommandSent=${control.registerWriteCommandSent}")
+    appendLine("memoryWriteCommandSent=${control.memoryWriteCommandSent}")
+    appendLine("breakpointCommandSent=${control.breakpointCommandSent}")
+    appendLine("rawPacketAdapterExposed=false")
+    appendLine("controlFailure=${control.failure ?: "无"}")
+    if (control.registers.isNotEmpty()) {
+        appendLine("registers:")
+        control.registers.forEach { appendLine("  #${it.index} ${it.name} ${it.bitSize ?: "?"}bit=${it.rawHex}") }
+    }
+    control.lastMemoryHex?.let { appendLine("memoryHex=$it") }
 }
 
-private const val MAX_PROCESS_ROWS = 80
-private const val MAX_OUTPUT_CHARS = 20_000
+private const val MAX_PROCESS_ROWS = 24
+private const val MAX_REGISTER_ROWS = 48
+private const val MAX_OUTPUT_CHARS = 8_000
