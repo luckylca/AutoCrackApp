@@ -1,18 +1,22 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.12",
+  "catalogVersion": "0.5.13",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
-    "readOnly": true,
-    "attachAllowed": false,
+    "defaultOperationMode": "read_only",
+    "readOnly": false,
+    "attachAllowed": true,
+    "attachRequiresExplicitAuthorization": true,
     "signalsAllowed": false,
     "injectionAllowed": false,
     "memoryWriteAllowed": false,
     "targetFileWriteAllowed": false,
     "helperSessionLifecycleAllowed": true,
+    "debuggerAttachDetachAllowed": true,
     "audit": "runtime/audit/dynamic-host-read.jsonl",
-    "sessionAudit": "runtime/audit/dynamic-logcat.jsonl"
+    "logcatAudit": "runtime/audit/dynamic-logcat.jsonl",
+    "debuggerAudit": "runtime/audit/dynamic-debugger.jsonl"
   },
   "tools": [
     {
@@ -136,6 +140,45 @@
         "stop only signals the AutoCrack logcat helper"
       ],
       "implementation": "HostLogcatSessionManager"
+    },
+    {
+      "id": "host.debugger.lldb_server_session",
+      "title": "Explicitly attach and detach a trusted Android LLDB server",
+      "runtime": "typed_root_host_session",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "DEBUGGER_ATTACH"],
+      "requiresToolpack": {
+        "id": "android-lldb-server",
+        "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"
+      },
+      "changesState": true,
+      "changesTargetState": true,
+      "confirmation": "exact_target_phrase",
+      "authorizationTemplate": "ATTACH <packageName> <pid>",
+      "inputs": {
+        "packageName": "validated Android package name",
+        "pid": "positive integer; AutoCrack controller PID is rejected",
+        "port": "validated loopback TCP port"
+      },
+      "networkScope": "127.0.0.1 only",
+      "output": "HostDebuggerSessionSnapshot",
+      "artifacts": ["runtime/audit/dynamic-debugger.jsonl"],
+      "targetEffects": [
+        "ptrace attach is attempted only after exact authorization",
+        "successful attach immediately stops the target process",
+        "terminating the LLDB helper is used to detach and allow the target to continue"
+      ],
+      "guarantees": [
+        "revalidate package/PID identity in Kotlin and again inside the root helper immediately before attach",
+        "reject a target whose TracerPid is already nonzero",
+        "bind LLDB gdb-remote server to loopback only",
+        "stop signals only the identity-checked AutoCrack LLDB helper, never the target PID",
+        "no automatic SIGKILL escalation",
+        "AutoCrack 0.5.13 does not connect an LLDB client",
+        "AutoCrack 0.5.13 sends no breakpoint, register-write or memory commands",
+        "detach verification requires TracerPid to return to 0"
+      ],
+      "protocolExposureNote": "While the server is running, the LLDB gdb-remote protocol exists on a loopback port. Phase 5.13 does not expose a client adapter and the session should be kept short.",
+      "implementation": "HostDebuggerSessionManager"
     }
   ]
 }
