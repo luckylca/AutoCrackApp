@@ -15,8 +15,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 34
-        versionName = "0.5.13-phase5.13-controlled-lldb-server"
+        versionCode = 35
+        versionName = "0.5.14-phase5.14-lldb-client-observation"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
