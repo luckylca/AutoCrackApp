@@ -1,0 +1,193 @@
+name: Build Android LLDB server toolpack
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lldb-server-toolpack-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-lldb-server-toolpack:
+    name: Build pinned NDK r27d ARM64 LLDB server package
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    env:
+      NDK_VERSION: "27.3.13750724"
+      NDK_RELEASE: "r27d"
+      LLVM_REVISION: "r522817d"
+      TOOLPACK_ID: android-lldb-server
+      TOOLPACK_VERSION: ndk-r27d-clang-r522817d_autocrack-1.0.0
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${NDK_VERSION}"
+
+      - name: Locate and fingerprint official ARM64 lldb-server
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/source dist/payload/bin
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          test -d "$NDK_ROOT"
+
+          # NDK releases have used both lib/clang and lib64/clang layouts. Discover every
+          # lldb-server first, then select the Android AArch64 ELF instead of assuming a path.
+          find "$NDK_ROOT" -type f -name lldb-server -print | LC_ALL=C sort \
+            | tee dist/source/lldb-server-candidates.txt
+          test -s dist/source/lldb-server-candidates.txt
+
+          LLDB_SERVER=''
+          while IFS= read -r candidate; do
+            [ -f "$candidate" ] || continue
+            if file "$candidate" | grep -Fq 'ARM aarch64'; then
+              LLDB_SERVER="$candidate"
+              break
+            fi
+          done < dist/source/lldb-server-candidates.txt
+          test -n "$LLDB_SERVER"
+
+          cp "$LLDB_SERVER" dist/payload/bin/lldb-server-android
+          chmod 0755 dist/payload/bin/lldb-server-android
+          sha256sum dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.sha256
+          file dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.file.txt
+          readelf -h dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.elf-header.txt
+          readelf -l dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.program-headers.txt
+          file dist/payload/bin/lldb-server-android | grep -F 'ARM aarch64'
+          file dist/payload/bin/lldb-server-android | grep -F 'statically linked'
+          if readelf -l dist/payload/bin/lldb-server-android | grep -q ' INTERP '; then
+            echo 'Unexpected dynamic interpreter in pinned Android lldb-server' >&2
+            exit 1
+          fi
+          printf '%s\n' "$LLDB_SERVER" > dist/source/lldb-server.ndk-path.txt
+          printf '%s\n' 'https://github.com/android/ndk/releases/tag/r27d' > dist/source/lldb-server.source-url.txt
+
+      - name: Build deterministic payload and manifest
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          payload_root = Path('dist/payload')
+          payload_zip = Path('dist/payload.zip')
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+          with zipfile.ZipFile(payload_zip, 'w', compression=zipfile.ZIP_STORED) as archive:
+              for path in sorted(p for p in payload_root.rglob('*') if p.is_file()):
+                  relative = path.relative_to(payload_root).as_posix()
+                  mode = 0o755 if relative.startswith('bin/') else 0o644
+                  info = zipfile.ZipInfo(relative, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | mode) << 16
+                  archive.writestr(info, path.read_bytes())
+
+          payload_bytes = payload_zip.read_bytes()
+          payload_sha = hashlib.sha256(payload_bytes).hexdigest()
+          payload_size = len(payload_bytes)
+          source_binary = Path('dist/payload/bin/lldb-server-android').read_bytes()
+          source_sha = hashlib.sha256(source_binary).hexdigest()
+          source_url = Path('dist/source/lldb-server.source-url.txt').read_text().strip()
+
+          manifest = {
+              'schemaVersion': 1,
+              'id': os.environ['TOOLPACK_ID'],
+              'title': 'Android LLDB server',
+              'version': os.environ['TOOLPACK_VERSION'],
+              'architecture': 'arm64',
+              'payloadEntry': 'payload.zip',
+              'payloadSha256': payload_sha,
+              'payloadSizeBytes': payload_size,
+              'requiredPaths': ['bin/lldb-server-android'],
+              'commands': [
+                  {'name': 'lldb-server-android', 'relativePath': 'bin/lldb-server-android'}
+              ],
+              'selfTests': [
+                  {
+                      'id': 'lldb-server-version',
+                      'title': 'Android LLDB server',
+                      'command': 'lldb-server-android v',
+                      'expectedExitCodes': [0],
+                      'outputContains': ['lldb']
+                  }
+              ],
+              'sources': [
+                  {
+                      'name': 'lldb-server',
+                      'version': f"ndk-{os.environ['NDK_RELEASE']}-clang-{os.environ['LLVM_REVISION']}",
+                      'url': source_url,
+                      'sha256': source_sha
+                  }
+              ]
+          }
+          Path('dist/manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          Path('dist/payload.sha256').write_text(payload_sha + '\n', encoding='utf-8')
+          Path('dist/payload.size').write_text(str(payload_size) + '\n', encoding='utf-8')
+          print(f'LLDB_SERVER_SOURCE_SHA256={source_sha}')
+          print(f'LLDB_SERVER_PAYLOAD_SHA256={payload_sha}')
+          print(f'LLDB_SERVER_PAYLOAD_SIZE={payload_size}')
+          PY
+
+      - name: Package deterministic toolpack
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          output = Path('dist/AutoCrackApp-android-lldb-server-toolpack.zip')
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+          with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_STORED) as archive:
+              for name in ('manifest.json', 'payload.zip'):
+                  path = Path('dist') / name
+                  info = zipfile.ZipInfo(name, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | 0o644) << 16
+                  archive.writestr(info, path.read_bytes())
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          Path(str(output) + '.sha256').write_text(f'{digest}  {output.name}\n', encoding='utf-8')
+          print(f'LLDB_SERVER_TOOLPACK_SHA256={digest}')
+          PY
+          unzip -t dist/AutoCrackApp-android-lldb-server-toolpack.zip
+          jq -e '.id == "android-lldb-server"' dist/manifest.json >/dev/null
+          jq -e '.version == "ndk-r27d-clang-r522817d_autocrack-1.0.0"' dist/manifest.json >/dev/null
+
+      - name: Upload Android LLDB server toolpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-lldb-server-toolpack
+          path: |
+            dist/AutoCrackApp-android-lldb-server-toolpack.zip
+            dist/AutoCrackApp-android-lldb-server-toolpack.zip.sha256
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/source/
+          if-no-files-found: error
+          retention-days: 14

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.runtime.DynamicHostReadBridge
+import com.luckylca.autocrack.runtime.HostDebuggerSessionManager
 import com.luckylca.autocrack.runtime.HostLogcatSessionManager
 import com.luckylca.autocrack.runtime.RuntimeLayout
 
@@ -38,6 +39,7 @@ private enum class AppScreen {
     TOOLPACKS,
     TERMINAL,
     DYNAMIC,
+    DEBUGGER,
 }
 
 @Composable
@@ -56,6 +58,19 @@ fun AutoCrackApp() {
     val logcatSessionManager = remember(dynamicLayout, dynamicRootDetector, dynamicRunner) {
         HostLogcatSessionManager(dynamicLayout, dynamicRootDetector, dynamicRunner)
     }
+    val debuggerSessionManager = remember(
+        appContext,
+        dynamicLayout,
+        dynamicRootDetector,
+        dynamicRunner,
+    ) {
+        HostDebuggerSessionManager(
+            context = appContext,
+            layout = dynamicLayout,
+            rootDetector = dynamicRootDetector,
+            runner = dynamicRunner,
+        )
+    }
 
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -70,6 +85,10 @@ fun AutoCrackApp() {
                     AppScreen.DYNAMIC -> DynamicInspectionScreen(
                         bridge = dynamicReadBridge,
                         logcatSessionManager = logcatSessionManager,
+                    )
+                    AppScreen.DEBUGGER -> DebuggerSessionScreen(
+                        bridge = dynamicReadBridge,
+                        manager = debuggerSessionManager,
                     )
                 }
 
@@ -102,6 +121,9 @@ fun AutoCrackApp() {
                     }
                     FilledTonalButton(onClick = { screen = AppScreen.DYNAMIC }) {
                         Text("动态")
+                    }
+                    FilledTonalButton(onClick = { screen = AppScreen.DEBUGGER }) {
+                        Text("调试")
                     }
                 }
             }
