@@ -40,7 +40,7 @@ jobs:
 
       - name: Install pinned Android NDK
         run: |
-          yes | sdkmanager --licenses >/dev/null
+          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;${NDK_VERSION}"
 
       - name: Locate and fingerprint official ARM64 lldb-server
@@ -49,9 +49,23 @@ jobs:
           mkdir -p dist/source dist/payload/bin
           NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
           test -d "$NDK_ROOT"
-          LLDB_SERVER=$(find "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang" \
-            -type f -path '*/lib/linux/aarch64/lldb-server' | LC_ALL=C sort | head -n 1)
+
+          # NDK releases have used both lib/clang and lib64/clang layouts. Discover every
+          # lldb-server first, then select the Android AArch64 ELF instead of assuming a path.
+          find "$NDK_ROOT" -type f -name lldb-server -print | LC_ALL=C sort \
+            | tee dist/source/lldb-server-candidates.txt
+          test -s dist/source/lldb-server-candidates.txt
+
+          LLDB_SERVER=''
+          while IFS= read -r candidate; do
+            [ -f "$candidate" ] || continue
+            if file "$candidate" | grep -Fq 'ARM aarch64'; then
+              LLDB_SERVER="$candidate"
+              break
+            fi
+          done < dist/source/lldb-server-candidates.txt
           test -n "$LLDB_SERVER"
+
           cp "$LLDB_SERVER" dist/payload/bin/lldb-server-android
           chmod 0755 dist/payload/bin/lldb-server-android
           sha256sum dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.sha256
