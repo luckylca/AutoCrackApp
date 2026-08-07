@@ -70,15 +70,26 @@ class DynamicHostProcessCommandFactoryTest {
             filter = marker,
             maxCount = 25,
         ).last()
-        val script = File.createTempFile("autocrack-parent-discovery-", ".sh")
-        script.writeText(shell)
+        val childScript = File.createTempFile("autocrack-parent-discovery-child-", ".sh")
+        val parentScript = File.createTempFile("autocrack-parent-discovery-parent-", ".sh")
+        childScript.writeText(shell)
+        parentScript.writeText(
+            """
+            #!/bin/bash
+            /bin/sh "${'$'}1"
+            sleep 1
+            """.trimIndent() + "\n",
+        )
 
         try {
-            val quotedScript = shellQuote(script.absolutePath)
+            // Keep the marker process alive while the generated command is executing. A one-command
+            // `bash -c` may exec its child as an optimization, which destroys the parent relationship
+            // this regression is specifically intended to model.
             val result = ProcessBuilder(
                 "/bin/bash",
                 "-c",
-                "exec -a '$marker' /bin/bash -c '/bin/sh $quotedScript'",
+                "exec -a '$marker' /bin/bash ${shellQuote(parentScript.absolutePath)} " +
+                    shellQuote(childScript.absolutePath),
             )
                 .redirectErrorStream(true)
                 .start()
@@ -88,7 +99,8 @@ class DynamicHostProcessCommandFactoryTest {
             assertTrue("Expected parent match diagnostic:\n$output", output.contains("parent_matched=1"))
             assertTrue("Expected emitted process:\n$output", output.contains("emitted=1"))
         } finally {
-            script.delete()
+            childScript.delete()
+            parentScript.delete()
         }
     }
 
