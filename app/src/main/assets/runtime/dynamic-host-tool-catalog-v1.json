@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.14",
+  "catalogVersion": "0.5.14.1",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -21,10 +21,13 @@
     "targetFileWriteAllowed": false,
     "helperSessionLifecycleAllowed": true,
     "debuggerAttachDetachAllowed": true,
+    "orphanDebuggerRecoveryAllowed": true,
+    "orphanDebuggerRecoveryRequiresExactAuthorization": true,
     "audit": "runtime/audit/dynamic-host-read.jsonl",
     "logcatAudit": "runtime/audit/dynamic-logcat.jsonl",
     "debuggerAudit": "runtime/audit/dynamic-debugger.jsonl",
-    "debuggerControlAudit": "runtime/audit/dynamic-debugger-control.jsonl"
+    "debuggerControlAudit": "runtime/audit/dynamic-debugger-control.jsonl",
+    "debuggerRecoveryAudit": "runtime/audit/dynamic-debugger-recovery.jsonl"
   },
   "tools": [
     {
@@ -166,6 +169,30 @@
         "interrupt is a gdb-remote protocol byte, not kill(targetPid)"
       ],
       "implementation": "HostDebuggerControlBridge + HostDebuggerRemoteClient"
+    },
+    {
+      "id": "host.debugger.orphan_recovery",
+      "title": "Safely detach an orphaned AutoCrack LLDB helper after controller restart",
+      "runtime": "typed_root_host_bridge",
+      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "DEBUGGER_ATTACH"],
+      "requiresToolpack": {"id": "android-lldb-server", "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"},
+      "changesState": true,
+      "changesTargetState": true,
+      "confirmation": "exact_target_and_tracer_phrase",
+      "authorizationTemplate": "RECOVER <packageName> <pid> <tracerPid>",
+      "output": "HostDebuggerRecoverySnapshot",
+      "artifacts": ["runtime/audit/dynamic-debugger-recovery.jsonl"],
+      "guarantees": [
+        "never terminate a tracer from PID alone",
+        "revalidate target package identity and current TracerPid immediately before recovery",
+        "require tracer argv0 to equal the trusted lldb-server-android binary path",
+        "require tracer cmdline to contain gdbserver loopback mode and --attach <targetPid>",
+        "revalidate the exact expected tracer PID immediately before TERM",
+        "send TERM only to the verified LLDB helper and never to the target PID",
+        "never escalate recovery to SIGKILL",
+        "require final target TracerPid=0 for detachVerified=true"
+      ],
+      "implementation": "HostDebuggerRecoveryBridge"
     }
   ]
 }
