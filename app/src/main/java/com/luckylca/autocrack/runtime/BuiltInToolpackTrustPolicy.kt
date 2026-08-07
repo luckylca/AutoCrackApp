@@ -218,5 +218,31 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "android-lldb-server" to TrustedToolpack(
+            title = "Android LLDB server",
+            version = "ndk-r27d-clang-r522817d_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "2cc969ff785e8c0c3d4473649edaaf18f64faae4c7e016941dd0c0944944a14a",
+            payloadSizeBytes = 27_698_528L,
+            requiredPaths = setOf("bin/lldb-server-android"),
+            commands = mapOf(
+                "lldb-server-android" to "bin/lldb-server-android",
+            ),
+            selfTests = mapOf(
+                "lldb-server-version" to TrustedSelfTest(
+                    title = "Android LLDB server",
+                    command = "lldb-server-android v",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("lldb"),
+                ),
+            ),
+            sources = mapOf(
+                "lldb-server" to TrustedSource(
+                    version = "ndk-r27d-clang-r522817d",
+                    url = "https://github.com/android/ndk/releases/tag/r27d",
+                    sha256 = "ff96d83baa872b2226bb1f4f38cd38aa2622416722fb76543cc536edfeea3018",
+                ),
+            ),
+        ),
     )
 }
