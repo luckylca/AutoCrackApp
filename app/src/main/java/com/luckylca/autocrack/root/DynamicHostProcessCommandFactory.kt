@@ -18,69 +18,87 @@ object DynamicHostProcessCommandFactory {
             max_count=$maxCount
             self_pid=${'$'}${'$'}
             parent_pid=${'$'}{PPID:-0}
-            export filter max_count self_pid parent_pid
+            count=0
 
             printf 'pid\tppid\tuid\tstate\tname\tcmdline\n'
 
-            emit_ps() {
-              ps -A -n -ww -o PID,PPID,UID,STAT,NAME,ARGS 2>/dev/null && return 0
-              ps -A -n -o PID,PPID,UID,STAT,NAME,ARGS 2>/dev/null
-            }
+            emit_pid() {
+              pid="${'$'}1"
+              [ -n "${'$'}pid" ] || return 0
+              [ "${'$'}pid" = "${'$'}self_pid" ] && return 0
+              [ "${'$'}pid" = "${'$'}parent_pid" ] && return 0
+              proc=/proc/"${'$'}pid"
+              [ -d "${'$'}proc" ] || return 0
 
-            if emit_ps >/dev/null 2>&1; then
-              emit_ps | awk '
-                NR == 1 { next }
-                {
-                  pid = ${'$'}1
-                  if (pid == ENVIRON["self_pid"] || pid == ENVIRON["parent_pid"]) next
-                  line = ${'$'}0
-                  wanted = ENVIRON["filter"]
-                  if (wanted != "" && index(line, wanted) == 0) next
-                  cmdline = ""
-                  for (index = 6; index <= NF; index++) {
-                    cmdline = cmdline (index == 6 ? "" : " ") ${'$'}index
+              fields=${'$'}(awk '
+                /^Name:/ { name = ${'$'}2 }
+                /^State:/ { state = ${'$'}2 }
+                /^PPid:/ { ppid = ${'$'}2 }
+                /^Uid:/ { uid = ${'$'}2 }
+                END {
+                  if (name != "" && ppid != "" && uid != "") {
+                    printf "%s\t%s\t%s\t%s", ppid, uid, state, name
                   }
-                  printf "%s\t%s\t%s\t%s\t%s\t%s\n", ${'$'}1, ${'$'}2, ${'$'}3, ${'$'}4, ${'$'}5, cmdline
-                  count++
-                  if (count >= (ENVIRON["max_count"] + 0)) exit
                 }
-              '
-              exit 0
-            fi
+              ' "${'$'}proc/status" 2>/dev/null) || return 0
+              [ -n "${'$'}fields" ] || return 0
 
-            count=0
-            for proc in /proc/[0-9]*; do
-              [ -d "${'$'}proc" ] || continue
-              pid=${'$'}{proc##*/}
-              [ "${'$'}pid" = "${'$'}self_pid" ] && continue
-              [ "${'$'}pid" = "${'$'}parent_pid" ] && continue
+              old_ifs=${'$'}IFS
+              IFS='\t'
+              set -- ${'$'}fields
+              IFS=${'$'}old_ifs
+              ppid=${'$'}{1:-}
+              uid=${'$'}{2:-}
+              state=${'$'}{3:-}
+              name=${'$'}{4:-}
 
-              name=''
-              IFS= read -r name < "${'$'}proc/comm" 2>/dev/null || continue
               cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | tr '\t\r\n' '   ')
 
               if [ -n "${'$'}filter" ]; then
                 case "${'$'}name ${'$'}cmdline" in
                   *"${'$'}filter"*) ;;
-                  *) continue ;;
+                  *) return 0 ;;
                 esac
               fi
-
-              fields=${'$'}(awk '
-                /^State:/ { state = ${'$'}2 }
-                /^PPid:/ { ppid = ${'$'}2 }
-                /^Uid:/ { uid = ${'$'}2 }
-                END { if (ppid != "" && uid != "") print ppid, uid, state }
-              ' "${'$'}proc/status" 2>/dev/null) || continue
-              [ -n "${'$'}fields" ] || continue
-              set -- ${'$'}fields
-              ppid=${'$'}{1:-}
-              uid=${'$'}{2:-}
-              state=${'$'}{3:-}
 
               printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
                 "${'$'}pid" "${'$'}ppid" "${'$'}uid" "${'$'}state" "${'$'}name" "${'$'}cmdline"
               count=${'$'}((count + 1))
+            }
+
+            if [ -n "${'$'}filter" ]; then
+              # Filtered discovery is authoritative from procfs. Android ps column layouts vary
+              # between platform/toybox versions, while /proc/<pid>/cmdline keeps the real argv0.
+              candidate_pids=${'$'}(
+                {
+                  pidof "${'$'}filter" 2>/dev/null || true
+                  grep -l -F -- "${'$'}filter" /proc/[0-9]*/cmdline 2>/dev/null || true
+                  grep -l -F -- "${'$'}filter" /proc/[0-9]*/comm 2>/dev/null || true
+                } | sed -n \
+                  -e 's#^/proc/\([0-9][0-9]*\)/cmdline${'$'}#\1#p' \
+                  -e 's#^/proc/\([0-9][0-9]*\)/comm${'$'}#\1#p' \
+                  -e '/^[0-9][0-9 ]*${'$'}/p' \
+                  | tr ' ' '\n' \
+                  | sed -n '/^[0-9][0-9]*${'$'}/p' \
+                  | sort -n -u
+              )
+
+              for pid in ${'$'}candidate_pids; do
+                emit_pid "${'$'}pid"
+                [ "${'$'}count" -ge "${'$'}max_count" ] && break
+              done
+              exit 0
+            fi
+
+            # Unfiltered discovery can use ps as a cheap PID source, but procfs remains the source
+            # of truth for identity fields and command line parsing.
+            candidate_pids=${'$'}(ps -A -o PID= 2>/dev/null | sed -n '/^[[:space:]]*[0-9][0-9]*[[:space:]]*${'$'}/p' | tr -d ' ')
+            if [ -z "${'$'}candidate_pids" ]; then
+              candidate_pids=${'$'}(for proc in /proc/[0-9]*; do [ -d "${'$'}proc" ] && printf '%s\n' "${'$'}{proc##*/}"; done)
+            fi
+
+            for pid in ${'$'}candidate_pids; do
+              emit_pid "${'$'}pid"
               [ "${'$'}count" -ge "${'$'}max_count" ] && break
             done
         """.trimIndent()
