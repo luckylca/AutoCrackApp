@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.runtime.DynamicHostReadBridge
+import com.luckylca.autocrack.runtime.HostDebuggerControlBridge
 import com.luckylca.autocrack.runtime.HostDebuggerSessionManager
 import com.luckylca.autocrack.runtime.HostLogcatSessionManager
 import com.luckylca.autocrack.runtime.RuntimeLayout
@@ -71,6 +72,9 @@ fun AutoCrackApp() {
             runner = dynamicRunner,
         )
     }
+    val debuggerControlBridge = remember(debuggerSessionManager) {
+        HostDebuggerControlBridge(debuggerSessionManager)
+    }
 
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -89,6 +93,7 @@ fun AutoCrackApp() {
                     AppScreen.DEBUGGER -> DebuggerSessionScreen(
                         bridge = dynamicReadBridge,
                         manager = debuggerSessionManager,
+                        controlBridge = debuggerControlBridge,
                     )
                 }
 
