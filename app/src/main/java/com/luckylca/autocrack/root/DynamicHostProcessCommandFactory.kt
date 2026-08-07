@@ -82,8 +82,10 @@ object DynamicHostProcessCommandFactory {
               # KSU/Magisk su -c may exec the shell directly. In that case PPID is the calling app
               # itself, so PPID is a legitimate target and must never be excluded as helper noise.
               parent_candidate=''
+              parent_matched=0
               if [ "${'$'}parent_pid" -gt 0 ] 2>/dev/null && matches_filter "${'$'}parent_pid"; then
                 parent_candidate="${'$'}parent_pid"
+                parent_matched=1
               fi
 
               # Filtered discovery is authoritative from procfs. Android ps column layouts vary
@@ -111,7 +113,7 @@ object DynamicHostProcessCommandFactory {
 
               printf 'AUTOCRACK_DISCOVERY filter=%s self_pid=%s parent_pid=%s parent_matched=%s candidates=%s emitted=%s\n' \
                 "${'$'}filter" "${'$'}self_pid" "${'$'}parent_pid" \
-                "${'$'}{parent_candidate:+1}" "${'$'}candidate_count" "${'$'}count" >&2
+                "${'$'}parent_matched" "${'$'}candidate_count" "${'$'}count" >&2
               exit 0
             fi
 
