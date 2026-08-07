@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.13",
+  "catalogVersion": "0.5.14",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -8,15 +8,23 @@
     "readOnly": false,
     "attachAllowed": true,
     "attachRequiresExplicitAuthorization": true,
+    "debuggerExecutionControlAllowed": true,
+    "debuggerExecutionControlRequiresExplicitAuthorization": true,
+    "registerReadAllowed": true,
+    "registerWriteAllowed": false,
+    "memoryReadAllowed": true,
+    "memoryWriteAllowed": false,
+    "breakpointAllowed": false,
+    "rawDebuggerPacketAllowed": false,
     "signalsAllowed": false,
     "injectionAllowed": false,
-    "memoryWriteAllowed": false,
     "targetFileWriteAllowed": false,
     "helperSessionLifecycleAllowed": true,
     "debuggerAttachDetachAllowed": true,
     "audit": "runtime/audit/dynamic-host-read.jsonl",
     "logcatAudit": "runtime/audit/dynamic-logcat.jsonl",
-    "debuggerAudit": "runtime/audit/dynamic-debugger.jsonl"
+    "debuggerAudit": "runtime/audit/dynamic-debugger.jsonl",
+    "debuggerControlAudit": "runtime/audit/dynamic-debugger-control.jsonl"
   },
   "tools": [
     {
@@ -26,10 +34,7 @@
       "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {
-        "filter": "optional literal process/package substring",
-        "maxCount": "1..2000"
-      },
+      "inputs": {"filter": "optional literal process/package substring", "maxCount": "1..2000"},
       "output": "HostProcessListReport",
       "implementation": "RootToolCommand.ListHostProcesses"
     },
@@ -41,14 +46,7 @@
       "changesState": false,
       "confirmation": "none",
       "inputs": {"pid": "positive integer"},
-      "reads": [
-        "/proc/<pid>/status",
-        "/proc/<pid>/cmdline",
-        "/proc/<pid>/exe",
-        "/proc/<pid>/cwd",
-        "/proc/<pid>/root",
-        "/proc/<pid>/attr/current"
-      ],
+      "reads": ["/proc/<pid>/status", "/proc/<pid>/cmdline", "/proc/<pid>/exe", "/proc/<pid>/cwd", "/proc/<pid>/root", "/proc/<pid>/attr/current"],
       "output": "CommandResult",
       "implementation": "RootToolCommand.ReadProcessIdentity"
     },
@@ -61,13 +59,7 @@
       "confirmation": "none",
       "inputs": {"pid": "positive integer"},
       "output": "CommandResult",
-      "guarantees": [
-        "attachAttempted=false",
-        "stateChanged=false",
-        "no ptrace",
-        "no target signal",
-        "no target memory access"
-      ],
+      "guarantees": ["attachAttempted=false", "stateChanged=false", "no ptrace", "no target signal", "no target memory access"],
       "implementation": "RootToolCommand.ReadProcessAttachPreflight"
     },
     {
@@ -89,10 +81,7 @@
       "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {
-        "pid": "positive integer",
-        "maxCount": "1..8192"
-      },
+      "inputs": {"pid": "positive integer", "maxCount": "1..8192"},
       "reads": ["/proc/<pid>/task/*/comm", "/proc/<pid>/task/*/status"],
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessThreads"
@@ -104,10 +93,7 @@
       "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {
-        "pid": "positive integer",
-        "maxCount": "1..4096"
-      },
+      "inputs": {"pid": "positive integer", "maxCount": "1..4096"},
       "reads": ["/proc/<pid>/fd/*"],
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessFileDescriptors"
@@ -120,25 +106,10 @@
       "changesState": true,
       "changesTargetState": false,
       "confirmation": "explicit_user_action",
-      "inputs": {
-        "packageName": "validated Android package name",
-        "pid": "positive integer whose current argv0 must match packageName or packageName:*"
-      },
+      "inputs": {"packageName": "validated Android package name", "pid": "positive integer whose current argv0 must match packageName or packageName:*"},
       "command": "logcat --pid=<pid> -v threadtime",
       "output": "HostLogcatSessionSnapshot",
-      "artifacts": [
-        "runtime/sessions/logcat/<sessionId>.log",
-        "runtime/audit/dynamic-logcat.jsonl"
-      ],
-      "guarantees": [
-        "revalidate PID/package identity immediately before start",
-        "read target logs only",
-        "attachAttempted=false",
-        "injectionAttempted=false",
-        "targetSignalAttempted=false",
-        "memoryWriteAttempted=false",
-        "stop only signals the AutoCrack logcat helper"
-      ],
+      "artifacts": ["runtime/sessions/logcat/<sessionId>.log", "runtime/audit/dynamic-logcat.jsonl"],
       "implementation": "HostLogcatSessionManager"
     },
     {
@@ -146,39 +117,55 @@
       "title": "Explicitly attach and detach a trusted Android LLDB server",
       "runtime": "typed_root_host_session",
       "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "DEBUGGER_ATTACH"],
-      "requiresToolpack": {
-        "id": "android-lldb-server",
-        "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"
-      },
+      "requiresToolpack": {"id": "android-lldb-server", "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"},
       "changesState": true,
       "changesTargetState": true,
       "confirmation": "exact_target_phrase",
       "authorizationTemplate": "ATTACH <packageName> <pid>",
-      "inputs": {
-        "packageName": "validated Android package name",
-        "pid": "positive integer; AutoCrack controller PID is rejected",
-        "port": "validated loopback TCP port"
-      },
+      "inputs": {"packageName": "validated Android package name", "pid": "positive integer; AutoCrack controller PID is rejected", "port": "validated loopback TCP port"},
       "networkScope": "127.0.0.1 only",
       "output": "HostDebuggerSessionSnapshot",
       "artifacts": ["runtime/audit/dynamic-debugger.jsonl"],
-      "targetEffects": [
-        "ptrace attach is attempted only after exact authorization",
-        "successful attach immediately stops the target process",
-        "terminating the LLDB helper is used to detach and allow the target to continue"
-      ],
       "guarantees": [
-        "revalidate package/PID identity in Kotlin and again inside the root helper immediately before attach",
+        "revalidate package/PID identity immediately before attach",
         "reject a target whose TracerPid is already nonzero",
         "bind LLDB gdb-remote server to loopback only",
-        "stop signals only the identity-checked AutoCrack LLDB helper, never the target PID",
-        "no automatic SIGKILL escalation",
-        "AutoCrack 0.5.13 does not connect an LLDB client",
-        "AutoCrack 0.5.13 sends no breakpoint, register-write or memory commands",
+        "helper teardown never signals the target PID",
         "detach verification requires TracerPid to return to 0"
       ],
-      "protocolExposureNote": "While the server is running, the LLDB gdb-remote protocol exists on a loopback port. Phase 5.13 does not expose a client adapter and the session should be kept short.",
       "implementation": "HostDebuggerSessionManager"
+    },
+    {
+      "id": "host.debugger.client_control",
+      "title": "Bounded loopback LLDB client observation and execution control",
+      "runtime": "typed_loopback_debugger_client",
+      "requiresCapabilities": ["DEBUGGER_ATTACH", "DEBUGGER_READ", "DEBUGGER_EXECUTION_CONTROL"],
+      "requiresActiveTool": "host.debugger.lldb_server_session",
+      "changesState": true,
+      "changesTargetState": true,
+      "confirmation": "exact_target_phrase",
+      "authorizationTemplate": "CONTROL <packageName> <pid>",
+      "networkScope": "127.0.0.1 only",
+      "operations": [
+        {"id": "stop_reason", "changesTargetState": false},
+        {"id": "register_read", "changesTargetState": false, "maxRegisters": 128},
+        {"id": "memory_read", "changesTargetState": false, "maxBytes": 512},
+        {"id": "continue", "changesTargetState": true},
+        {"id": "step", "changesTargetState": true},
+        {"id": "interrupt", "changesTargetState": true}
+      ],
+      "output": "HostDebuggerControlSnapshot",
+      "artifacts": ["runtime/audit/dynamic-debugger-control.jsonl"],
+      "guarantees": [
+        "no arbitrary raw gdb-remote packet adapter",
+        "no register write adapter",
+        "no memory write adapter",
+        "no breakpoint insertion or removal adapter",
+        "memory reads are bounded to 512 bytes in the UI bridge",
+        "execution control requires exact CONTROL package/PID authorization",
+        "interrupt is a gdb-remote protocol byte, not kill(targetPid)"
+      ],
+      "implementation": "HostDebuggerControlBridge + HostDebuggerRemoteClient"
     }
   ]
 }
