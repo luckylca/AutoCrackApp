@@ -128,6 +128,10 @@ object DynamicHostProcessCommandFactory {
               emit_pid "${'$'}pid"
               [ "${'$'}count" -ge "${'$'}max_count" ] && break
             done
+
+            # A false max-count predicate on the last loop iteration must not leak out as the
+            # command's process exit status. Successful enumeration is always exit 0.
+            exit 0
         """.trimIndent()
 
         return listOf(suPath, "-c", shellCommand)
