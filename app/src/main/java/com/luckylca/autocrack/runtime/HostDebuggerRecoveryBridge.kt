@@ -54,7 +54,6 @@ object HostDebuggerRecoveryCommandFactory {
         binaryPath = binaryPath,
         packageName = packageName,
         pid = pid,
-        terminateHelper = false,
     )
 
     fun buildDetach(
@@ -84,9 +83,7 @@ object HostDebuggerRecoveryCommandFactory {
         binaryPath: String,
         packageName: String,
         pid: Int,
-        terminateHelper: Boolean,
     ): List<String> {
-        require(!terminateHelper) { "Use buildDetach for state-changing recovery" }
         requireSuPath(suPath)
         return listOf(
             suPath,
@@ -96,6 +93,10 @@ object HostDebuggerRecoveryCommandFactory {
         )
     }
 
+    /**
+     * Accept both the legacy server-side --attach command and the newer targetless gdbserver that
+     * subsequently became this target's TracerPid through the typed client vAttach operation.
+     */
     private fun buildValidatedShell(
         binaryPath: String,
         packageName: String,
@@ -129,9 +130,15 @@ object HostDebuggerRecoveryCommandFactory {
               echo "RECOVERY_HELPER_IDENTITY_MISMATCH tracer=${'$'}tracer argv0=${'$'}tracer_argv0" >&2
               exit 54
             }
-            tracer_cmdline=${'$'}(tr '\000' ' ' < "${'$'}tracer_proc/cmdline" 2>/dev/null)
+            tracer_cmdline=${'$'}(tr '\000' ' ' < "${'$'}tracer_proc/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')
             case "${'$'}tracer_cmdline" in
               "${'$'}binary gdbserver 127.0.0.1:"*" --attach ${'$'}target_pid"*) ;;
+              "${'$'}binary gdbserver 127.0.0.1:"*)
+                case "${'$'}tracer_cmdline" in
+                  *" --attach "*) echo "RECOVERY_HELPER_COMMAND_MISMATCH tracer=${'$'}tracer" >&2; exit 54 ;;
+                  *) ;;
+                esac
+                ;;
               *) echo "RECOVERY_HELPER_COMMAND_MISMATCH tracer=${'$'}tracer" >&2; exit 54 ;;
             esac
         """.trimIndent()
@@ -179,7 +186,9 @@ class HostDebuggerRecoveryBridge(
             helperSignalSent = false,
             detachVerified = false,
             targetSignalAttempted = false,
-            failure = if (result.succeeded) null else result.failure ?: result.stderr.ifBlank { "遗留 LLDB helper 身份复核失败" },
+            failure = if (result.succeeded) null else {
+                result.failure ?: result.stderr.ifBlank { "遗留 LLDB helper 身份复核失败" }
+            },
         )
         appendAudit("inspect", snapshot)
         return snapshot
@@ -238,16 +247,12 @@ class HostDebuggerRecoveryBridge(
     private suspend fun requireEnvironment(): RecoveryEnvironment {
         layout.initialize()
         val rootStatus = rootDetector.inspect()
-        require(rootStatus.isRootGranted) {
-            rootStatus.diagnostic ?: "Debugger recovery 需要 Root 权限"
-        }
+        require(rootStatus.isRootGranted) { rootStatus.diagnostic ?: "Debugger recovery 需要 Root 权限" }
         val suPath = requireNotNull(rootStatus.suPath) { "Root 已授权但没有可用的 su 路径" }
-        val installed = installer.listInstalled()
-            .firstOrNull { toolpack ->
-                toolpack.manifest.id == HostDebuggerSessionManager.TOOLPACK_ID &&
-                    toolpack.manifest.version == HostDebuggerSessionManager.TOOLPACK_VERSION
-            }
-            ?: error("未安装受信任 Android LLDB server 工具包")
+        val installed = installer.listInstalled().firstOrNull { toolpack ->
+            toolpack.manifest.id == HostDebuggerSessionManager.TOOLPACK_ID &&
+                toolpack.manifest.version == HostDebuggerSessionManager.TOOLPACK_VERSION
+        } ?: error("未安装受信任 Android LLDB server 工具包")
         BuiltInToolpackTrustPolicy.requireTrusted(installed.manifest)
         val root = File(installed.installedPath).canonicalFile
         val binary = File(root, LLDB_SERVER_RELATIVE_PATH).canonicalFile
@@ -261,8 +266,7 @@ class HostDebuggerRecoveryBridge(
 
     private fun parseTracerPid(stdout: String): Int? = stdout.lineSequence()
         .firstOrNull { it.startsWith("tracer_pid=") }
-        ?.substringAfter('=')
-        ?.toIntOrNull()
+        ?.substringAfter('=')?.toIntOrNull()
 
     private suspend fun appendAudit(event: String, snapshot: HostDebuggerRecoverySnapshot) =
         withContext(Dispatchers.IO) {
@@ -280,9 +284,7 @@ class HostDebuggerRecoveryBridge(
                 .put("targetSignalAttempted", false)
                 .put("detachVerified", snapshot.detachVerified)
                 .put("failure", snapshot.failure ?: JSONObject.NULL)
-            synchronized(AUDIT_LOCK) {
-                auditFile.appendText(record.toString() + "\n", Charsets.UTF_8)
-            }
+            synchronized(AUDIT_LOCK) { auditFile.appendText(record.toString() + "\n", Charsets.UTF_8) }
         }
 
     private fun sha256(file: File): String {
@@ -298,10 +300,7 @@ class HostDebuggerRecoveryBridge(
         return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
     }
 
-    private data class RecoveryEnvironment(
-        val suPath: String,
-        val binary: File,
-    )
+    private data class RecoveryEnvironment(val suPath: String, val binary: File)
 
     companion object {
         private const val LLDB_SERVER_RELATIVE_PATH = "bin/lldb-server-android"
