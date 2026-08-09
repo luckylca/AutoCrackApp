@@ -12,9 +12,9 @@ import java.nio.charset.StandardCharsets
 /**
  * Minimal client for the loopback gdb-remote endpoint exposed by the trusted Android lldb-server.
  *
- * Phase 5.14 deliberately implements only observation and execution-control commands:
- * handshake/stop query, register reads, bounded memory reads, continue, single-step and interrupt.
- * There is intentionally no packet adapter for register writes, memory writes or breakpoints.
+ * Phase 5.14 deliberately implements only a fixed typed attach operation plus observation and
+ * execution-control commands. There is intentionally no arbitrary/raw packet adapter and no
+ * register-write, memory-write or breakpoint adapter.
  */
 class HostDebuggerRemoteClient(
     private val port: Int,
@@ -36,25 +36,21 @@ class HostDebuggerRemoteClient(
     val connected: Boolean
         get() = socket?.let { candidate -> candidate.isConnected && !candidate.isClosed } == true
 
+    /** Connect to a targetless lldb-server and negotiate transport capabilities only. */
     fun connect(): GdbRemoteHandshake {
         require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
         check(!connected) { "GDB remote client is already connected" }
 
         val created = Socket()
         created.tcpNoDelay = true
-        created.connect(
-            ipv4LoopbackEndpoint(port),
-            connectTimeoutMillis,
-        )
+        created.connect(ipv4LoopbackEndpoint(port), connectTimeoutMillis)
         created.soTimeout = observationTimeoutMillis
         socket = created
         input = created.getInputStream()
         output = created.getOutputStream()
 
         return try {
-            val supported = request(
-                "qSupported:multiprocess+;QStartNoAckMode+;vContSupported+",
-            )
+            val supported = request("qSupported:multiprocess+;QStartNoAckMode+;vContSupported+")
             val capabilities = supported
                 .split(';')
                 .map(String::trim)
@@ -67,15 +63,28 @@ class HostDebuggerRemoteClient(
                 noAckMode = true
             }
 
-            val stopReply = request("?")
-            GdbRemoteHandshake(
-                capabilities = capabilities,
-                stopReply = stopReply,
-            )
+            GdbRemoteHandshake(capabilities = capabilities)
         } catch (exception: Exception) {
             close()
             throw exception
         }
+    }
+
+    /**
+     * Attach the already authorized PID using LLDB's typed vAttach packet. PID is encoded in
+     * hexadecimal exactly as LLDB's ProcessGDBRemote client does.
+     */
+    fun attach(pid: Int): String {
+        require(pid > 0) { "Attach PID must be positive" }
+        val response = requestWithTimeout(
+            payload = "vAttach;${pid.toString(16)}",
+            timeoutMillis = CONTROL_COMMAND_TIMEOUT_MILLIS,
+        )
+        require(!response.startsWith('E')) { "LLDB attach failed: $response" }
+        require(response.startsWith('T') || response.startsWith('S')) {
+            "Unexpected LLDB attach response: $response"
+        }
+        return response
     }
 
     fun queryStopReason(): String = request("?")
@@ -114,28 +123,16 @@ class HostDebuggerRemoteClient(
         require(bytes.size == length) {
             "Memory read length mismatch: expected=$length actual=${bytes.size}"
         }
-        return GdbRemoteMemoryRead(
-            address = address,
-            bytes = bytes,
-        )
+        return GdbRemoteMemoryRead(address = address, bytes = bytes)
     }
 
-    /**
-     * Resume the target and wait until lldb-server reports the next stop.
-     * Run this from an IO coroutine. [interrupt] may be called from another coroutine while this waits.
-     */
     fun continueUntilStop(): String = requestWithTimeout("vCont;c", timeoutMillis = 0)
 
-    /** Single-instruction step. The target should immediately produce another stop reply. */
     fun step(): String = requestWithTimeout(
         payload = "vCont;s",
         timeoutMillis = CONTROL_COMMAND_TIMEOUT_MILLIS,
     )
 
-    /**
-     * Send the gdb-remote asynchronous interrupt byte. This is not a target PID signal and does not
-     * use Android kill(2); lldb-server translates the protocol interrupt into debugger control.
-     */
     fun interrupt() {
         requireConnected()
         synchronized(writeLock) {
@@ -172,7 +169,6 @@ class HostDebuggerRemoteClient(
             sendPacket(payload)
             while (true) {
                 val response = readPacket()
-                // Remote console output is encoded as O<hex bytes> and may precede a stop reply.
                 if (isConsoleOutputPacket(response)) continue
                 return@synchronized response
             }
@@ -219,9 +215,7 @@ class HostDebuggerRemoteClient(
         }
         val checksumHigh = stream.read()
         val checksumLow = stream.read()
-        if (checksumHigh < 0 || checksumLow < 0) {
-            throw EOFException("Incomplete GDB remote checksum")
-        }
+        if (checksumHigh < 0 || checksumLow < 0) throw EOFException("Incomplete GDB remote checksum")
         val expected = hexPairToInt(checksumHigh, checksumLow)
         val bytes = payload.toByteArray()
         val actual = GdbRemotePacketCodec.checksum(bytes)
@@ -253,13 +247,10 @@ class HostDebuggerRemoteClient(
     }
 
     private fun isConsoleOutputPacket(payload: String): Boolean =
-        payload.length > 1 &&
-            payload.first() == 'O' &&
-            payload.drop(1).length % 2 == 0 &&
-            payload.drop(1).all(::isHexDigit)
+        payload.length > 1 && payload.first() == 'O' &&
+            payload.drop(1).length % 2 == 0 && payload.drop(1).all(::isHexDigit)
 
-    private fun hexPairToInt(high: Int, low: Int): Int =
-        (hexNibble(high) shl 4) or hexNibble(low)
+    private fun hexPairToInt(high: Int, low: Int): Int = (hexNibble(high) shl 4) or hexNibble(low)
 
     private fun hexNibble(value: Int): Int = when (value.toChar()) {
         in '0'..'9' -> value - '0'.code
@@ -270,12 +261,10 @@ class HostDebuggerRemoteClient(
 
     private class ByteArrayOutputCollector(private val limit: Int) {
         private val bytes = ArrayList<Byte>()
-
         fun add(value: Int) {
             require(bytes.size < limit) { "GDB remote response exceeded $limit bytes" }
             bytes += value.toByte()
         }
-
         fun toByteArray(): ByteArray = ByteArray(bytes.size) { index -> bytes[index] }
     }
 
@@ -284,10 +273,6 @@ class HostDebuggerRemoteClient(
         const val MAX_REGISTER_LIMIT = 512
         const val DEFAULT_REGISTER_LIMIT = 128
 
-        /**
-         * Build the endpoint from raw IPv4 bytes so Android cannot resolve a loopback hostname to
-         * ::1 while lldb-server is intentionally bound to 127.0.0.1 only.
-         */
         internal fun ipv4LoopbackEndpoint(port: Int): InetSocketAddress {
             require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
             val address = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
@@ -310,10 +295,7 @@ class HostDebuggerRemoteClient(
     }
 }
 
-data class GdbRemoteHandshake(
-    val capabilities: Set<String>,
-    val stopReply: String,
-)
+data class GdbRemoteHandshake(val capabilities: Set<String>)
 
 data class GdbRemoteRegisterInfo(
     val index: Int,
@@ -326,15 +308,9 @@ data class GdbRemoteRegisterInfo(
     val genericName: String?,
 )
 
-data class GdbRemoteRegisterValue(
-    val index: Int,
-    val rawHex: String,
-)
+data class GdbRemoteRegisterValue(val index: Int, val rawHex: String)
 
-data class GdbRemoteMemoryRead(
-    val address: Long,
-    val bytes: ByteArray,
-) {
+data class GdbRemoteMemoryRead(val address: Long, val bytes: ByteArray) {
     val hex: String
         get() = bytes.joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
@@ -342,15 +318,10 @@ data class GdbRemoteMemoryRead(
 object GdbRemoteRegisterInfoParser {
     fun parse(index: Int, payload: String): GdbRemoteRegisterInfo {
         require(index >= 0) { "Register index must be non-negative" }
-        val values = payload
-            .split(';')
-            .mapNotNull { field ->
-                val separator = field.indexOf(':')
-                if (separator <= 0) null else {
-                    field.substring(0, separator) to field.substring(separator + 1)
-                }
-            }
-            .toMap()
+        val values = payload.split(';').mapNotNull { field ->
+            val separator = field.indexOf(':')
+            if (separator <= 0) null else field.substring(0, separator) to field.substring(separator + 1)
+        }.toMap()
         val name = values["name"]?.takeIf(String::isNotBlank)
             ?: error("Register metadata is missing name")
         return GdbRemoteRegisterInfo(
@@ -373,8 +344,7 @@ object GdbRemotePacketCodec {
         }
         val payloadBytes = payload.toByteArray(StandardCharsets.US_ASCII)
         val checksum = checksum(payloadBytes)
-        val framed = "\$$payload#%02x".format(checksum)
-        return framed.toByteArray(StandardCharsets.US_ASCII)
+        return "\$$payload#%02x".format(checksum).toByteArray(StandardCharsets.US_ASCII)
     }
 
     fun checksum(payload: ByteArray): Int = payload.fold(0) { sum, byte ->
