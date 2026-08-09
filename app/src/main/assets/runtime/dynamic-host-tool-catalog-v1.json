@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.14.2",
+  "catalogVersion": "0.5.14.3",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -131,9 +131,11 @@
       "output": "HostDebuggerSessionSnapshot",
       "artifacts": ["runtime/audit/dynamic-debugger.jsonl"],
       "guarantees": [
-        "revalidate package/PID identity immediately before attach",
-        "reject a target whose TracerPid is already nonzero",
+        "revalidate package/PID identity immediately before attach and on later status refresh",
+        "reject a target whose TracerPid is already nonzero before the authorized session starts",
         "bind LLDB gdb-remote server to IPv4 loopback 127.0.0.1 only",
+        "create the helper PID file under controller ownership before the root helper writes its PID",
+        "confirm a nonzero TracerPid only when it matches this session helper PID",
         "helper teardown never signals the target PID",
         "detach verification requires TracerPid to return to 0"
       ],
@@ -163,6 +165,10 @@
       "artifacts": ["runtime/audit/dynamic-debugger-control.jsonl"],
       "guarantees": [
         "construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution",
+        "allow CONTROL connection when the authorized server is running and TracerPid is still 0 so the client handshake can complete deferred attach",
+        "after transport handshake require the same server session to report a confirmed nonzero trusted TracerPid before exposing clientConnected=true",
+        "close the client and report failure when post-handshake attach confirmation does not succeed",
+        "reject an unconfirmed nonzero tracer before client connection",
         "no arbitrary raw gdb-remote packet adapter",
         "no register write adapter",
         "no memory write adapter",
