@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -25,6 +26,31 @@ object HostDebuggerControlAuthorization {
             "continue/step 会恢复目标执行；请输入精确控制授权短语：$expected"
         }
     }
+}
+
+/**
+ * A running lldb-server may either attach before a gdb-remote client connects or wait for the
+ * first client handshake before the target becomes traced. Both states are valid candidates for
+ * the second explicit CONTROL gate. A non-zero but unconfirmed tracer is never accepted here.
+ */
+object HostDebuggerControlGate {
+    fun canAttemptConnection(
+        running: Boolean,
+        attachedObserved: Boolean,
+        tracerPidCurrent: Int?,
+        failure: String?,
+    ): Boolean {
+        if (!running || failure != null) return false
+        if (attachedObserved && tracerPidCurrent != null && tracerPidCurrent > 0) return true
+        return tracerPidCurrent == 0
+    }
+
+    fun canAttemptConnection(server: HostDebuggerSessionSnapshot): Boolean = canAttemptConnection(
+        running = server.running,
+        attachedObserved = server.attachedObserved,
+        tracerPidCurrent = server.tracerPidCurrent,
+        failure = server.failure,
+    )
 }
 
 data class HostDebuggerRegisterSnapshot(
@@ -76,9 +102,14 @@ class HostDebuggerControlBridge(
     suspend fun connect(authorizationPhrase: String): HostDebuggerControlSnapshot =
         withContext(Dispatchers.IO) {
             val server = requireNotNull(manager.refresh()) { "当前没有 LLDB server session" }
-            require(server.running) { "LLDB server 未运行" }
-            require(server.attachedObserved && server.tracerPidCurrent != null && server.tracerPidCurrent != 0) {
-                "尚未确认 LLDB server 已 attach，拒绝建立控制客户端"
+            require(HostDebuggerControlGate.canAttemptConnection(server)) {
+                when {
+                    !server.running -> "LLDB server 未运行"
+                    server.failure != null -> "LLDB server 状态异常：${server.failure}"
+                    server.tracerPidCurrent != null && server.tracerPidCurrent != 0 ->
+                        "目标已被未确认 tracer ${server.tracerPidCurrent} 附加；拒绝建立控制客户端"
+                    else -> "LLDB server 当前状态不允许建立控制客户端"
+                }
             }
             HostDebuggerControlAuthorization.requireAuthorized(
                 server.packageName,
@@ -101,17 +132,42 @@ class HostDebuggerControlBridge(
             try {
                 val handshake = created.connect()
                 synchronized(lock) {
-                    client = created
-                    mutable.connected = true
                     mutable.lastStopReply = handshake.stopReply
                     mutable.capabilities = handshake.capabilities.sorted()
                     mutable.targetRunning = false
                 }
-                appendAudit("client_connected")
+                appendAudit("client_transport_connected_attach_pending")
+
+                val confirmedServer = awaitConfirmedAttach(server.sessionId)
+                require(
+                    confirmedServer != null &&
+                        confirmedServer.running &&
+                        confirmedServer.failure == null &&
+                        confirmedServer.attachedObserved &&
+                        confirmedServer.tracerPidCurrent != null &&
+                        confirmedServer.tracerPidCurrent > 0,
+                ) {
+                    val latest = confirmedServer
+                    "LLDB client 已连接，但未确认目标进入可信 traced 状态：" +
+                        "running=${latest?.running ?: false}, " +
+                        "tracer=${latest?.tracerPidCurrent ?: "未知"}, " +
+                        "helper=${latest?.helperPid ?: "未知"}, " +
+                        "failure=${latest?.failure ?: "无"}"
+                }
+
+                synchronized(lock) {
+                    client = created
+                    mutable.connected = true
+                    mutable.failure = null
+                }
+                appendAudit("client_connected_attach_confirmed")
                 snapshot()
             } catch (exception: Exception) {
                 created.close()
                 synchronized(lock) {
+                    client = null
+                    mutable.connected = false
+                    mutable.targetRunning = false
                     mutable.failure = exception.message ?: exception::class.java.simpleName
                 }
                 appendAudit("client_connect_failed")
@@ -266,6 +322,22 @@ class HostDebuggerControlBridge(
         }
     }
 
+    private suspend fun awaitConfirmedAttach(sessionId: String): HostDebuggerSessionSnapshot? {
+        var latest: HostDebuggerSessionSnapshot? = null
+        repeat(POST_CONNECT_ATTACH_ATTEMPTS) {
+            latest = manager.refresh()
+            val current = latest
+            if (current == null || current.sessionId != sessionId || !current.running || current.failure != null) {
+                return current
+            }
+            if (current.attachedObserved && current.tracerPidCurrent != null && current.tracerPidCurrent > 0) {
+                return current
+            }
+            delay(POST_CONNECT_ATTACH_DELAY_MILLIS)
+        }
+        return latest
+    }
+
     private fun requireStoppedClient() {
         synchronized(lock) {
             require(mutable.controlAuthorizationVerified) { "尚未完成 CONTROL 精确授权" }
@@ -355,6 +427,8 @@ class HostDebuggerControlBridge(
         const val DEFAULT_UI_REGISTER_LIMIT = 32
         const val MAX_UI_REGISTER_LIMIT = 128
         const val MAX_UI_MEMORY_READ_BYTES = 512
+        private const val POST_CONNECT_ATTACH_ATTEMPTS = 20
+        private const val POST_CONNECT_ATTACH_DELAY_MILLIS = 150L
         private const val INTERRUPT_WAIT_MILLIS = 5_000L
         private val AUDIT_LOCK = Any()
     }
