@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.14.4",
+  "catalogVersion": "0.5.14.5",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -162,7 +162,8 @@
       "guarantees": [
         "construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution",
         "require a verified helper-owned LISTEN socket before CONTROL can connect",
-        "revalidate the same package/PID and TracerPid=0 immediately before typed vAttach",
+        "after the TCP transport is accepted do not require the single-client LISTEN socket to remain present",
+        "post-accept revalidate the same live verified helper, same package/PID and TracerPid=0 immediately before typed vAttach",
         "encode only the already authorized session PID into the fixed typed vAttach packet",
         "after vAttach require TracerPid to equal the verified session helper PID before exposing clientConnected=true",
         "if post-vAttach confirmation fails close the client and safely tear down only the verified helper",
