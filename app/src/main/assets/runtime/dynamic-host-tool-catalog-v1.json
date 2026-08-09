@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.14.3",
+  "catalogVersion": "0.5.14.4",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -49,7 +49,6 @@
       "changesState": false,
       "confirmation": "none",
       "inputs": {"pid": "positive integer"},
-      "reads": ["/proc/<pid>/status", "/proc/<pid>/cmdline", "/proc/<pid>/exe", "/proc/<pid>/cwd", "/proc/<pid>/root", "/proc/<pid>/attr/current"],
       "output": "CommandResult",
       "implementation": "RootToolCommand.ReadProcessIdentity"
     },
@@ -73,7 +72,6 @@
       "changesState": false,
       "confirmation": "none",
       "inputs": {"pid": "positive integer"},
-      "reads": ["/proc/<pid>/maps"],
       "output": "CommandResult + HostLoadedModule[]",
       "implementation": "RootToolCommand.ReadProcessMaps"
     },
@@ -85,7 +83,6 @@
       "changesState": false,
       "confirmation": "none",
       "inputs": {"pid": "positive integer", "maxCount": "1..8192"},
-      "reads": ["/proc/<pid>/task/*/comm", "/proc/<pid>/task/*/status"],
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessThreads"
     },
@@ -97,7 +94,6 @@
       "changesState": false,
       "confirmation": "none",
       "inputs": {"pid": "positive integer", "maxCount": "1..4096"},
-      "reads": ["/proc/<pid>/fd/*"],
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessFileDescriptors"
     },
@@ -112,17 +108,16 @@
       "inputs": {"packageName": "validated Android package name", "pid": "positive integer whose current argv0 must match packageName or packageName:*"},
       "command": "logcat --pid=<pid> -v threadtime",
       "output": "HostLogcatSessionSnapshot",
-      "artifacts": ["runtime/sessions/logcat/<sessionId>.log", "runtime/audit/dynamic-logcat.jsonl"],
       "implementation": "HostLogcatSessionManager"
     },
     {
       "id": "host.debugger.lldb_server_session",
-      "title": "Explicitly attach and detach a trusted Android LLDB server",
+      "title": "Arm a trusted targetless Android LLDB server for an explicitly authorized target",
       "runtime": "typed_root_host_session",
       "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "DEBUGGER_ATTACH"],
       "requiresToolpack": {"id": "android-lldb-server", "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"},
       "changesState": true,
-      "changesTargetState": true,
+      "changesTargetState": false,
       "confirmation": "exact_target_phrase",
       "authorizationTemplate": "ATTACH <packageName> <pid>",
       "inputs": {"packageName": "validated Android package name", "pid": "positive integer; AutoCrack controller PID is rejected", "port": "validated loopback TCP port"},
@@ -131,11 +126,11 @@
       "output": "HostDebuggerSessionSnapshot",
       "artifacts": ["runtime/audit/dynamic-debugger.jsonl"],
       "guarantees": [
-        "revalidate package/PID identity immediately before attach and on later status refresh",
-        "reject a target whose TracerPid is already nonzero before the authorized session starts",
-        "bind LLDB gdb-remote server to IPv4 loopback 127.0.0.1 only",
+        "revalidate package/PID identity and require TracerPid=0 before arming the server",
+        "start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach",
+        "verify helper argv0 and exact targetless gdbserver command line",
+        "verify the 127.0.0.1 listener socket inode is owned by the verified helper PID",
         "create the helper PID file under controller ownership before the root helper writes its PID",
-        "confirm a nonzero TracerPid only when it matches this session helper PID",
         "helper teardown never signals the target PID",
         "detach verification requires TracerPid to return to 0"
       ],
@@ -143,7 +138,7 @@
     },
     {
       "id": "host.debugger.client_control",
-      "title": "Bounded loopback LLDB client observation and execution control",
+      "title": "Bounded loopback LLDB client typed attach, observation and execution control",
       "runtime": "typed_loopback_debugger_client",
       "requiresCapabilities": ["DEBUGGER_ATTACH", "DEBUGGER_READ", "DEBUGGER_EXECUTION_CONTROL"],
       "requiresActiveTool": "host.debugger.lldb_server_session",
@@ -154,6 +149,7 @@
       "networkScope": "127.0.0.1 only",
       "networkAddressFamily": "IPv4",
       "operations": [
+        {"id": "typed_attach", "changesTargetState": true, "packetShape": "vAttach;<hexPid>"},
         {"id": "stop_reason", "changesTargetState": false},
         {"id": "register_read", "changesTargetState": false, "maxRegisters": 128},
         {"id": "memory_read", "changesTargetState": false, "maxBytes": 512},
@@ -165,10 +161,11 @@
       "artifacts": ["runtime/audit/dynamic-debugger-control.jsonl"],
       "guarantees": [
         "construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution",
-        "allow CONTROL connection when the authorized server is running and TracerPid is still 0 so the client handshake can complete deferred attach",
-        "after transport handshake require the same server session to report a confirmed nonzero trusted TracerPid before exposing clientConnected=true",
-        "close the client and report failure when post-handshake attach confirmation does not succeed",
-        "reject an unconfirmed nonzero tracer before client connection",
+        "require a verified helper-owned LISTEN socket before CONTROL can connect",
+        "revalidate the same package/PID and TracerPid=0 immediately before typed vAttach",
+        "encode only the already authorized session PID into the fixed typed vAttach packet",
+        "after vAttach require TracerPid to equal the verified session helper PID before exposing clientConnected=true",
+        "if post-vAttach confirmation fails close the client and safely tear down only the verified helper",
         "no arbitrary raw gdb-remote packet adapter",
         "no register write adapter",
         "no memory write adapter",
@@ -195,7 +192,7 @@
         "never terminate a tracer from PID alone",
         "revalidate target package identity and current TracerPid immediately before recovery",
         "require tracer argv0 to equal the trusted lldb-server-android binary path",
-        "require tracer cmdline to contain gdbserver loopback mode and --attach <targetPid>",
+        "accept only a trusted IPv4 loopback gdbserver command from either legacy --attach or typed client-driven attach sessions",
         "revalidate the exact expected tracer PID immediately before TERM",
         "send TERM only to the verified LLDB helper and never to the target PID",
         "never escalate recovery to SIGKILL",
