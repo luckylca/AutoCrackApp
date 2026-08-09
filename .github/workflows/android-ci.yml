@@ -59,7 +59,7 @@ jobs:
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
             | jq -e '
-                .catalogVersion == "0.5.14.1" and
+                .catalogVersion == "0.5.14.2" and
                 .safetyBoundary.defaultOperationMode == "read_only" and
                 .safetyBoundary.attachAllowed == true and
                 .safetyBoundary.attachRequiresExplicitAuthorization == true and
@@ -78,10 +78,15 @@ jobs:
                 ([.tools[].id] | index("host.debugger.lldb_server_session") != null) and
                 ([.tools[].id] | index("host.debugger.client_control") != null) and
                 ([.tools[].id] | index("host.debugger.orphan_recovery") != null) and
+                (.tools[] | select(.id == "host.debugger.lldb_server_session") |
+                  .networkScope == "127.0.0.1 only" and
+                  .networkAddressFamily == "IPv4") and
                 (.tools[] | select(.id == "host.debugger.client_control") |
                   .confirmation == "exact_target_phrase" and
                   .authorizationTemplate == "CONTROL <packageName> <pid>" and
                   .networkScope == "127.0.0.1 only" and
+                  .networkAddressFamily == "IPv4" and
+                  ([.guarantees[]] | index("construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution") != null) and
                   ([.operations[].id] | index("register_read") != null) and
                   ([.operations[].id] | index("memory_read") != null) and
                   ([.operations[].id] | index("continue") != null) and
@@ -97,15 +102,15 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.1-orphan-debugger-recovery-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.2-ipv4-loopback-hotfix-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.14.1-orphan-debugger-recovery-debug.apk \
-            > AutoCrackApp-0.5.14.1-orphan-debugger-recovery-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.14.2-ipv4-loopback-hotfix-debug.apk \
+            > AutoCrackApp-0.5.14.2-ipv4-loopback-hotfix-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.1-orphan-debugger-recovery-debug
+          name: AutoCrackApp-0.5.14.2-ipv4-loopback-hotfix-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -114,7 +119,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.1-orphan-debugger-recovery-reports
+          name: AutoCrackApp-0.5.14.2-ipv4-loopback-hotfix-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
