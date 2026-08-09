@@ -15,8 +15,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 37
-        versionName = "0.5.14.2-phase5.14-ipv4-loopback-hotfix"
+        versionCode = 38
+        versionName = "0.5.14.3-phase5.14-deferred-attach-hotfix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
