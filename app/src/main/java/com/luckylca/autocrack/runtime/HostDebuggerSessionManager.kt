@@ -125,7 +125,6 @@ object HostDebuggerCommandFactory {
             esac
             tracer=${'$'}(awk '/^TracerPid:/ { print ${'$'}2; exit }' "${'$'}proc/status" 2>/dev/null)
             [ "${'$'}{tracer:-0}" = "0" ] || { echo "DEBUG_TARGET_ALREADY_TRACED tracer=${'$'}tracer" >&2; exit 43; }
-            umask 077
             printf '%s\n' "${'$'}${'$'}" > "${'$'}helper_pid_file"
             exec "${'$'}binary" gdbserver "127.0.0.1:$port" --attach "${'$'}target_pid"
         """.trimIndent()
@@ -233,6 +232,8 @@ class HostDebuggerSessionManager(
         val sessionId = UUID.randomUUID().toString()
         val helperPidFile = File(sessionRoot, "$sessionId.helper.pid")
         helperPidFile.delete()
+        helperPidFile.parentFile?.mkdirs()
+        helperPidFile.writeText("", Charsets.UTF_8)
         val process = withContext(Dispatchers.IO) {
             ProcessBuilder(
                 HostDebuggerCommandFactory.buildAttach(
@@ -279,8 +280,8 @@ class HostDebuggerSessionManager(
 
     suspend fun refresh(): HostDebuggerSessionSnapshot? {
         val session = synchronized(lock) { activeSession } ?: return null
-        updateTargetStatus(session)
         readHelperPid(session)
+        updateTargetStatus(session)
         return snapshot(session)
     }
 
@@ -351,11 +352,7 @@ class HostDebuggerSessionManager(
             readHelperPid(session)
             updateTargetStatus(session)
             synchronized(lock) {
-                if (session.tracerPidCurrent != null && session.tracerPidCurrent != 0) {
-                    session.attachedObserved = true
-                    session.targetStateChanged = true
-                    return
-                }
+                if (session.attachedObserved) return
                 if (!session.process.isAlive) return
             }
             delay(ATTACH_OBSERVE_DELAY_MILLIS)
@@ -387,11 +384,30 @@ class HostDebuggerSessionManager(
             }
             return
         }
+        if (!HostLogcatIdentityMatcher.matches(session.packageName, identity.stdout)) {
+            synchronized(lock) {
+                session.failure = "PID ${session.pid} 身份已不再属于包 ${session.packageName}；拒绝继续调试会话"
+            }
+            return
+        }
         val parsed = HostDebuggerTargetStatusParser.parse(identity.stdout) ?: return
         synchronized(lock) {
             session.tracerPidCurrent = parsed.tracerPid
             session.targetStateCurrent = parsed.state
             if (parsed.tracerPid != session.tracerPidBefore) session.targetStateChanged = true
+            if (parsed.tracerPid > 0) {
+                val helperPid = session.helperPid
+                if (helperPid == null) {
+                    session.failure = "观察到 TracerPid=${parsed.tracerPid}，但尚未获得可信 LLDB helper PID"
+                } else if (parsed.tracerPid != helperPid) {
+                    session.failure =
+                        "目标 TracerPid=${parsed.tracerPid} 与本会话 LLDB helperPid=$helperPid 不一致；拒绝确认 attach"
+                } else {
+                    session.attachedObserved = true
+                    session.targetStateChanged = true
+                    session.failure = null
+                }
+            }
         }
     }
 
