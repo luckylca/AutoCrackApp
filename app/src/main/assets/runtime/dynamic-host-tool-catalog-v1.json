@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.14.1",
+  "catalogVersion": "0.5.14.2",
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -127,12 +127,13 @@
       "authorizationTemplate": "ATTACH <packageName> <pid>",
       "inputs": {"packageName": "validated Android package name", "pid": "positive integer; AutoCrack controller PID is rejected", "port": "validated loopback TCP port"},
       "networkScope": "127.0.0.1 only",
+      "networkAddressFamily": "IPv4",
       "output": "HostDebuggerSessionSnapshot",
       "artifacts": ["runtime/audit/dynamic-debugger.jsonl"],
       "guarantees": [
         "revalidate package/PID identity immediately before attach",
         "reject a target whose TracerPid is already nonzero",
-        "bind LLDB gdb-remote server to loopback only",
+        "bind LLDB gdb-remote server to IPv4 loopback 127.0.0.1 only",
         "helper teardown never signals the target PID",
         "detach verification requires TracerPid to return to 0"
       ],
@@ -149,6 +150,7 @@
       "confirmation": "exact_target_phrase",
       "authorizationTemplate": "CONTROL <packageName> <pid>",
       "networkScope": "127.0.0.1 only",
+      "networkAddressFamily": "IPv4",
       "operations": [
         {"id": "stop_reason", "changesTargetState": false},
         {"id": "register_read", "changesTargetState": false, "maxRegisters": 128},
@@ -160,6 +162,7 @@
       "output": "HostDebuggerControlSnapshot",
       "artifacts": ["runtime/audit/dynamic-debugger-control.jsonl"],
       "guarantees": [
+        "construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution",
         "no arbitrary raw gdb-remote packet adapter",
         "no register write adapter",
         "no memory write adapter",
