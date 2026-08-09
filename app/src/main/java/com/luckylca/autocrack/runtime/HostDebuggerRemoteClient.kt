@@ -43,7 +43,7 @@ class HostDebuggerRemoteClient(
         val created = Socket()
         created.tcpNoDelay = true
         created.connect(
-            InetSocketAddress(InetAddress.getLoopbackAddress(), port),
+            ipv4LoopbackEndpoint(port),
             connectTimeoutMillis,
         )
         created.soTimeout = observationTimeoutMillis
@@ -283,6 +283,16 @@ class HostDebuggerRemoteClient(
         const val MAX_MEMORY_READ_BYTES = 4096
         const val MAX_REGISTER_LIMIT = 512
         const val DEFAULT_REGISTER_LIMIT = 128
+
+        /**
+         * Build the endpoint from raw IPv4 bytes so Android cannot resolve a loopback hostname to
+         * ::1 while lldb-server is intentionally bound to 127.0.0.1 only.
+         */
+        internal fun ipv4LoopbackEndpoint(port: Int): InetSocketAddress {
+            require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
+            val address = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
+            return InetSocketAddress(address, port)
+        }
 
         private const val MIN_PORT = 1024
         private const val MAX_PORT = 65535
