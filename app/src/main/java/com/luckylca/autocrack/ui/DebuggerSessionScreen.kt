@@ -107,23 +107,21 @@ fun DebuggerSessionScreen(
         }
         scope.launch {
             loading = true
-            status = "正在最终复核 PID 身份并启动 LLDB server；目标可能在 client 握手后才进入 traced 状态"
-            runCatching {
-                manager.start(targetPackage, pid, port, attachAuthorization)
-            }.onSuccess { result ->
-                serverSnapshot = result
-                controlSnapshot = controlBridge.snapshot()
-                controlAuthorization = ""
-                status = if (result.attachedObserved) {
-                    "LLDB server 已附加：TracerPid=${result.tracerPidCurrent}；可进行第二层 CONTROL 授权"
-                } else if (result.running && result.tracerPidCurrent == 0) {
-                    "LLDB server helper 已启动且 TracerPid=0；可输入第二层 CONTROL，让 client 握手完成并确认 attach"
-                } else if (result.running) {
-                    "LLDB server helper 已启动，但当前 attach 状态未确认；请刷新或查看诊断"
-                } else {
-                    "LLDB server 已退出：exit=${result.exitCode ?: "无"}"
+            status = "正在复核 PID 身份并启动 targetless LLDB server；此步骤不会 attach 目标"
+            runCatching { manager.start(targetPackage, pid, port, attachAuthorization) }
+                .onSuccess { result ->
+                    serverSnapshot = result
+                    controlSnapshot = controlBridge.snapshot()
+                    controlAuthorization = ""
+                    status = when {
+                        result.serverReadyForClient ->
+                            "LLDB server 已在 127.0.0.1:${result.port} LISTEN；完成 CONTROL 后才发送 typed vAttach"
+                        result.running ->
+                            "LLDB helper 已启动但监听尚未就绪；请刷新并查看 helperVerified/serverReady"
+                        else -> "LLDB server 已退出：exit=${result.exitCode ?: "无"}"
+                    }
                 }
-            }.onFailure { exception -> status = exception.message ?: "LLDB server attach 失败" }
+                .onFailure { exception -> status = exception.message ?: "LLDB server 启动失败" }
             loading = false
         }
     }
@@ -136,7 +134,7 @@ fun DebuggerSessionScreen(
                     serverSnapshot = result
                     controlSnapshot = controlBridge.snapshot()
                     status = result?.let {
-                        "Debugger：serverRunning=${it.running}, tracer=${it.tracerPidCurrent ?: "未知"}, clientConnected=${controlSnapshot.connected}"
+                        "Debugger：serverRunning=${it.running}, helperVerified=${it.helperVerified}, ready=${it.serverReadyForClient}, tracer=${it.tracerPidCurrent ?: "未知"}, clientConnected=${controlSnapshot.connected}"
                     } ?: "当前没有 debugger session"
                 }
                 .onFailure { exception -> status = exception.message ?: "刷新 debugger 状态失败" }
@@ -147,13 +145,13 @@ fun DebuggerSessionScreen(
     fun connectClient() {
         scope.launch {
             loading = true
-            status = "正在连接 127.0.0.1 LLDB gdb-remote；连接后必须再次确认可信 TracerPid，不会发送写入或断点命令"
+            status = "正在连接 127.0.0.1 targetless LLDB server，复核目标后发送固定 typed vAttach；不会发送写入或断点命令"
             runCatching { controlBridge.connect(controlAuthorization) }
                 .onSuccess { result ->
                     controlSnapshot = result
-                    status = "LLDB client 已连接且 attach 已确认：stop=${result.lastStopReply ?: "未知"} capabilities=${result.capabilities.size}"
+                    status = "LLDB client 已连接且 typed attach 已确认：stop=${result.lastStopReply ?: "未知"} capabilities=${result.capabilities.size}"
                 }
-                .onFailure { exception -> status = exception.message ?: "LLDB client 连接失败" }
+                .onFailure { exception -> status = exception.message ?: "LLDB client / typed attach 失败" }
             serverSnapshot = runCatching { manager.refresh() }.getOrNull() ?: serverSnapshot
             loading = false
         }
@@ -277,19 +275,13 @@ fun DebuggerSessionScreen(
     }
 
     LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 72.dp, start = 16.dp, end = 16.dp),
+        modifier = Modifier.fillMaxSize().padding(top = 72.dp, start = 16.dp, end = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
+            Text("Controlled LLDB Debugger", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             Text(
-                "Controlled LLDB Debugger",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "${BuildConfig.VERSION_NAME} · server attach + bounded loopback client",
+                "${BuildConfig.VERSION_NAME} · targetless server + typed vAttach client",
                 color = MaterialTheme.colorScheme.primary,
             )
             Text(
@@ -306,11 +298,9 @@ fun DebuggerSessionScreen(
                     label = { Text("包名/进程过滤") },
                     singleLine = true,
                 )
-                Button(
-                    onClick = ::listProcesses,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !loading,
-                ) { Text("只读枚举候选进程") }
+                Button(onClick = ::listProcesses, modifier = Modifier.fillMaxWidth(), enabled = !loading) {
+                    Text("只读枚举候选进程")
+                }
                 processReport?.processes?.take(MAX_PROCESS_ROWS)?.forEach { process ->
                     OutlinedButton(
                         onClick = {
@@ -337,7 +327,7 @@ fun DebuggerSessionScreen(
             }
         }
         item {
-            DebuggerCard("2. 第一层授权：attach LLDB server") {
+            DebuggerCard("2. 第一层授权：准备 targetless LLDB server") {
                 OutlinedTextField(
                     value = packageName,
                     onValueChange = {
@@ -378,26 +368,27 @@ fun DebuggerSessionScreen(
                     label = { Text("ATTACH 授权短语") },
                     singleLine = true,
                 )
+                Text(
+                    "这一层只固定授权目标并启动本地 gdbserver，不会 ptrace attach；实际 attach 发生在下一层 CONTROL。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Button(
                     onClick = ::startDebugger,
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !loading && serverSnapshot?.running != true,
-                ) { Text("显式授权并启动 LLDB server attach") }
+                ) { Text("显式授权并启动 targetless LLDB server") }
             }
         }
         item {
-            DebuggerCard("3. 第二层授权：连接 LLDB client") {
+            DebuggerCard("3. 第二层授权：连接并执行 typed attach") {
                 expectedControlPhrase()?.let { phrase ->
-                    Text("执行控制会恢复目标运行，请再次输入：", fontWeight = FontWeight.SemiBold)
+                    Text("实际 attach 会改变目标运行状态，请再次输入：", fontWeight = FontWeight.SemiBold)
                     SelectionContainer { Text(phrase, fontFamily = FontFamily.Monospace) }
                 }
-                val pendingClientAttach = serverSnapshot?.let { server ->
-                    server.running && !server.attachedObserved && server.tracerPidCurrent == 0 && server.failure == null
-                } == true
-                if (pendingClientAttach) {
+                serverSnapshot?.let { server ->
                     Text(
-                        "当前 LLDB server 正在运行但 TracerPid 仍为 0；此设备可能需要 client 握手后才完成 attach。完成 CONTROL 授权后可直接连接，连接后会再次强制验证 TracerPid。",
-                        style = MaterialTheme.typography.bodySmall,
+                        "helperVerified=${server.helperVerified} serverReadyForClient=${server.serverReadyForClient}",
+                        fontFamily = FontFamily.Monospace,
                     )
                 }
                 OutlinedTextField(
@@ -413,7 +404,7 @@ fun DebuggerSessionScreen(
                     enabled = !loading &&
                         serverSnapshot?.let(HostDebuggerControlGate::canAttemptConnection) == true &&
                         !controlSnapshot.connected,
-                ) { Text("授权并连接 127.0.0.1 LLDB client") }
+                ) { Text("授权连接 127.0.0.1 并发送 typed vAttach") }
                 ControlSnapshot(controlSnapshot)
             }
         }
@@ -490,11 +481,9 @@ fun DebuggerSessionScreen(
         }
         item {
             DebuggerCard("6. 状态与安全 detach") {
-                OutlinedButton(
-                    onClick = ::refreshDebugger,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !loading,
-                ) { Text("刷新 TracerPid / client 状态") }
+                OutlinedButton(onClick = ::refreshDebugger, modifier = Modifier.fillMaxWidth(), enabled = !loading) {
+                    Text("刷新 TracerPid / helper / listener / client 状态")
+                }
                 Button(
                     onClick = ::detachDebugger,
                     modifier = Modifier.fillMaxWidth(),
@@ -516,10 +505,9 @@ fun DebuggerSessionScreen(
                 Text("Server 审计：${manager.auditFile.path}", fontFamily = FontFamily.Monospace)
                 Text("Control 审计：${controlBridge.auditFile.path}", fontFamily = FontFamily.Monospace)
                 Text("control 审计固定记录 registerWrite=false / memoryWrite=false / breakpoint=false / rawPacket=false。")
-                Button(
-                    onClick = ::copyDiagnostics,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("复制完整 Debugger 诊断") }
+                Button(onClick = ::copyDiagnostics, modifier = Modifier.fillMaxWidth()) {
+                    Text("复制完整 Debugger 诊断")
+                }
             }
         }
         item { Spacer(modifier = Modifier.height(24.dp)) }
@@ -557,7 +545,14 @@ private fun DebuggerSnapshot(snapshot: HostDebuggerSessionSnapshot) {
         fontFamily = FontFamily.Monospace,
     )
     Text(
-        "attachedObserved=${snapshot.attachedObserved} tracerBefore=${snapshot.tracerPidBefore} tracerCurrent=${snapshot.tracerPidCurrent ?: "未知"}",
+        "helperVerified=${snapshot.helperVerified} serverReadyForClient=${snapshot.serverReadyForClient}",
+        fontFamily = FontFamily.Monospace,
+    )
+    snapshot.helperCommandLine?.let {
+        Text("helperCmdline=$it", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+    }
+    Text(
+        "attachAttempted=${snapshot.attachAttempted} attachedObserved=${snapshot.attachedObserved} tracerBefore=${snapshot.tracerPidBefore} tracerCurrent=${snapshot.tracerPidCurrent ?: "未知"}",
         fontFamily = FontFamily.Monospace,
     )
     Text(
@@ -570,9 +565,7 @@ private fun DebuggerSnapshot(snapshot: HostDebuggerSessionSnapshot) {
     )
     snapshot.failure?.let { Text("failure=$it", color = MaterialTheme.colorScheme.error) }
     if (snapshot.stdout.isNotBlank()) {
-        SelectionContainer {
-            Text(snapshot.stdout.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace)
-        }
+        SelectionContainer { Text(snapshot.stdout.takeLast(MAX_OUTPUT_CHARS), fontFamily = FontFamily.Monospace) }
     }
     if (snapshot.stderr.isNotBlank()) {
         SelectionContainer {
@@ -620,18 +613,22 @@ private fun buildDebuggerDiagnostic(
     appendLine("状态：$status")
     appendLine("Server审计：$serverAuditPath")
     appendLine("Control审计：$controlAuditPath")
-    appendLine("边界：loopback only；寄存器/内存只读；允许显式授权 continue/step/interrupt；无 register write / memory write / breakpoint / raw packet adapter")
+    appendLine("边界：loopback only；寄存器/内存只读；允许显式授权 typed attach / continue / step / interrupt；无 register write / memory write / breakpoint / raw packet adapter")
     server?.let { result ->
         appendLine()
         appendLine("[server] session=${result.sessionId}")
         appendLine("package=${result.packageName} pid=${result.pid} port=${result.port}")
         appendLine("running=${result.running} exit=${result.exitCode ?: "无"} failure=${result.failure ?: "无"}")
-        appendLine("helperPid=${result.helperPid ?: "无"} helperSignalSent=${result.helperSignalSent}")
+        appendLine("helperPid=${result.helperPid ?: "无"} helperVerified=${result.helperVerified} serverReadyForClient=${result.serverReadyForClient}")
+        appendLine("helperCmdline=${result.helperCommandLine ?: "无"}")
+        appendLine("helperSignalSent=${result.helperSignalSent}")
         appendLine("explicitAuthorizationVerified=${result.explicitAuthorizationVerified}")
         appendLine("attachAttempted=${result.attachAttempted} attachedObserved=${result.attachedObserved}")
         appendLine("tracerPidBefore=${result.tracerPidBefore} tracerPidCurrent=${result.tracerPidCurrent ?: "未知"}")
         appendLine("targetStateChanged=${result.targetStateChanged} detachVerified=${result.detachVerified}")
         appendLine("targetSignalAttempted=${result.targetSignalAttempted}")
+        if (result.stdout.isNotBlank()) appendLine("serverStdout=${result.stdout.takeLast(MAX_DIAGNOSTIC_OUTPUT_CHARS)}")
+        if (result.stderr.isNotBlank()) appendLine("serverStderr=${result.stderr.takeLast(MAX_DIAGNOSTIC_OUTPUT_CHARS)}")
     }
     appendLine()
     appendLine("[client-control]")
@@ -662,3 +659,4 @@ private fun buildDebuggerDiagnostic(
 private const val MAX_PROCESS_ROWS = 24
 private const val MAX_REGISTER_ROWS = 48
 private const val MAX_OUTPUT_CHARS = 8_000
+private const val MAX_DIAGNOSTIC_OUTPUT_CHARS = 4_000
