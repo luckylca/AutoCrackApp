@@ -32,6 +32,9 @@ data class HostDebuggerSessionSnapshot(
     val stoppedAtEpochMillis: Long?,
     val exitCode: Int?,
     val helperPid: Int?,
+    val helperVerified: Boolean,
+    val serverReadyForClient: Boolean,
+    val helperCommandLine: String?,
     val explicitAuthorizationVerified: Boolean,
     val attachAttempted: Boolean,
     val attachedObserved: Boolean,
@@ -68,31 +71,41 @@ object HostDebuggerAuthorization {
     }
 }
 
-data class HostDebuggerTargetStatus(
-    val tracerPid: Int,
-    val state: String?,
-)
+data class HostDebuggerTargetStatus(val tracerPid: Int, val state: String?)
 
 object HostDebuggerTargetStatusParser {
     fun parse(identityOutput: String): HostDebuggerTargetStatus? {
-        val tracerPid = identityOutput
-            .lineSequence()
+        val tracerPid = identityOutput.lineSequence()
             .firstOrNull { line -> line.startsWith("TracerPid:") }
-            ?.substringAfter(':')
-            ?.trim()
-            ?.toIntOrNull()
-            ?: return null
-        val state = identityOutput
-            .lineSequence()
+            ?.substringAfter(':')?.trim()?.toIntOrNull() ?: return null
+        val state = identityOutput.lineSequence()
             .firstOrNull { line -> line.startsWith("State:") }
-            ?.substringAfter(':')
-            ?.trim()
-            ?.takeIf(String::isNotBlank)
+            ?.substringAfter(':')?.trim()?.takeIf(String::isNotBlank)
         return HostDebuggerTargetStatus(tracerPid = tracerPid, state = state)
     }
 }
 
+data class HostDebuggerHelperProbe(
+    val helperVerified: Boolean,
+    val listenerReady: Boolean,
+    val helperCommandLine: String?,
+)
+
+object HostDebuggerHelperProbeParser {
+    fun parse(stdout: String): HostDebuggerHelperProbe = HostDebuggerHelperProbe(
+        helperVerified = stdout.lineSequence().any { it == "helper_verified=true" },
+        listenerReady = stdout.lineSequence().any { it == "listener_ready=true" },
+        helperCommandLine = stdout.lineSequence()
+            .firstOrNull { it.startsWith("helper_cmdline=") }
+            ?.substringAfter('='),
+    )
+}
+
 object HostDebuggerCommandFactory {
+    /**
+     * Start a targetless lldb-server. The selected target is revalidated here, but the actual
+     * ptrace attach is deferred until the typed CONTROL client sends vAttach for this same PID.
+     */
     fun buildAttach(
         suPath: String,
         binaryPath: String,
@@ -126,16 +139,55 @@ object HostDebuggerCommandFactory {
             tracer=${'$'}(awk '/^TracerPid:/ { print ${'$'}2; exit }' "${'$'}proc/status" 2>/dev/null)
             [ "${'$'}{tracer:-0}" = "0" ] || { echo "DEBUG_TARGET_ALREADY_TRACED tracer=${'$'}tracer" >&2; exit 43; }
             printf '%s\n' "${'$'}${'$'}" > "${'$'}helper_pid_file"
-            exec "${'$'}binary" gdbserver "127.0.0.1:$port" --attach "${'$'}target_pid"
+            exec "${'$'}binary" gdbserver "127.0.0.1:$port"
         """.trimIndent()
         return listOf(suPath, "-c", shell)
     }
 
-    fun buildStopHelper(
+    fun buildProbeHelper(
         suPath: String,
         binaryPath: String,
         helperPid: Int,
+        port: Int,
     ): List<String> {
+        requireSuPath(suPath)
+        require(binaryPath.startsWith('/')) { "Debugger binary path must be absolute" }
+        require(helperPid > 0) { "Helper PID must be positive" }
+        require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
+        val binary = RootToolCommandFactory.shellQuote(binaryPath)
+        val shell = """
+            helper_pid=$helperPid
+            binary=$binary
+            proc=/proc/${'$'}helper_pid
+            [ -d "${'$'}proc" ] || { echo 'DEBUG_HELPER_NOT_FOUND' >&2; exit 45; }
+            argv0=${'$'}(tr '\000' '\n' < "${'$'}proc/cmdline" 2>/dev/null | head -n 1)
+            [ "${'$'}argv0" = "${'$'}binary" ] || {
+              echo "DEBUG_HELPER_IDENTITY_MISMATCH pid=${'$'}helper_pid argv0=${'$'}argv0" >&2
+              exit 44
+            }
+            cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')
+            case "${'$'}cmdline" in
+              "${'$'}binary gdbserver 127.0.0.1:$port") ;;
+              *) echo "DEBUG_HELPER_COMMAND_MISMATCH cmdline=${'$'}cmdline" >&2; exit 46 ;;
+            esac
+            port_hex=${'$'}(printf '%04X' $port)
+            listen_inode=${'$'}(awk -v endpoint="0100007F:${'$'}port_hex" '${'$'}2 == endpoint && ${'$'}4 == "0A" { print ${'$'}10; exit }' /proc/net/tcp 2>/dev/null)
+            listener_ready=false
+            if [ -n "${'$'}listen_inode" ]; then
+              for fd in "${'$'}proc"/fd/*; do
+                link=${'$'}(readlink "${'$'}fd" 2>/dev/null || true)
+                if [ "${'$'}link" = "socket:[${'$'}listen_inode]" ]; then
+                  listener_ready=true
+                  break
+                fi
+              done
+            fi
+            printf 'helper_verified=true\nlistener_ready=%s\nhelper_cmdline=%s\n' "${'$'}listener_ready" "${'$'}cmdline"
+        """.trimIndent()
+        return listOf(suPath, "-c", shell)
+    }
+
+    fun buildStopHelper(suPath: String, binaryPath: String, helperPid: Int): List<String> {
         requireSuPath(suPath)
         require(binaryPath.startsWith('/')) { "Debugger binary path must be absolute" }
         require(helperPid > 0) { "Helper PID must be positive" }
@@ -202,28 +254,16 @@ class HostDebuggerSessionManager(
         }
 
         val rootStatus = rootDetector.inspect()
-        require(rootStatus.isRootGranted) {
-            rootStatus.diagnostic ?: "LLDB server attach 需要 Root 权限"
-        }
+        require(rootStatus.isRootGranted) { rootStatus.diagnostic ?: "LLDB server 需要 Root 权限" }
         val suPath = requireNotNull(rootStatus.suPath) { "Root 已授权但没有可用的 su 路径" }
         val executor = RootToolExecutor(runner, suPath)
         val installed = requireDebuggerToolpack()
         val binary = requireTrustedBinary(installed)
 
-        val identity = executor.execute(RootToolCommand.ReadProcessIdentity(pid))
-        require(identity.succeeded) {
-            identity.failure ?: identity.stderr.ifBlank { "无法读取 PID $pid 身份" }
-        }
-        require(HostLogcatIdentityMatcher.matches(packageName, identity.stdout)) {
-            "PID $pid 当前身份不属于包 $packageName；已拒绝 attach"
-        }
-        val before = requireNotNull(HostDebuggerTargetStatusParser.parse(identity.stdout)) {
-            "无法解析 PID $pid 的 TracerPid"
-        }
+        val before = readAndValidateTarget(executor, packageName, pid)
         require(before.tracerPid == 0) {
             "PID $pid 已被 tracer ${before.tracerPid} 附加；拒绝重复 attach"
         }
-
         val preflight = executor.execute(RootToolCommand.ReadProcessAttachPreflight(pid))
         require(preflight.succeeded) {
             preflight.failure ?: preflight.stderr.ifBlank { "PID $pid attach 前置检查失败" }
@@ -244,9 +284,7 @@ class HostDebuggerSessionManager(
                     port = port,
                     helperPidFile = helperPidFile.path,
                 ),
-            )
-                .redirectErrorStream(false)
-                .start()
+            ).redirectErrorStream(false).start()
         }
         val session = MutableDebuggerSession(
             sessionId = sessionId,
@@ -263,14 +301,17 @@ class HostDebuggerSessionManager(
             targetStateBefore = before.state,
         )
         synchronized(lock) { activeSession = session }
-        appendAudit("start", session)
+        appendAudit("targetless_server_start", session)
 
         scope.launch { drainStream(session, stderr = false) }
         scope.launch { drainStream(session, stderr = true) }
         scope.launch { awaitExit(session) }
 
-        observeAttach(session)
-        appendAudit(if (session.attachedObserved) "attached" else "attach_unconfirmed", session)
+        observeServerReady(session)
+        appendAudit(
+            if (session.serverReadyForClient) "targetless_server_ready" else "targetless_server_unready",
+            session,
+        )
         return snapshot(session)
     }
 
@@ -281,16 +322,37 @@ class HostDebuggerSessionManager(
     suspend fun refresh(): HostDebuggerSessionSnapshot? {
         val session = synchronized(lock) { activeSession } ?: return null
         readHelperPid(session)
+        probeHelper(session)
         updateTargetStatus(session)
+        return snapshot(session)
+    }
+
+    /** Revalidate target identity immediately before the typed client sends vAttach. */
+    suspend fun prepareClientAttach(expectedSessionId: String): HostDebuggerSessionSnapshot {
+        val session = synchronized(lock) {
+            requireNotNull(activeSession) { "当前没有 LLDB server session" }
+        }
+        require(session.sessionId == expectedSessionId) { "Debugger session 已变化；拒绝 attach" }
+        val refreshed = requireNotNull(refresh()) { "当前没有 LLDB server session" }
+        require(refreshed.running && refreshed.helperVerified && refreshed.serverReadyForClient) {
+            "LLDB server 尚未在可信 IPv4 loopback socket 上就绪"
+        }
+        require(refreshed.failure == null) { "LLDB server 状态异常：${refreshed.failure}" }
+        require(refreshed.tracerPidCurrent == 0) {
+            "目标已被 tracer ${refreshed.tracerPidCurrent} 附加；拒绝发送 vAttach"
+        }
+        synchronized(lock) { session.attachAttempted = true }
+        appendAudit("typed_vattach_about_to_send", session)
         return snapshot(session)
     }
 
     suspend fun stop(): HostDebuggerSessionSnapshot? = withContext(Dispatchers.IO) {
         val session = synchronized(lock) { activeSession } ?: return@withContext null
         readHelperPid(session)
+        probeHelper(session)
         val helperPid = synchronized(lock) { session.helperPid }
-        if (session.process.isAlive) {
-            require(helperPid != null && helperPid > 0) {
+        if (session.process.isAlive || session.helperVerified) {
+            require(helperPid != null && helperPid > 0 && session.helperVerified) {
                 "未获得可信 LLDB helper PID，拒绝发送任何 signal；请保留诊断"
             }
             val stopResult = runner.run(
@@ -313,19 +375,33 @@ class HostDebuggerSessionManager(
         synchronized(lock) {
             session.stoppedAtEpochMillis = session.stoppedAtEpochMillis ?: System.currentTimeMillis()
             session.exitCode = runCatching { session.process.exitValue() }.getOrNull()
+            session.serverReadyForClient = false
         }
         appendAudit(if (session.detachVerified) "detach_verified" else "detach_unverified", session)
         snapshot(session)
     }
 
+    private suspend fun readAndValidateTarget(
+        executor: RootToolExecutor,
+        packageName: String,
+        pid: Int,
+    ): HostDebuggerTargetStatus {
+        val identity = executor.execute(RootToolCommand.ReadProcessIdentity(pid))
+        require(identity.succeeded) {
+            identity.failure ?: identity.stderr.ifBlank { "无法读取 PID $pid 身份" }
+        }
+        require(HostLogcatIdentityMatcher.matches(packageName, identity.stdout)) {
+            "PID $pid 当前身份不属于包 $packageName；已拒绝调试操作"
+        }
+        return requireNotNull(HostDebuggerTargetStatusParser.parse(identity.stdout)) {
+            "无法解析 PID $pid 的 TracerPid"
+        }
+    }
+
     private suspend fun requireDebuggerToolpack(): InstalledToolpack {
-        val installed = installer.listInstalled()
-            .firstOrNull { toolpack ->
-                toolpack.manifest.id == TOOLPACK_ID && toolpack.manifest.version == TOOLPACK_VERSION
-            }
-            ?: error(
-                "未安装受信任 Android LLDB server 工具包：$TOOLPACK_VERSION；请先在工具包页面安装并完成自检",
-            )
+        val installed = installer.listInstalled().firstOrNull { toolpack ->
+            toolpack.manifest.id == TOOLPACK_ID && toolpack.manifest.version == TOOLPACK_VERSION
+        } ?: error("未安装受信任 Android LLDB server 工具包：$TOOLPACK_VERSION；请先在工具包页面安装并完成自检")
         BuiltInToolpackTrustPolicy.requireTrusted(installed.manifest)
         return installed
     }
@@ -334,28 +410,42 @@ class HostDebuggerSessionManager(
         val root = File(installed.installedPath).canonicalFile
         val binary = File(root, LLDB_SERVER_RELATIVE_PATH).canonicalFile
         require(binary.path.startsWith(root.path + File.separator)) { "LLDB server 路径越界" }
-        require(binary.isFile) { "LLDB server 二进制不存在：${binary.path}" }
-        require(binary.canExecute()) { "LLDB server 没有执行权限：${binary.path}" }
-        val expected = installed.manifest.sources
-            .firstOrNull { source -> source.name == "lldb-server" }
-            ?.sha256
+        require(binary.isFile && binary.canExecute()) { "LLDB server 二进制不可执行：${binary.path}" }
+        val expected = installed.manifest.sources.firstOrNull { it.name == "lldb-server" }?.sha256
             ?: error("LLDB server manifest 缺少 source SHA-256")
-        val actual = sha256(binary)
-        require(actual == expected) {
-            "LLDB server 二进制 SHA-256 不匹配：expected=$expected actual=$actual"
-        }
+        require(sha256(binary) == expected) { "LLDB server 二进制 SHA-256 不匹配" }
         return binary
     }
 
-    private suspend fun observeAttach(session: MutableDebuggerSession) {
-        repeat(ATTACH_OBSERVE_ATTEMPTS) {
+    private suspend fun observeServerReady(session: MutableDebuggerSession) {
+        repeat(SERVER_READY_ATTEMPTS) {
             readHelperPid(session)
-            updateTargetStatus(session)
+            probeHelper(session)
             synchronized(lock) {
-                if (session.attachedObserved) return
-                if (!session.process.isAlive) return
+                if (session.serverReadyForClient || !session.process.isAlive) return
             }
-            delay(ATTACH_OBSERVE_DELAY_MILLIS)
+            delay(SERVER_READY_DELAY_MILLIS)
+        }
+    }
+
+    private suspend fun probeHelper(session: MutableDebuggerSession) {
+        val helperPid = synchronized(lock) { session.helperPid } ?: return
+        val result = runner.run(
+            command = HostDebuggerCommandFactory.buildProbeHelper(
+                suPath = session.suPath,
+                binaryPath = session.binaryPath,
+                helperPid = helperPid,
+                port = session.port,
+            ),
+            label = "Probe AutoCrack LLDB helper $helperPid",
+            timeoutMillis = HELPER_PROBE_TIMEOUT_MILLIS,
+        )
+        if (!result.succeeded) return
+        val parsed = HostDebuggerHelperProbeParser.parse(result.stdout)
+        synchronized(lock) {
+            session.helperVerified = parsed.helperVerified
+            session.serverReadyForClient = parsed.helperVerified && parsed.listenerReady
+            session.helperCommandLine = parsed.helperCommandLine
         }
     }
 
@@ -397,11 +487,10 @@ class HostDebuggerSessionManager(
             if (parsed.tracerPid != session.tracerPidBefore) session.targetStateChanged = true
             if (parsed.tracerPid > 0) {
                 val helperPid = session.helperPid
-                if (helperPid == null) {
-                    session.failure = "观察到 TracerPid=${parsed.tracerPid}，但尚未获得可信 LLDB helper PID"
+                if (helperPid == null || !session.helperVerified) {
+                    session.failure = "观察到 TracerPid=${parsed.tracerPid}，但尚未确认可信 LLDB helper"
                 } else if (parsed.tracerPid != helperPid) {
-                    session.failure =
-                        "目标 TracerPid=${parsed.tracerPid} 与本会话 LLDB helperPid=$helperPid 不一致；拒绝确认 attach"
+                    session.failure = "目标 TracerPid=${parsed.tracerPid} 与本会话 LLDB helperPid=$helperPid 不一致；拒绝确认 attach"
                 } else {
                     session.attachedObserved = true
                     session.targetStateChanged = true
@@ -413,15 +502,9 @@ class HostDebuggerSessionManager(
 
     private fun readHelperPid(session: MutableDebuggerSession) {
         val parsed = runCatching {
-            session.helperPidFile
-                .takeIf(File::isFile)
-                ?.readText(Charsets.UTF_8)
-                ?.trim()
-                ?.toIntOrNull()
+            session.helperPidFile.takeIf(File::isFile)?.readText(Charsets.UTF_8)?.trim()?.toIntOrNull()
         }.getOrNull()
-        if (parsed != null && parsed > 0) {
-            synchronized(lock) { session.helperPid = parsed }
-        }
+        if (parsed != null && parsed > 0) synchronized(lock) { session.helperPid = parsed }
     }
 
     private fun drainStream(session: MutableDebuggerSession, stderr: Boolean) {
@@ -453,18 +536,15 @@ class HostDebuggerSessionManager(
     }
 
     private suspend fun awaitExit(session: MutableDebuggerSession) = withContext(Dispatchers.IO) {
-        val exitCode = runCatching { session.process.waitFor() }
-            .onFailure { exception ->
-                synchronized(lock) {
-                    if (session.failure == null) {
-                        session.failure = exception.message ?: exception::class.java.simpleName
-                    }
-                }
+        val exitCode = runCatching { session.process.waitFor() }.onFailure { exception ->
+            synchronized(lock) {
+                if (session.failure == null) session.failure = exception.message ?: exception::class.java.simpleName
             }
-            .getOrNull()
+        }.getOrNull()
         synchronized(lock) {
             session.exitCode = exitCode
             session.stoppedAtEpochMillis = session.stoppedAtEpochMillis ?: System.currentTimeMillis()
+            session.serverReadyForClient = false
         }
         appendAudit("helper_exit", session)
     }
@@ -483,28 +563,23 @@ class HostDebuggerSessionManager(
                     .put("loopbackAddress", "127.0.0.1")
                     .put("port", session.port)
                     .put("explicitAuthorizationVerified", true)
-                    .put("attachAttempted", true)
+                    .put("attachAttempted", session.attachAttempted)
                     .put("attachedObserved", session.attachedObserved)
                     .put("targetStateChanged", session.targetStateChanged)
                     .put("tracerPidBefore", session.tracerPidBefore)
                     .put("tracerPidCurrent", session.tracerPidCurrent ?: JSONObject.NULL)
-                    .put("targetStateBefore", session.targetStateBefore ?: JSONObject.NULL)
-                    .put("targetStateCurrent", session.targetStateCurrent ?: JSONObject.NULL)
                     .put("detachVerified", session.detachVerified)
                     .put("targetSignalAttempted", false)
                     .put("helperSignalSent", session.helperSignalSent)
-                    .put("autoCrackClientConnected", false)
-                    .put("memoryCommandSent", false)
-                    .put("registerWriteCommandSent", false)
-                    .put("breakpointCommandSent", false)
-                    .put("running", session.process.isAlive)
                     .put("helperPid", session.helperPid ?: JSONObject.NULL)
+                    .put("helperVerified", session.helperVerified)
+                    .put("serverReadyForClient", session.serverReadyForClient)
+                    .put("helperCommandLine", session.helperCommandLine ?: JSONObject.NULL)
+                    .put("running", session.process.isAlive)
                     .put("exitCode", session.exitCode ?: JSONObject.NULL)
                     .put("failure", session.failure ?: JSONObject.NULL)
             }
-            synchronized(AUDIT_LOCK) {
-                auditFile.appendText(record.toString() + "\n", Charsets.UTF_8)
-            }
+            synchronized(AUDIT_LOCK) { auditFile.appendText(record.toString() + "\n", Charsets.UTF_8) }
         }
 
     private fun snapshot(session: MutableDebuggerSession): HostDebuggerSessionSnapshot = synchronized(lock) {
@@ -521,8 +596,11 @@ class HostDebuggerSessionManager(
         stoppedAtEpochMillis = session.stoppedAtEpochMillis,
         exitCode = session.exitCode,
         helperPid = session.helperPid,
+        helperVerified = session.helperVerified,
+        serverReadyForClient = session.serverReadyForClient,
+        helperCommandLine = session.helperCommandLine,
         explicitAuthorizationVerified = true,
-        attachAttempted = true,
+        attachAttempted = session.attachAttempted,
         attachedObserved = session.attachedObserved,
         tracerPidBefore = session.tracerPidBefore,
         tracerPidCurrent = session.tracerPidCurrent,
@@ -573,8 +651,12 @@ class HostDebuggerSessionManager(
         var stoppedAtEpochMillis: Long? = null,
         var exitCode: Int? = null,
         var helperPid: Int? = null,
+        var helperVerified: Boolean = false,
+        var serverReadyForClient: Boolean = false,
+        var helperCommandLine: String? = null,
+        var attachAttempted: Boolean = false,
         var attachedObserved: Boolean = false,
-        var tracerPidCurrent: Int? = null,
+        var tracerPidCurrent: Int? = 0,
         var targetStateCurrent: String? = null,
         var targetStateChanged: Boolean = false,
         var detachVerified: Boolean = false,
@@ -590,8 +672,9 @@ class HostDebuggerSessionManager(
         private const val LLDB_SERVER_RELATIVE_PATH = "bin/lldb-server-android"
         private const val READ_BUFFER_CHARS = 4_096
         private const val MAX_RETAINED_CHARS = 200_000
-        private const val ATTACH_OBSERVE_ATTEMPTS = 20
-        private const val ATTACH_OBSERVE_DELAY_MILLIS = 150L
+        private const val SERVER_READY_ATTEMPTS = 30
+        private const val SERVER_READY_DELAY_MILLIS = 100L
+        private const val HELPER_PROBE_TIMEOUT_MILLIS = 1_500L
         private const val DETACH_VERIFY_ATTEMPTS = 25
         private const val DETACH_VERIFY_DELAY_MILLIS = 120L
         private const val HELPER_STOP_COMMAND_TIMEOUT_MILLIS = 3_000L
