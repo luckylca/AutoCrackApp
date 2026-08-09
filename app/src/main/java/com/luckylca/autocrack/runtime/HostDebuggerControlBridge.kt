@@ -28,26 +28,21 @@ object HostDebuggerControlAuthorization {
     }
 }
 
-/**
- * A running lldb-server may either attach before a gdb-remote client connects or wait for the
- * first client handshake before the target becomes traced. Both states are valid candidates for
- * the second explicit CONTROL gate. A non-zero but unconfirmed tracer is never accepted here.
- */
+/** Only a verified targetless server with a real IPv4 listener may enter the CONTROL stage. */
 object HostDebuggerControlGate {
     fun canAttemptConnection(
         running: Boolean,
-        attachedObserved: Boolean,
+        helperVerified: Boolean,
+        serverReadyForClient: Boolean,
         tracerPidCurrent: Int?,
         failure: String?,
-    ): Boolean {
-        if (!running || failure != null) return false
-        if (attachedObserved && tracerPidCurrent != null && tracerPidCurrent > 0) return true
-        return tracerPidCurrent == 0
-    }
+    ): Boolean =
+        running && helperVerified && serverReadyForClient && failure == null && tracerPidCurrent == 0
 
     fun canAttemptConnection(server: HostDebuggerSessionSnapshot): Boolean = canAttemptConnection(
         running = server.running,
-        attachedObserved = server.attachedObserved,
+        helperVerified = server.helperVerified,
+        serverReadyForClient = server.serverReadyForClient,
         tracerPidCurrent = server.tracerPidCurrent,
         failure = server.failure,
     )
@@ -85,8 +80,8 @@ data class HostDebuggerControlSnapshot(
 )
 
 /**
- * Confirmation-gated client bridge for the loopback lldb-server created by
- * [HostDebuggerSessionManager]. This bridge does not provide arbitrary packet execution.
+ * Confirmation-gated client bridge for the trusted loopback lldb-server. The actual target attach
+ * is a fixed typed vAttach operation and there is no arbitrary packet execution API.
  */
 class HostDebuggerControlBridge(
     private val manager: HostDebuggerSessionManager,
@@ -106,16 +101,13 @@ class HostDebuggerControlBridge(
                 when {
                     !server.running -> "LLDB server 未运行"
                     server.failure != null -> "LLDB server 状态异常：${server.failure}"
-                    server.tracerPidCurrent != null && server.tracerPidCurrent != 0 ->
-                        "目标已被未确认 tracer ${server.tracerPidCurrent} 附加；拒绝建立控制客户端"
+                    !server.helperVerified -> "LLDB helper 尚未通过身份复核"
+                    !server.serverReadyForClient -> "LLDB server 尚未在 127.0.0.1:${server.port} 进入 LISTEN"
+                    server.tracerPidCurrent != 0 -> "目标已被 tracer ${server.tracerPidCurrent} 附加；拒绝建立新控制客户端"
                     else -> "LLDB server 当前状态不允许建立控制客户端"
                 }
             }
-            HostDebuggerControlAuthorization.requireAuthorized(
-                server.packageName,
-                server.pid,
-                authorizationPhrase,
-            )
+            HostDebuggerControlAuthorization.requireAuthorized(server.packageName, server.pid, authorizationPhrase)
 
             synchronized(lock) {
                 require(client?.connected != true) { "LLDB client 已连接" }
@@ -129,29 +121,34 @@ class HostDebuggerControlBridge(
             }
 
             val created = HostDebuggerRemoteClient(server.port)
+            var attachPacketSent = false
             try {
                 val handshake = created.connect()
                 synchronized(lock) {
-                    mutable.lastStopReply = handshake.stopReply
                     mutable.capabilities = handshake.capabilities.sorted()
                     mutable.targetRunning = false
                 }
-                appendAudit("client_transport_connected_attach_pending")
+                appendAudit("client_transport_connected_targetless")
+
+                val revalidated = manager.prepareClientAttach(server.sessionId)
+                require(revalidated.pid == server.pid && revalidated.packageName == server.packageName) {
+                    "Debugger target identity changed before vAttach"
+                }
+
+                attachPacketSent = true
+                val attachReply = created.attach(server.pid)
+                synchronized(lock) { mutable.lastStopReply = attachReply }
+                appendAudit("typed_vattach_stop_reply")
 
                 val confirmedServer = awaitConfirmedAttach(server.sessionId)
                 require(
-                    confirmedServer != null &&
-                        confirmedServer.running &&
-                        confirmedServer.failure == null &&
-                        confirmedServer.attachedObserved &&
-                        confirmedServer.tracerPidCurrent != null &&
+                    confirmedServer != null && confirmedServer.running && confirmedServer.failure == null &&
+                        confirmedServer.attachedObserved && confirmedServer.tracerPidCurrent != null &&
                         confirmedServer.tracerPidCurrent > 0,
                 ) {
                     val latest = confirmedServer
-                    "LLDB client 已连接，但未确认目标进入可信 traced 状态：" +
-                        "running=${latest?.running ?: false}, " +
-                        "tracer=${latest?.tracerPidCurrent ?: "未知"}, " +
-                        "helper=${latest?.helperPid ?: "未知"}, " +
+                    "vAttach 已发送，但未确认可信 traced 状态：running=${latest?.running ?: false}, " +
+                        "tracer=${latest?.tracerPidCurrent ?: "未知"}, helper=${latest?.helperPid ?: "未知"}, " +
                         "failure=${latest?.failure ?: "无"}"
                 }
 
@@ -164,6 +161,10 @@ class HostDebuggerControlBridge(
                 snapshot()
             } catch (exception: Exception) {
                 created.close()
+                if (attachPacketSent) {
+                    runCatching { manager.stop() }
+                    appendAudit("client_attach_failed_safe_helper_teardown")
+                }
                 synchronized(lock) {
                     client = null
                     mutable.connected = false
@@ -246,7 +247,6 @@ class HostDebuggerControlBridge(
         }
     }
 
-    /** Start continue asynchronously so the UI remains able to issue [interrupt]. */
     suspend fun continueTarget(): HostDebuggerControlSnapshot {
         requireStoppedClient()
         synchronized(lock) {
@@ -288,21 +288,13 @@ class HostDebuggerControlBridge(
         activeClient.interrupt()
         appendAudit("interrupt_sent")
         val job = synchronized(lock) { controlJob }
-        if (job != null) {
-            withTimeoutOrNull(INTERRUPT_WAIT_MILLIS) { joinAll(job) }
-        }
+        if (job != null) withTimeoutOrNull(INTERRUPT_WAIT_MILLIS) { joinAll(job) }
         snapshot()
     }
 
-    /**
-     * Prepare for the existing trusted helper teardown. If the target is running through a
-     * continue command, interrupt it first; then close only the loopback client socket.
-     */
     suspend fun prepareForDetach(): HostDebuggerControlSnapshot = withContext(Dispatchers.IO) {
         val shouldInterrupt = synchronized(lock) { mutable.connected && mutable.targetRunning }
-        if (shouldInterrupt) {
-            runCatching { interrupt() }
-        }
+        if (shouldInterrupt) runCatching { interrupt() }
         synchronized(lock) {
             client?.close()
             client = null
@@ -324,7 +316,7 @@ class HostDebuggerControlBridge(
 
     private suspend fun awaitConfirmedAttach(sessionId: String): HostDebuggerSessionSnapshot? {
         var latest: HostDebuggerSessionSnapshot? = null
-        repeat(POST_CONNECT_ATTACH_ATTEMPTS) {
+        repeat(POST_ATTACH_CONFIRM_ATTEMPTS) {
             latest = manager.refresh()
             val current = latest
             if (current == null || current.sessionId != sessionId || !current.running || current.failure != null) {
@@ -333,7 +325,7 @@ class HostDebuggerControlBridge(
             if (current.attachedObserved && current.tracerPidCurrent != null && current.tracerPidCurrent > 0) {
                 return current
             }
-            delay(POST_CONNECT_ATTACH_DELAY_MILLIS)
+            delay(POST_ATTACH_CONFIRM_DELAY_MILLIS)
         }
         return latest
     }
@@ -427,8 +419,8 @@ class HostDebuggerControlBridge(
         const val DEFAULT_UI_REGISTER_LIMIT = 32
         const val MAX_UI_REGISTER_LIMIT = 128
         const val MAX_UI_MEMORY_READ_BYTES = 512
-        private const val POST_CONNECT_ATTACH_ATTEMPTS = 20
-        private const val POST_CONNECT_ATTACH_DELAY_MILLIS = 150L
+        private const val POST_ATTACH_CONFIRM_ATTEMPTS = 30
+        private const val POST_ATTACH_CONFIRM_DELAY_MILLIS = 100L
         private const val INTERRUPT_WAIT_MILLIS = 5_000L
         private val AUDIT_LOCK = Any()
     }
