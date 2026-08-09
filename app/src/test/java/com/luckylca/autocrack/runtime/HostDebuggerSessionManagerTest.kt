@@ -19,7 +19,7 @@ class HostDebuggerSessionManagerTest {
     }
 
     @Test
-    fun attachCommand_revalidatesIdentityAndTracerThenBindsLoopbackOnly() {
+    fun serverCommand_revalidatesIdentityButDefersAttachUntilTypedClient() {
         val command = HostDebuggerCommandFactory.buildAttach(
             suPath = "/system/bin/su",
             binaryPath = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/bin/lldb-server-android",
@@ -37,10 +37,42 @@ class HostDebuggerSessionManagerTest {
         assertTrue(shell.contains("TracerPid:"))
         assertTrue(shell.contains("127.0.0.1:5039"))
         assertTrue(shell.contains("gdbserver"))
-        assertTrue(shell.contains("--attach"))
+        assertFalse(shell.contains("--attach"))
         assertFalse(shell.contains("0.0.0.0"))
         assertFalse(shell.contains("/proc/4321/mem"))
         assertFalse(shell.contains("kill -TERM 4321"))
+    }
+
+    @Test
+    fun helperProbe_requiresExactBinaryCommandAndOwnedIpv4Listener() {
+        val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/bin/lldb-server-android"
+        val command = HostDebuggerCommandFactory.buildProbeHelper(
+            suPath = "/system/bin/su",
+            binaryPath = binary,
+            helperPid = 9001,
+            port = 5039,
+        )
+        val shell = command[2]
+
+        assertTrue(shell.contains("helper_pid=9001"))
+        assertTrue(shell.contains("DEBUG_HELPER_IDENTITY_MISMATCH"))
+        assertTrue(shell.contains("gdbserver 127.0.0.1:5039"))
+        assertTrue(shell.contains("/proc/net/tcp"))
+        assertTrue(shell.contains("socket:["))
+        assertFalse(shell.contains("0.0.0.0"))
+    }
+
+    @Test
+    fun helperProbeParserReadsVerifiedListenerState() {
+        val probe = HostDebuggerHelperProbeParser.parse(
+            "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver 127.0.0.1:5039\n",
+        )
+        assertTrue(probe.helperVerified)
+        assertTrue(probe.listenerReady)
+        assertEquals(
+            "/trusted/lldb-server gdbserver 127.0.0.1:5039",
+            probe.helperCommandLine,
+        )
     }
 
     @Test
