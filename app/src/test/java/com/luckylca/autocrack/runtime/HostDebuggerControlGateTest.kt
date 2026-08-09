@@ -6,11 +6,12 @@ import org.junit.Test
 
 class HostDebuggerControlGateTest {
     @Test
-    fun allowsRunningServerWaitingForClient() {
+    fun allowsOnlyVerifiedTargetlessListenerBeforeTypedAttach() {
         assertTrue(
             HostDebuggerControlGate.canAttemptConnection(
                 running = true,
-                attachedObserved = false,
+                helperVerified = true,
+                serverReadyForClient = true,
                 tracerPidCurrent = 0,
                 failure = null,
             ),
@@ -18,39 +19,39 @@ class HostDebuggerControlGateTest {
     }
 
     @Test
-    fun allowsAlreadyConfirmedSession() {
-        assertTrue(
-            HostDebuggerControlGate.canAttemptConnection(
-                running = true,
-                attachedObserved = true,
-                tracerPidCurrent = 8123,
-                failure = null,
-            ),
-        )
-    }
-
-    @Test
-    fun rejectsUnconfirmedOrBrokenStates() {
+    fun rejectsUnreadyAlreadyTracedOrBrokenStates() {
         assertFalse(
             HostDebuggerControlGate.canAttemptConnection(
                 running = true,
-                attachedObserved = false,
-                tracerPidCurrent = 8123,
+                helperVerified = true,
+                serverReadyForClient = false,
+                tracerPidCurrent = 0,
                 failure = null,
             ),
         )
         assertFalse(
             HostDebuggerControlGate.canAttemptConnection(
                 running = true,
-                attachedObserved = false,
-                tracerPidCurrent = null,
+                helperVerified = false,
+                serverReadyForClient = true,
+                tracerPidCurrent = 0,
+                failure = null,
+            ),
+        )
+        assertFalse(
+            HostDebuggerControlGate.canAttemptConnection(
+                running = true,
+                helperVerified = true,
+                serverReadyForClient = true,
+                tracerPidCurrent = 8123,
                 failure = null,
             ),
         )
         assertFalse(
             HostDebuggerControlGate.canAttemptConnection(
                 running = false,
-                attachedObserved = false,
+                helperVerified = true,
+                serverReadyForClient = true,
                 tracerPidCurrent = 0,
                 failure = null,
             ),
@@ -58,7 +59,8 @@ class HostDebuggerControlGateTest {
         assertFalse(
             HostDebuggerControlGate.canAttemptConnection(
                 running = true,
-                attachedObserved = false,
+                helperVerified = true,
+                serverReadyForClient = true,
                 tracerPidCurrent = 0,
                 failure = "server failed",
             ),
