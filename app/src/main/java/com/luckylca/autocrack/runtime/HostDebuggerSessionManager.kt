@@ -101,6 +101,27 @@ object HostDebuggerHelperProbeParser {
     )
 }
 
+/**
+ * After AutoCrack's TCP client has already connected, lldb-server may consume its single-client
+ * LISTEN socket. Post-accept validation therefore verifies the same live trusted helper and target
+ * state, but deliberately does not require the pre-connect LISTEN socket to still exist.
+ */
+object HostDebuggerPostAcceptGate {
+    fun canSendTypedAttach(
+        running: Boolean,
+        helperVerified: Boolean,
+        tracerPidCurrent: Int?,
+        failure: String?,
+    ): Boolean = running && helperVerified && failure == null && tracerPidCurrent == 0
+
+    fun canSendTypedAttach(server: HostDebuggerSessionSnapshot): Boolean = canSendTypedAttach(
+        running = server.running,
+        helperVerified = server.helperVerified,
+        tracerPidCurrent = server.tracerPidCurrent,
+        failure = server.failure,
+    )
+}
+
 object HostDebuggerCommandFactory {
     /**
      * Start a targetless lldb-server. The selected target is revalidated here, but the actual
@@ -327,19 +348,21 @@ class HostDebuggerSessionManager(
         return snapshot(session)
     }
 
-    /** Revalidate target identity immediately before the typed client sends vAttach. */
+    /**
+     * Revalidate the target immediately after AutoCrack has successfully established the TCP
+     * transport and immediately before the typed client sends vAttach. The pre-connect LISTEN
+     * socket is intentionally not required here because lldb-server may consume it on accept.
+     */
     suspend fun prepareClientAttach(expectedSessionId: String): HostDebuggerSessionSnapshot {
         val session = synchronized(lock) {
             requireNotNull(activeSession) { "当前没有 LLDB server session" }
         }
         require(session.sessionId == expectedSessionId) { "Debugger session 已变化；拒绝 attach" }
         val refreshed = requireNotNull(refresh()) { "当前没有 LLDB server session" }
-        require(refreshed.running && refreshed.helperVerified && refreshed.serverReadyForClient) {
-            "LLDB server 尚未在可信 IPv4 loopback socket 上就绪"
-        }
-        require(refreshed.failure == null) { "LLDB server 状态异常：${refreshed.failure}" }
-        require(refreshed.tracerPidCurrent == 0) {
-            "目标已被 tracer ${refreshed.tracerPidCurrent} 附加；拒绝发送 vAttach"
+        require(HostDebuggerPostAcceptGate.canSendTypedAttach(refreshed)) {
+            "LLDB transport 已连接，但 helper/target 的 post-accept 身份状态不允许发送 vAttach：" +
+                "running=${refreshed.running}, helperVerified=${refreshed.helperVerified}, " +
+                "tracer=${refreshed.tracerPidCurrent ?: "未知"}, failure=${refreshed.failure ?: "无"}"
         }
         synchronized(lock) { session.attachAttempted = true }
         appendAudit("typed_vattach_about_to_send", session)
