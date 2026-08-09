@@ -59,7 +59,7 @@ jobs:
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
             | jq -e '
-                .catalogVersion == "0.5.14.3" and
+                .catalogVersion == "0.5.14.4" and
                 .safetyBoundary.defaultOperationMode == "read_only" and
                 .safetyBoundary.attachAllowed == true and
                 .safetyBoundary.attachRequiresExplicitAuthorization == true and
@@ -81,16 +81,21 @@ jobs:
                 (.tools[] | select(.id == "host.debugger.lldb_server_session") |
                   .networkScope == "127.0.0.1 only" and
                   .networkAddressFamily == "IPv4" and
-                  ([.guarantees[]] | index("create the helper PID file under controller ownership before the root helper writes its PID") != null) and
-                  ([.guarantees[]] | index("confirm a nonzero TracerPid only when it matches this session helper PID") != null)) and
+                  .changesTargetState == false and
+                  ([.guarantees[]] | index("start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach") != null) and
+                  ([.guarantees[]] | index("verify the 127.0.0.1 listener socket inode is owned by the verified helper PID") != null) and
+                  ([.guarantees[]] | index("create the helper PID file under controller ownership before the root helper writes its PID") != null)) and
                 (.tools[] | select(.id == "host.debugger.client_control") |
                   .confirmation == "exact_target_phrase" and
                   .authorizationTemplate == "CONTROL <packageName> <pid>" and
                   .networkScope == "127.0.0.1 only" and
                   .networkAddressFamily == "IPv4" and
-                  ([.guarantees[]] | index("construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution") != null) and
-                  ([.guarantees[]] | index("allow CONTROL connection when the authorized server is running and TracerPid is still 0 so the client handshake can complete deferred attach") != null) and
-                  ([.guarantees[]] | index("after transport handshake require the same server session to report a confirmed nonzero trusted TracerPid before exposing clientConnected=true") != null) and
+                  ([.operations[].id] | index("typed_attach") != null) and
+                  (.operations[] | select(.id == "typed_attach") | .packetShape == "vAttach;<hexPid>") and
+                  ([.guarantees[]] | index("require a verified helper-owned LISTEN socket before CONTROL can connect") != null) and
+                  ([.guarantees[]] | index("revalidate the same package/PID and TracerPid=0 immediately before typed vAttach") != null) and
+                  ([.guarantees[]] | index("encode only the already authorized session PID into the fixed typed vAttach packet") != null) and
+                  ([.guarantees[]] | index("no arbitrary raw gdb-remote packet adapter") != null) and
                   ([.operations[].id] | index("register_read") != null) and
                   ([.operations[].id] | index("memory_read") != null) and
                   ([.operations[].id] | index("continue") != null) and
@@ -99,6 +104,7 @@ jobs:
                 (.tools[] | select(.id == "host.debugger.orphan_recovery") |
                   .confirmation == "exact_target_and_tracer_phrase" and
                   .authorizationTemplate == "RECOVER <packageName> <pid> <tracerPid>" and
+                  ([.guarantees[]] | index("accept only a trusted IPv4 loopback gdbserver command from either legacy --attach or typed client-driven attach sessions") != null) and
                   ([.guarantees[]] | index("send TERM only to the verified LLDB helper and never to the target PID") != null) and
                   ([.guarantees[]] | index("never escalate recovery to SIGKILL") != null))
               ' >/dev/null
@@ -106,15 +112,15 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.3-deferred-attach-hotfix-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.4-client-driven-vattach-hotfix-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.14.3-deferred-attach-hotfix-debug.apk \
-            > AutoCrackApp-0.5.14.3-deferred-attach-hotfix-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.14.4-client-driven-vattach-hotfix-debug.apk \
+            > AutoCrackApp-0.5.14.4-client-driven-vattach-hotfix-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.3-deferred-attach-hotfix-debug
+          name: AutoCrackApp-0.5.14.4-client-driven-vattach-hotfix-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -123,7 +129,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.3-deferred-attach-hotfix-reports
+          name: AutoCrackApp-0.5.14.4-client-driven-vattach-hotfix-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
