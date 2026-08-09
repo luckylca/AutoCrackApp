@@ -41,6 +41,15 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
+    fun debuggerEndpointIsLiteralIpv4Loopback() {
+        val endpoint = HostDebuggerRemoteClient.ipv4LoopbackEndpoint(5039)
+
+        assertEquals("127.0.0.1", endpoint.address.hostAddress)
+        assertEquals(4, endpoint.address.address.size)
+        assertEquals(5039, endpoint.port)
+    }
+
+    @Test
     fun parsesRegisterMetadataWithoutAssumingArchitectureLayout() {
         val info = GdbRemoteRegisterInfoParser.parse(
             index = 0,
