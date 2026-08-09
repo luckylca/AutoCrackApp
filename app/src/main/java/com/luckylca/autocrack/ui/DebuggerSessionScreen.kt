@@ -37,6 +37,7 @@ import com.luckylca.autocrack.runtime.DynamicHostReadBridge
 import com.luckylca.autocrack.runtime.HostDebuggerAuthorization
 import com.luckylca.autocrack.runtime.HostDebuggerControlAuthorization
 import com.luckylca.autocrack.runtime.HostDebuggerControlBridge
+import com.luckylca.autocrack.runtime.HostDebuggerControlGate
 import com.luckylca.autocrack.runtime.HostDebuggerControlSnapshot
 import com.luckylca.autocrack.runtime.HostDebuggerSessionManager
 import com.luckylca.autocrack.runtime.HostDebuggerSessionSnapshot
@@ -106,7 +107,7 @@ fun DebuggerSessionScreen(
         }
         scope.launch {
             loading = true
-            status = "正在最终复核 PID 身份并 attach；目标会暂时停止"
+            status = "正在最终复核 PID 身份并启动 LLDB server；目标可能在 client 握手后才进入 traced 状态"
             runCatching {
                 manager.start(targetPackage, pid, port, attachAuthorization)
             }.onSuccess { result ->
@@ -115,8 +116,10 @@ fun DebuggerSessionScreen(
                 controlAuthorization = ""
                 status = if (result.attachedObserved) {
                     "LLDB server 已附加：TracerPid=${result.tracerPidCurrent}；可进行第二层 CONTROL 授权"
+                } else if (result.running && result.tracerPidCurrent == 0) {
+                    "LLDB server helper 已启动且 TracerPid=0；可输入第二层 CONTROL，让 client 握手完成并确认 attach"
                 } else if (result.running) {
-                    "LLDB server helper 已启动，但尚未确认 TracerPid；请刷新"
+                    "LLDB server helper 已启动，但当前 attach 状态未确认；请刷新或查看诊断"
                 } else {
                     "LLDB server 已退出：exit=${result.exitCode ?: "无"}"
                 }
@@ -144,13 +147,14 @@ fun DebuggerSessionScreen(
     fun connectClient() {
         scope.launch {
             loading = true
-            status = "正在连接 127.0.0.1 LLDB gdb-remote；不会发送写入或断点命令"
+            status = "正在连接 127.0.0.1 LLDB gdb-remote；连接后必须再次确认可信 TracerPid，不会发送写入或断点命令"
             runCatching { controlBridge.connect(controlAuthorization) }
                 .onSuccess { result ->
                     controlSnapshot = result
-                    status = "LLDB client 已连接：stop=${result.lastStopReply ?: "未知"} capabilities=${result.capabilities.size}"
+                    status = "LLDB client 已连接且 attach 已确认：stop=${result.lastStopReply ?: "未知"} capabilities=${result.capabilities.size}"
                 }
                 .onFailure { exception -> status = exception.message ?: "LLDB client 连接失败" }
+            serverSnapshot = runCatching { manager.refresh() }.getOrNull() ?: serverSnapshot
             loading = false
         }
     }
@@ -387,6 +391,15 @@ fun DebuggerSessionScreen(
                     Text("执行控制会恢复目标运行，请再次输入：", fontWeight = FontWeight.SemiBold)
                     SelectionContainer { Text(phrase, fontFamily = FontFamily.Monospace) }
                 }
+                val pendingClientAttach = serverSnapshot?.let { server ->
+                    server.running && !server.attachedObserved && server.tracerPidCurrent == 0 && server.failure == null
+                } == true
+                if (pendingClientAttach) {
+                    Text(
+                        "当前 LLDB server 正在运行但 TracerPid 仍为 0；此设备可能需要 client 握手后才完成 attach。完成 CONTROL 授权后可直接连接，连接后会再次强制验证 TracerPid。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 OutlinedTextField(
                     value = controlAuthorization,
                     onValueChange = { controlAuthorization = it },
@@ -397,7 +410,9 @@ fun DebuggerSessionScreen(
                 Button(
                     onClick = ::connectClient,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = !loading && serverSnapshot?.attachedObserved == true && !controlSnapshot.connected,
+                    enabled = !loading &&
+                        serverSnapshot?.let(HostDebuggerControlGate::canAttemptConnection) == true &&
+                        !controlSnapshot.connected,
                 ) { Text("授权并连接 127.0.0.1 LLDB client") }
                 ControlSnapshot(controlSnapshot)
             }
