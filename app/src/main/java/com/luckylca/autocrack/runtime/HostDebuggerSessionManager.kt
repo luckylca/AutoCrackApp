@@ -145,6 +145,11 @@ object HostDebuggerCommandFactory {
     /**
      * Start a targetless lldb-server. The selected target is revalidated here, but the actual
      * ptrace attach is deferred until the typed CONTROL client sends vAttach for this same PID.
+     *
+     * The server-side packet and ptrace channels are deliberately enabled for Phase 5.14 device
+     * validation. lldb-server writes these logs to stderr, which AutoCrack already bounds and
+     * includes in copied diagnostics. This gives us authoritative evidence when Android attach
+     * stalls inside the server rather than guessing from a client-side timeout.
      */
     fun buildAttach(
         suPath: String,
@@ -164,11 +169,13 @@ object HostDebuggerCommandFactory {
         val binary = RootToolCommandFactory.shellQuote(binaryPath)
         val expectedPackage = RootToolCommandFactory.shellQuote(packageName)
         val pidFile = RootToolCommandFactory.shellQuote(helperPidFile)
+        val logChannels = RootToolCommandFactory.shellQuote(DEBUG_LOG_CHANNELS)
         val shell = """
             target_pid=$pid
             target_package=$expectedPackage
             binary=$binary
             helper_pid_file=$pidFile
+            debug_log_channels=$logChannels
             proc=/proc/${'$'}target_pid
             [ -d "${'$'}proc" ] || { echo 'DEBUG_TARGET_NOT_FOUND pid=$pid' >&2; exit 41; }
             argv0=${'$'}(tr '\000' '\n' < "${'$'}proc/cmdline" 2>/dev/null | head -n 1)
@@ -179,7 +186,8 @@ object HostDebuggerCommandFactory {
             tracer=${'$'}(awk '/^TracerPid:/ { print ${'$'}2; exit }' "${'$'}proc/status" 2>/dev/null)
             [ "${'$'}{tracer:-0}" = "0" ] || { echo "DEBUG_TARGET_ALREADY_TRACED tracer=${'$'}tracer" >&2; exit 43; }
             printf '%s\n' "${'$'}${'$'}" > "${'$'}helper_pid_file"
-            exec "${'$'}binary" gdbserver "127.0.0.1:$port"
+            printf 'AUTOCRACK_LLDB_TRACE channels=%s target_pid=%s\n' "${'$'}debug_log_channels" "${'$'}target_pid" >&2
+            exec "${'$'}binary" gdbserver --log-channels "${'$'}debug_log_channels" "127.0.0.1:$port"
         """.trimIndent()
         return listOf(suPath, "-c", shell)
     }
@@ -195,9 +203,11 @@ object HostDebuggerCommandFactory {
         require(helperPid > 0) { "Helper PID must be positive" }
         require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
         val binary = RootToolCommandFactory.shellQuote(binaryPath)
+        val logChannels = RootToolCommandFactory.shellQuote(DEBUG_LOG_CHANNELS)
         val shell = """
             helper_pid=$helperPid
             binary=$binary
+            debug_log_channels=$logChannels
             proc=/proc/${'$'}helper_pid
             [ -d "${'$'}proc" ] || { echo 'DEBUG_HELPER_NOT_FOUND' >&2; exit 45; }
             argv0=${'$'}(tr '\000' '\n' < "${'$'}proc/cmdline" 2>/dev/null | head -n 1)
@@ -206,10 +216,11 @@ object HostDebuggerCommandFactory {
               exit 44
             }
             cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')
-            case "${'$'}cmdline" in
-              "${'$'}binary gdbserver 127.0.0.1:$port") ;;
-              *) echo "DEBUG_HELPER_COMMAND_MISMATCH cmdline=${'$'}cmdline" >&2; exit 46 ;;
-            esac
+            expected_cmdline="${'$'}binary gdbserver --log-channels ${'$'}debug_log_channels 127.0.0.1:$port"
+            [ "${'$'}cmdline" = "${'$'}expected_cmdline" ] || {
+              echo "DEBUG_HELPER_COMMAND_MISMATCH cmdline=${'$'}cmdline" >&2
+              exit 46
+            }
             port_hex=${'$'}(printf '%04X' $port)
             listen_inode=${'$'}(awk -v endpoint="0100007F:${'$'}port_hex" '${'$'}2 == endpoint && ${'$'}4 == "0A" { print ${'$'}10; exit }' /proc/net/tcp 2>/dev/null)
             listener_ready=false
@@ -254,6 +265,7 @@ object HostDebuggerCommandFactory {
         }
     }
 
+    private const val DEBUG_LOG_CHANNELS = "gdb-remote packets:posix ptrace"
     private const val MIN_PORT = 1024
     private const val MAX_PORT = 65535
 }
