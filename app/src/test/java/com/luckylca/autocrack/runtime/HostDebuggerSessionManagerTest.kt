@@ -38,6 +38,9 @@ class HostDebuggerSessionManagerTest {
         assertTrue(shell.contains("TracerPid:"))
         assertTrue(shell.contains("127.0.0.1:5039"))
         assertTrue(shell.contains("gdbserver"))
+        assertTrue(shell.contains("--log-channels"))
+        assertTrue(shell.contains("gdb-remote packets:posix ptrace"))
+        assertTrue(shell.contains("AUTOCRACK_LLDB_TRACE"))
         assertFalse(shell.contains("--attach"))
         assertFalse(shell.contains("0.0.0.0"))
         assertFalse(shell.contains("/proc/4321/mem"))
@@ -57,7 +60,9 @@ class HostDebuggerSessionManagerTest {
 
         assertTrue(shell.contains("helper_pid=9001"))
         assertTrue(shell.contains("DEBUG_HELPER_IDENTITY_MISMATCH"))
-        assertTrue(shell.contains("gdbserver 127.0.0.1:5039"))
+        assertTrue(shell.contains("gdbserver --log-channels"))
+        assertTrue(shell.contains("gdb-remote packets:posix ptrace"))
+        assertTrue(shell.contains("127.0.0.1:5039"))
         assertTrue(shell.contains("/proc/net/tcp"))
         assertTrue(shell.contains("socket:["))
         assertFalse(shell.contains("0.0.0.0"))
@@ -66,12 +71,12 @@ class HostDebuggerSessionManagerTest {
     @Test
     fun helperProbeParserReadsVerifiedListenerState() {
         val probe = HostDebuggerHelperProbeParser.parse(
-            "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver 127.0.0.1:5039\n",
+            "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver --log-channels gdb-remote packets:posix ptrace 127.0.0.1:5039\n",
         )
         assertTrue(probe.helperVerified)
         assertTrue(probe.listenerReady)
         assertEquals(
-            "/trusted/lldb-server gdbserver 127.0.0.1:5039",
+            "/trusted/lldb-server gdbserver --log-channels gdb-remote packets:posix ptrace 127.0.0.1:5039",
             probe.helperCommandLine,
         )
     }
@@ -91,7 +96,7 @@ class HostDebuggerSessionManagerTest {
     fun helperProbePolicyInvalidatesTrustWhenProbeCommandFails() {
         val probe = HostDebuggerHelperProbePolicy.evaluate(
             commandSucceeded = false,
-            stdout = "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver 127.0.0.1:5039\n",
+            stdout = "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver --log-channels gdb-remote packets:posix ptrace 127.0.0.1:5039\n",
         )
 
         assertFalse(probe.helperVerified)
