@@ -2,12 +2,15 @@ package com.luckylca.autocrack.runtime
 
 import java.io.Closeable
 import java.io.EOFException
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
+import kotlin.math.min
 
 /**
  * Minimal client for the loopback gdb-remote endpoint exposed by the trusted Android lldb-server.
@@ -36,7 +39,10 @@ class HostDebuggerRemoteClient(
     val connected: Boolean
         get() = socket?.let { candidate -> candidate.isConnected && !candidate.isClosed } == true
 
-    /** Connect to a targetless lldb-server and negotiate transport capabilities only. */
+    /**
+     * Connect to a targetless lldb-server and perform the same important transport ordering used
+     * by LLDB itself: initial ACK, no-ack negotiation, then capability discovery.
+     */
     fun connect(): GdbRemoteHandshake {
         require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
         check(!connected) { "GDB remote client is already connected" }
@@ -50,6 +56,15 @@ class HostDebuggerRemoteClient(
         output = created.getOutputStream()
 
         return try {
+            // LLDB's HandshakeWithServer sends an initial ACK before negotiating no-ack mode.
+            sendRawByte(ACK_BYTE)
+            val noAckReply = requestWithTimeout(
+                payload = "QStartNoAckMode",
+                timeoutMillis = HANDSHAKE_TIMEOUT_MILLIS,
+                operationName = "QStartNoAckMode",
+            )
+            if (noAckReply == "OK") noAckMode = true
+
             val supported = request("qSupported:multiprocess+;QStartNoAckMode+;vContSupported+")
             val capabilities = supported
                 .split(';')
@@ -57,13 +72,10 @@ class HostDebuggerRemoteClient(
                 .filter(String::isNotBlank)
                 .toSet()
 
-            if (capabilities.any { capability -> capability == "QStartNoAckMode+" }) {
-                val result = request("QStartNoAckMode")
-                require(result == "OK") { "lldb-server rejected no-ack mode: $result" }
-                noAckMode = true
-            }
-
-            GdbRemoteHandshake(capabilities = capabilities)
+            GdbRemoteHandshake(
+                capabilities = capabilities,
+                noAckModeEnabled = noAckMode,
+            )
         } catch (exception: Exception) {
             close()
             throw exception
@@ -73,12 +85,30 @@ class HostDebuggerRemoteClient(
     /**
      * Attach the already authorized PID using LLDB's typed vAttach packet. PID is encoded in
      * hexadecimal exactly as LLDB's ProcessGDBRemote client does.
+     *
+     * vAttach is a run/continue-class request: attaching a large Android process can take much
+     * longer than an ordinary metadata query. We therefore send the packet once and wait for its
+     * stop reply with a bounded 90-second deadline, while waking every five seconds so a stalled
+     * socket does not get mistaken for an immediate protocol failure.
      */
     fun attach(pid: Int): String {
         require(pid > 0) { "Attach PID must be positive" }
-        val response = requestWithTimeout(
+
+        // LLDB's own DoAttachToProcessWithID configures this immediately before vAttach. Older or
+        // non-LLDB stubs may return an empty unsupported response, which is safe to tolerate.
+        val detachOnErrorReply = requestWithTimeout(
+            payload = "QSetDetachOnError:1",
+            timeoutMillis = ATTACH_PREPARE_TIMEOUT_MILLIS,
+            operationName = "QSetDetachOnError",
+        )
+        require(detachOnErrorReply == "OK" || detachOnErrorReply.isBlank()) {
+            "lldb-server rejected QSetDetachOnError: $detachOnErrorReply"
+        }
+
+        val response = requestRunUntilStop(
             payload = "vAttach;${pid.toString(16)}",
-            timeoutMillis = CONTROL_COMMAND_TIMEOUT_MILLIS,
+            totalTimeoutMillis = ATTACH_WAIT_TIMEOUT_MILLIS,
+            operationName = "vAttach",
         )
         require(!response.startsWith('E')) { "LLDB attach failed: $response" }
         require(response.startsWith('T') || response.startsWith('S')) {
@@ -128,10 +158,17 @@ class HostDebuggerRemoteClient(
 
     fun continueUntilStop(): String = requestWithTimeout("vCont;c", timeoutMillis = 0)
 
-    fun step(): String = requestWithTimeout(
-        payload = "vCont;s",
-        timeoutMillis = CONTROL_COMMAND_TIMEOUT_MILLIS,
-    )
+    fun step(): String {
+        val response = requestRunUntilStop(
+            payload = "vCont;s",
+            totalTimeoutMillis = STEP_WAIT_TIMEOUT_MILLIS,
+            operationName = "vCont;s",
+        )
+        require(response.startsWith('T') || response.startsWith('S')) {
+            "Unexpected LLDB step response: $response"
+        }
+        return response
+    }
 
     fun interrupt() {
         requireConnected()
@@ -156,9 +193,14 @@ class HostDebuggerRemoteClient(
     private fun request(payload: String): String = requestWithTimeout(
         payload = payload,
         timeoutMillis = observationTimeoutMillis,
+        operationName = payload.substringBefore(':').substringBefore(';'),
     )
 
-    private fun requestWithTimeout(payload: String, timeoutMillis: Int): String = synchronized(requestLock) {
+    private fun requestWithTimeout(
+        payload: String,
+        timeoutMillis: Int,
+        operationName: String = payload,
+    ): String = synchronized(requestLock) {
         require(payload.isNotBlank()) { "GDB remote payload must not be blank" }
         require(payload.length <= MAX_PACKET_PAYLOAD_CHARS) { "GDB remote payload too large" }
         requireConnected()
@@ -168,7 +210,14 @@ class HostDebuggerRemoteClient(
         try {
             sendPacket(payload)
             while (true) {
-                val response = readPacket()
+                val response = try {
+                    readPacket()
+                } catch (exception: SocketTimeoutException) {
+                    throw IOException(
+                        "GDB remote $operationName read timed out after ${timeoutMillis}ms",
+                        exception,
+                    )
+                }
                 if (isConsoleOutputPacket(response)) continue
                 return@synchronized response
             }
@@ -176,6 +225,113 @@ class HostDebuggerRemoteClient(
             error("unreachable")
         } finally {
             if (!activeSocket.isClosed) activeSocket.soTimeout = previousTimeout
+        }
+    }
+
+    /**
+     * Continue-class packet reader with a bounded total deadline. Unlike a normal request, a
+     * five-second socket timeout is only a wake-up point; it does not mean vAttach/step failed.
+     */
+    private fun requestRunUntilStop(
+        payload: String,
+        totalTimeoutMillis: Int,
+        operationName: String,
+    ): String = synchronized(requestLock) {
+        require(payload.isNotBlank()) { "GDB remote payload must not be blank" }
+        require(totalTimeoutMillis > 0) { "Run packet timeout must be positive" }
+        requireConnected()
+        val activeSocket = requireNotNull(socket)
+        val previousTimeout = activeSocket.soTimeout
+        activeSocket.soTimeout = min(RUN_REPLY_POLL_TIMEOUT_MILLIS, totalTimeoutMillis)
+        val deadlineNanos = System.nanoTime() + totalTimeoutMillis * NANOS_PER_MILLISECOND
+        try {
+            sendPacket(payload)
+            while (true) {
+                val response = readPacketWithDeadline(
+                    activeSocket = activeSocket,
+                    deadlineNanos = deadlineNanos,
+                    operationName = operationName,
+                    totalTimeoutMillis = totalTimeoutMillis,
+                )
+                if (isConsoleOutputPacket(response)) continue
+                return@synchronized response
+            }
+            @Suppress("UNREACHABLE_CODE")
+            error("unreachable")
+        } finally {
+            if (!activeSocket.isClosed) activeSocket.soTimeout = previousTimeout
+        }
+    }
+
+    /** Preserve packet parser state across five-second wake-up timeouts. */
+    private fun readPacketWithDeadline(
+        activeSocket: Socket,
+        deadlineNanos: Long,
+        operationName: String,
+        totalTimeoutMillis: Int,
+    ): String {
+        var value: Int
+        do {
+            value = readByteWithDeadline(
+                activeSocket,
+                deadlineNanos,
+                operationName,
+                totalTimeoutMillis,
+            )
+            if (value < 0) throw EOFException("GDB remote peer closed the connection")
+        } while (value != PACKET_START_BYTE)
+
+        val payload = ByteArrayOutputCollector(MAX_PACKET_RESPONSE_BYTES)
+        while (true) {
+            val next = readByteWithDeadline(
+                activeSocket,
+                deadlineNanos,
+                operationName,
+                totalTimeoutMillis,
+            )
+            if (next < 0) throw EOFException("GDB remote peer closed the connection")
+            if (next == CHECKSUM_SEPARATOR_BYTE) break
+            payload.add(next)
+        }
+        val checksumHigh = readByteWithDeadline(
+            activeSocket,
+            deadlineNanos,
+            operationName,
+            totalTimeoutMillis,
+        )
+        val checksumLow = readByteWithDeadline(
+            activeSocket,
+            deadlineNanos,
+            operationName,
+            totalTimeoutMillis,
+        )
+        if (checksumHigh < 0 || checksumLow < 0) throw EOFException("Incomplete GDB remote checksum")
+        return validatePacket(payload.toByteArray(), checksumHigh, checksumLow)
+    }
+
+    private fun readByteWithDeadline(
+        activeSocket: Socket,
+        deadlineNanos: Long,
+        operationName: String,
+        totalTimeoutMillis: Int,
+    ): Int {
+        while (true) {
+            val remainingNanos = deadlineNanos - System.nanoTime()
+            if (remainingNanos <= 0L) {
+                throw IOException(
+                    "GDB remote $operationName timed out after ${totalTimeoutMillis}ms waiting for stop reply",
+                )
+            }
+            val remainingMillis = (remainingNanos / NANOS_PER_MILLISECOND)
+                .coerceAtLeast(1L)
+                .coerceAtMost(Int.MAX_VALUE.toLong())
+                .toInt()
+            activeSocket.soTimeout = min(RUN_REPLY_POLL_TIMEOUT_MILLIS, remainingMillis)
+            try {
+                return requireNotNull(input).read()
+            } catch (_: SocketTimeoutException) {
+                // Continue until the total deadline. This mirrors LLDB's continue-class wakeups.
+            }
         }
     }
 
@@ -216,8 +372,11 @@ class HostDebuggerRemoteClient(
         val checksumHigh = stream.read()
         val checksumLow = stream.read()
         if (checksumHigh < 0 || checksumLow < 0) throw EOFException("Incomplete GDB remote checksum")
+        return validatePacket(payload.toByteArray(), checksumHigh, checksumLow)
+    }
+
+    private fun validatePacket(bytes: ByteArray, checksumHigh: Int, checksumLow: Int): String {
         val expected = hexPairToInt(checksumHigh, checksumLow)
-        val bytes = payload.toByteArray()
         val actual = GdbRemotePacketCodec.checksum(bytes)
         if (actual != expected) {
             if (!noAckMode) sendRawByte(NACK_BYTE)
@@ -272,6 +431,8 @@ class HostDebuggerRemoteClient(
         const val MAX_MEMORY_READ_BYTES = 4096
         const val MAX_REGISTER_LIMIT = 512
         const val DEFAULT_REGISTER_LIMIT = 128
+        internal const val ATTACH_WAIT_TIMEOUT_MILLIS = 90_000
+        internal const val RUN_REPLY_POLL_TIMEOUT_MILLIS = 5_000
 
         internal fun ipv4LoopbackEndpoint(port: Int): InetSocketAddress {
             require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
@@ -283,7 +444,9 @@ class HostDebuggerRemoteClient(
         private const val MAX_PORT = 65535
         private const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 3_000
         private const val DEFAULT_OBSERVATION_TIMEOUT_MILLIS = 5_000
-        private const val CONTROL_COMMAND_TIMEOUT_MILLIS = 15_000
+        private const val HANDSHAKE_TIMEOUT_MILLIS = 6_000
+        private const val ATTACH_PREPARE_TIMEOUT_MILLIS = 10_000
+        private const val STEP_WAIT_TIMEOUT_MILLIS = 30_000
         private const val MAX_PACKET_PAYLOAD_CHARS = 8_192
         private const val MAX_PACKET_RESPONSE_BYTES = 1_048_576
         private const val MAX_ACK_RETRIES = 3
@@ -292,10 +455,14 @@ class HostDebuggerRemoteClient(
         private const val ACK_BYTE = '+'.code
         private const val NACK_BYTE = '-'.code
         private const val INTERRUPT_BYTE = 0x03
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }
 
-data class GdbRemoteHandshake(val capabilities: Set<String>)
+data class GdbRemoteHandshake(
+    val capabilities: Set<String>,
+    val noAckModeEnabled: Boolean = false,
+)
 
 data class GdbRemoteRegisterInfo(
     val index: Int,
