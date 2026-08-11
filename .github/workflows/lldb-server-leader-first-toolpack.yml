@@ -1,0 +1,256 @@
+name: Build patched Android LLDB server toolpack
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lldb-server-leader-first-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-lldb-server-toolpack:
+    name: Build Android LLVM r522817 leader-first lldb-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      NDK_VERSION: "27.3.13750724"
+      ANDROID_LLVM_COMMIT: "d8003a456d14a3deb8054cdaa529ffbf02d9b262"
+      TOOLPACK_ID: android-lldb-server
+      TOOLPACK_VERSION: android-llvm-r522817_autocrack-1.1.0-leader-first
+
+    steps:
+      - name: Check out AutoCrackApp
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned NDK and build tools
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Fetch Android LLVM r522817 source
+        run: |
+          set -euxo pipefail
+          git init android-llvm
+          git -C android-llvm remote add origin https://android.googlesource.com/toolchain/llvm-project
+          git -C android-llvm fetch --depth=1 origin "${ANDROID_LLVM_COMMIT}"
+          git -C android-llvm checkout --detach FETCH_HEAD
+          git -C android-llvm rev-parse HEAD | tee android-llvm.commit.txt
+          test "$(cat android-llvm.commit.txt)" = "${ANDROID_LLVM_COMMIT}"
+
+      - name: Patch LLDB attach order to trace leader first
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('android-llvm/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp')
+          text = path.read_text(encoding='utf-8')
+          needle = '  Host::TidMap tids_to_attach;\n  while (Host::FindProcessThreads(pid, tids_to_attach)) {'
+          if needle not in text:
+              raise SystemExit('NativeProcessLinux::Attach layout changed; refusing an unverified patch')
+
+          leader_first = r'''  Host::TidMap tids_to_attach;
+
+  // AutoCrack Android patch: attach the thread-group leader first. Upstream
+  // stores TIDs in std::map, so after PID-number wrap an old low-numbered
+  // worker TID can otherwise be attached before the requested process leader.
+  // NativeProcessLinux blocks in waitpid() after each PTRACE_ATTACH; if that
+  // first worker cannot promptly enter ptrace-stop, the entire vAttach stalls
+  // before the leader is ever traced. Establish the explicitly requested PID
+  // first, then let the normal upstream loop discover and attach sibling TIDs.
+  if ((status = PtraceWrapper(PTRACE_ATTACH, pid)).Fail()) {
+    if (status.GetError() == EPERM)
+      return AddPtraceScopeNote(status.ToError());
+    return status.ToError();
+  }
+
+  int leader_wpid =
+      llvm::sys::RetryAfterSignal(-1, ::waitpid, pid, nullptr, __WALL);
+  if (leader_wpid < 0)
+    return llvm::errorCodeToError(
+        std::error_code(errno, std::generic_category()));
+
+  if ((status = SetDefaultPtraceOpts(pid)).Fail())
+    return status.ToError();
+
+  LLDB_LOG(log, "AutoCrack leader-first attach: adding leader tid = {0}", pid);
+  tids_to_attach.insert(Host::TidPair(pid, true));
+
+  while (Host::FindProcessThreads(pid, tids_to_attach)) {'''
+          text = text.replace(needle, leader_first, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          git -C android-llvm diff --check
+          git -C android-llvm diff -- lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp \
+            | tee autocrack-lldb-leader-first.patch
+          grep -F 'AutoCrack leader-first attach' autocrack-lldb-leader-first.patch
+          sha256sum autocrack-lldb-leader-first.patch | tee autocrack-lldb-leader-first.patch.sha256
+
+      - name: Cross-compile patched lldb-server for Android arm64
+        run: |
+          set -euxo pipefail
+          NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          test -f "${NDK_ROOT}/build/cmake/android.toolchain.cmake"
+
+          cmake -S android-llvm/llvm -B llvm-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_static \
+            -DANDROID_ALLOW_UNDEFINED_SYMBOLS=ON \
+            -DLLVM_ENABLE_PROJECTS="clang;lldb" \
+            -DLLVM_TARGETS_TO_BUILD=AArch64 \
+            -DLLVM_HOST_TRIPLE=aarch64-unknown-linux-android \
+            -DCROSS_TOOLCHAIN_FLAGS_NATIVE="-DCMAKE_C_COMPILER=cc;-DCMAKE_CXX_COMPILER=c++" \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_INCLUDE_BENCHMARKS=OFF \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLDB_INCLUDE_TESTS=OFF \
+            -DLLDB_ENABLE_PYTHON=OFF \
+            -DLLDB_ENABLE_LUA=OFF \
+            -DLLDB_ENABLE_LIBEDIT=OFF \
+            -DLLDB_ENABLE_CURSES=OFF \
+            -DLLDB_ENABLE_LZMA=OFF \
+            -DLLDB_ENABLE_LIBXML2=OFF \
+            -DLLVM_ENABLE_TERMINFO=OFF
+
+          cmake --build llvm-build --target lldb-server -- -j2
+
+          LLDB_SERVER="$(find llvm-build -type f -name lldb-server -perm -111 | head -n 1)"
+          test -n "${LLDB_SERVER}"
+          mkdir -p dist/source dist/payload/bin
+          cp "${LLDB_SERVER}" dist/payload/bin/lldb-server-android
+          chmod 0755 dist/payload/bin/lldb-server-android
+
+          file dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.file.txt
+          readelf -h dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.elf-header.txt
+          file dist/payload/bin/lldb-server-android | grep -F 'ARM aarch64'
+          sha256sum dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.sha256
+          cp autocrack-lldb-leader-first.patch dist/source/
+          cp autocrack-lldb-leader-first.patch.sha256 dist/source/
+          cp android-llvm.commit.txt dist/source/
+          printf '%s\n' "https://android.googlesource.com/toolchain/llvm-project/+/${ANDROID_LLVM_COMMIT}" \
+            > dist/source/lldb-server.source-url.txt
+
+      - name: Build deterministic payload and manifest
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          payload_root = Path('dist/payload')
+          payload_zip = Path('dist/payload.zip')
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+          with zipfile.ZipFile(payload_zip, 'w', compression=zipfile.ZIP_STORED) as archive:
+              for path in sorted(p for p in payload_root.rglob('*') if p.is_file()):
+                  relative = path.relative_to(payload_root).as_posix()
+                  info = zipfile.ZipInfo(relative, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | 0o755) << 16
+                  archive.writestr(info, path.read_bytes())
+
+          payload_bytes = payload_zip.read_bytes()
+          payload_sha = hashlib.sha256(payload_bytes).hexdigest()
+          payload_size = len(payload_bytes)
+          binary_sha = hashlib.sha256(Path('dist/payload/bin/lldb-server-android').read_bytes()).hexdigest()
+          source_url = Path('dist/source/lldb-server.source-url.txt').read_text().strip()
+
+          manifest = {
+              'schemaVersion': 1,
+              'id': os.environ['TOOLPACK_ID'],
+              'title': 'Android LLDB server',
+              'version': os.environ['TOOLPACK_VERSION'],
+              'architecture': 'arm64',
+              'payloadEntry': 'payload.zip',
+              'payloadSha256': payload_sha,
+              'payloadSizeBytes': payload_size,
+              'requiredPaths': ['bin/lldb-server-android'],
+              'commands': [
+                  {'name': 'lldb-server-android', 'relativePath': 'bin/lldb-server-android'}
+              ],
+              'selfTests': [
+                  {
+                      'id': 'lldb-server-version',
+                      'title': 'Android LLDB server',
+                      'command': 'lldb-server-android v',
+                      'expectedExitCodes': [0],
+                      'outputContains': ['lldb']
+                  }
+              ],
+              'sources': [
+                  {
+                      'name': 'lldb-server',
+                      'version': 'android-llvm-r522817-autocrack-leader-first',
+                      'url': source_url,
+                      'sha256': binary_sha
+                  }
+              ]
+          }
+          Path('dist/manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          Path('dist/payload.sha256').write_text(payload_sha + '\n', encoding='utf-8')
+          Path('dist/payload.size').write_text(str(payload_size) + '\n', encoding='utf-8')
+          print(f'LLDB_SERVER_BINARY_SHA256={binary_sha}')
+          print(f'LLDB_SERVER_PAYLOAD_SHA256={payload_sha}')
+          print(f'LLDB_SERVER_PAYLOAD_SIZE={payload_size}')
+          PY
+
+      - name: Package deterministic toolpack
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import stat
+          import zipfile
+          from pathlib import Path
+
+          output = Path('dist/AutoCrackApp-android-lldb-server-leader-first-toolpack.zip')
+          fixed_time = (1980, 1, 1, 0, 0, 0)
+          with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_STORED) as archive:
+              for name in ('manifest.json', 'payload.zip'):
+                  path = Path('dist') / name
+                  info = zipfile.ZipInfo(name, fixed_time)
+                  info.create_system = 3
+                  info.compress_type = zipfile.ZIP_STORED
+                  info.external_attr = (stat.S_IFREG | 0o644) << 16
+                  archive.writestr(info, path.read_bytes())
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          Path(str(output) + '.sha256').write_text(f'{digest}  {output.name}\n', encoding='utf-8')
+          print(f'LLDB_SERVER_TOOLPACK_SHA256={digest}')
+          PY
+          unzip -t dist/AutoCrackApp-android-lldb-server-leader-first-toolpack.zip
+          jq -e '.id == "android-lldb-server"' dist/manifest.json >/dev/null
+          jq -e '.version == "android-llvm-r522817_autocrack-1.1.0-leader-first"' dist/manifest.json >/dev/null
+
+      - name: Upload patched Android LLDB server toolpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-lldb-server-leader-first-toolpack
+          path: |
+            dist/AutoCrackApp-android-lldb-server-leader-first-toolpack.zip
+            dist/AutoCrackApp-android-lldb-server-leader-first-toolpack.zip.sha256
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/source/
+          if-no-files-found: error
+          retention-days: 14
