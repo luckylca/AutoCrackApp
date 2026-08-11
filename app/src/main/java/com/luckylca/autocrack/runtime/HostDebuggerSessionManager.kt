@@ -92,13 +92,32 @@ data class HostDebuggerHelperProbe(
 )
 
 object HostDebuggerHelperProbeParser {
-    fun parse(stdout: String): HostDebuggerHelperProbe = HostDebuggerHelperProbe(
-        helperVerified = stdout.lineSequence().any { it == "helper_verified=true" },
-        listenerReady = stdout.lineSequence().any { it == "listener_ready=true" },
-        helperCommandLine = stdout.lineSequence()
+    fun parse(stdout: String): HostDebuggerHelperProbe {
+        val lines = stdout.lineSequence().toList()
+        val helperCommandLine = lines
             .firstOrNull { it.startsWith("helper_cmdline=") }
-            ?.substringAfter('='),
-    )
+            ?.substringAfter('=')
+            ?.takeIf(String::isNotBlank)
+        val helperVerified = helperCommandLine != null && lines.any { it == "helper_verified=true" }
+        return HostDebuggerHelperProbe(
+            helperVerified = helperVerified,
+            listenerReady = helperVerified && lines.any { it == "listener_ready=true" },
+            helperCommandLine = helperCommandLine,
+        )
+    }
+}
+
+object HostDebuggerHelperProbePolicy {
+    fun evaluate(commandSucceeded: Boolean, stdout: String): HostDebuggerHelperProbe =
+        if (commandSucceeded) {
+            HostDebuggerHelperProbeParser.parse(stdout)
+        } else {
+            HostDebuggerHelperProbe(
+                helperVerified = false,
+                listenerReady = false,
+                helperCommandLine = null,
+            )
+        }
 }
 
 /**
@@ -463,8 +482,10 @@ class HostDebuggerSessionManager(
             label = "Probe AutoCrack LLDB helper $helperPid",
             timeoutMillis = HELPER_PROBE_TIMEOUT_MILLIS,
         )
-        if (!result.succeeded) return
-        val parsed = HostDebuggerHelperProbeParser.parse(result.stdout)
+        val parsed = HostDebuggerHelperProbePolicy.evaluate(
+            commandSucceeded = result.succeeded,
+            stdout = result.stdout,
+        )
         synchronized(lock) {
             session.helperVerified = parsed.helperVerified
             session.serverReadyForClient = parsed.helperVerified && parsed.listenerReady
