@@ -168,15 +168,13 @@ object HostDebuggerCommandFactory {
         val binary = RootToolCommandFactory.shellQuote(binaryPath)
         val expectedPackage = RootToolCommandFactory.shellQuote(packageName)
         val pidFile = RootToolCommandFactory.shellQuote(helperPidFile)
-        val gdbRemoteLogChannels = RootToolCommandFactory.shellQuote(GDB_REMOTE_LOG_CHANNELS)
-        val posixLogChannels = RootToolCommandFactory.shellQuote(POSIX_LOG_CHANNELS)
+        val logChannels = RootToolCommandFactory.shellQuote(DEBUG_LOG_CHANNELS)
         val shell = """
             target_pid=$pid
             target_package=$expectedPackage
             binary=$binary
             helper_pid_file=$pidFile
-            gdb_remote_log_channels=$gdbRemoteLogChannels
-            posix_log_channels=$posixLogChannels
+            debug_log_channels=$logChannels
             proc=/proc/${'$'}target_pid
             [ -d "${'$'}proc" ] || { echo 'DEBUG_TARGET_NOT_FOUND pid=$pid' >&2; exit 41; }
             argv0=${'$'}(tr '\000' '\n' < "${'$'}proc/cmdline" 2>/dev/null | head -n 1)
@@ -187,11 +185,8 @@ object HostDebuggerCommandFactory {
             tracer=${'$'}(awk '/^TracerPid:/ { print ${'$'}2; exit }' "${'$'}proc/status" 2>/dev/null)
             [ "${'$'}{tracer:-0}" = "0" ] || { echo "DEBUG_TARGET_ALREADY_TRACED tracer=${'$'}tracer" >&2; exit 43; }
             printf '%s\n' "${'$'}${'$'}" > "${'$'}helper_pid_file"
-            printf 'AUTOCRACK_LLDB_TRACE gdb_remote=%s posix=%s target_pid=%s\n' "${'$'}gdb_remote_log_channels" "${'$'}posix_log_channels" "${'$'}target_pid" >&2
-            exec "${'$'}binary" gdbserver \
-              --log-channels "${'$'}gdb_remote_log_channels" \
-              --log-channels "${'$'}posix_log_channels" \
-              "127.0.0.1:$port"
+            printf 'AUTOCRACK_LLDB_TRACE channels=%s target_pid=%s\n' "${'$'}debug_log_channels" "${'$'}target_pid" >&2
+            exec "${'$'}binary" gdbserver --log-channels "${'$'}debug_log_channels" "127.0.0.1:$port"
         """.trimIndent()
         return listOf(suPath, "-c", shell)
     }
@@ -207,13 +202,11 @@ object HostDebuggerCommandFactory {
         require(helperPid > 0) { "Helper PID must be positive" }
         require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
         val binary = RootToolCommandFactory.shellQuote(binaryPath)
-        val gdbRemoteLogChannels = RootToolCommandFactory.shellQuote(GDB_REMOTE_LOG_CHANNELS)
-        val posixLogChannels = RootToolCommandFactory.shellQuote(POSIX_LOG_CHANNELS)
+        val logChannels = RootToolCommandFactory.shellQuote(DEBUG_LOG_CHANNELS)
         val shell = """
             helper_pid=$helperPid
             binary=$binary
-            gdb_remote_log_channels=$gdbRemoteLogChannels
-            posix_log_channels=$posixLogChannels
+            debug_log_channels=$logChannels
             proc=/proc/${'$'}helper_pid
             [ -d "${'$'}proc" ] || { echo 'DEBUG_HELPER_NOT_FOUND' >&2; exit 45; }
             argv0=${'$'}(tr '\000' '\n' < "${'$'}proc/cmdline" 2>/dev/null | head -n 1)
@@ -222,7 +215,7 @@ object HostDebuggerCommandFactory {
               exit 44
             }
             cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')
-            expected_cmdline="${'$'}binary gdbserver --log-channels ${'$'}gdb_remote_log_channels --log-channels ${'$'}posix_log_channels 127.0.0.1:$port"
+            expected_cmdline="${'$'}binary gdbserver --log-channels ${'$'}debug_log_channels 127.0.0.1:$port"
             [ "${'$'}cmdline" = "${'$'}expected_cmdline" ] || {
               echo "DEBUG_HELPER_COMMAND_MISMATCH cmdline=${'$'}cmdline" >&2
               exit 46
@@ -271,8 +264,7 @@ object HostDebuggerCommandFactory {
         }
     }
 
-    private const val GDB_REMOTE_LOG_CHANNELS = "gdb-remote packets"
-    private const val POSIX_LOG_CHANNELS = "posix ptrace"
+    private const val DEBUG_LOG_CHANNELS = "gdb-remote packets:posix ptrace"
     private const val MIN_PORT = 1024
     private const val MAX_PORT = 65535
 }
