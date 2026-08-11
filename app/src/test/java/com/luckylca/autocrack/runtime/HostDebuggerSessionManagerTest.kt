@@ -2,6 +2,7 @@ package com.luckylca.autocrack.runtime
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -73,6 +74,29 @@ class HostDebuggerSessionManagerTest {
             "/trusted/lldb-server gdbserver 127.0.0.1:5039",
             probe.helperCommandLine,
         )
+    }
+
+    @Test
+    fun helperProbeParserRejectsVerifiedMarkerWithoutTrustedCommandLine() {
+        val probe = HostDebuggerHelperProbeParser.parse(
+            "helper_verified=true\nlistener_ready=true\n",
+        )
+
+        assertFalse(probe.helperVerified)
+        assertFalse(probe.listenerReady)
+        assertNull(probe.helperCommandLine)
+    }
+
+    @Test
+    fun helperProbePolicyInvalidatesTrustWhenProbeCommandFails() {
+        val probe = HostDebuggerHelperProbePolicy.evaluate(
+            commandSucceeded = false,
+            stdout = "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver 127.0.0.1:5039\n",
+        )
+
+        assertFalse(probe.helperVerified)
+        assertFalse(probe.listenerReady)
+        assertNull(probe.helperCommandLine)
     }
 
     @Test
