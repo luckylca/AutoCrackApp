@@ -151,8 +151,12 @@ fun DebuggerSessionScreen(
                     controlSnapshot = result
                     status = "LLDB client 已连接且 typed attach 已确认：stop=${result.lastStopReply ?: "未知"} capabilities=${result.capabilities.size}"
                 }
-                .onFailure { exception -> status = exception.message ?: "LLDB client / typed attach 失败" }
+                .onFailure { exception ->
+                    controlSnapshot = controlBridge.snapshot()
+                    status = exception.message ?: "LLDB client / typed attach 失败"
+                }
             serverSnapshot = runCatching { manager.refresh() }.getOrNull() ?: serverSnapshot
+            controlSnapshot = controlBridge.snapshot()
             loading = false
         }
     }
