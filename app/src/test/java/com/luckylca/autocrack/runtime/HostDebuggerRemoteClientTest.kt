@@ -2,6 +2,7 @@ package com.luckylca.autocrack.runtime
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -50,6 +51,23 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
+    fun typedAttachUsesBoundedContinueClassWaitInsteadOfOrdinaryRequestTimeout() {
+        assertEquals(90_000, HostDebuggerRemoteClient.ATTACH_WAIT_TIMEOUT_MILLIS)
+        assertEquals(5_000, HostDebuggerRemoteClient.RUN_REPLY_POLL_TIMEOUT_MILLIS)
+    }
+
+    @Test
+    fun handshakeTracksNoAckModeWithoutChangingCapabilityContract() {
+        val handshake = GdbRemoteHandshake(
+            capabilities = setOf("PacketSize=20000", "QStartNoAckMode+"),
+            noAckModeEnabled = true,
+        )
+
+        assertEquals(2, handshake.capabilities.size)
+        assertEquals(true, handshake.noAckModeEnabled)
+    }
+
+    @Test
     fun parsesRegisterMetadataWithoutAssumingArchitectureLayout() {
         val info = GdbRemoteRegisterInfoParser.parse(
             index = 0,
@@ -79,9 +97,9 @@ class HostDebuggerRemoteClientTest {
     @Test
     fun phase514ClientContainsNoWriteOrBreakpointAdapters() {
         val methodNames = HostDebuggerRemoteClient::class.java.methods.map { method -> method.name }.toSet()
-        assertEquals(false, "writeMemory" in methodNames)
-        assertEquals(false, "writeRegister" in methodNames)
-        assertEquals(false, "insertBreakpoint" in methodNames)
-        assertEquals(false, "removeBreakpoint" in methodNames)
+        assertFalse("writeMemory" in methodNames)
+        assertFalse("writeRegister" in methodNames)
+        assertFalse("insertBreakpoint" in methodNames)
+        assertFalse("removeBreakpoint" in methodNames)
     }
 }
