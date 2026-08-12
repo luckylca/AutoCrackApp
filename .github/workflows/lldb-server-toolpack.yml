@@ -142,6 +142,23 @@ jobs:
           cp "${LLDB_SERVER}" dist/payload/bin/lldb-server-android
           chmod 0755 dist/payload/bin/lldb-server-android
 
+          # A source-built lldb-server contains more than a gigabyte of DWARF on
+          # this configuration. The Android toolpack must ship the stripped runtime
+          # binary, not the build-tree debugging image.
+          LLVM_STRIP="${NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          test -x "${LLVM_STRIP}"
+          "${LLVM_STRIP}" --strip-all dist/payload/bin/lldb-server-android
+
+          # Fail closed if stripping regresses: no debug sections and no giant
+          # accidental build artifact may enter the trusted toolpack manifest.
+          if readelf -S dist/payload/bin/lldb-server-android | grep -Eq '\.(debug|zdebug)_'; then
+            echo 'Stripped lldb-server still contains debug sections' >&2
+            exit 1
+          fi
+          LLDB_SERVER_SIZE="$(stat -c '%s' dist/payload/bin/lldb-server-android)"
+          test "${LLDB_SERVER_SIZE}" -le 268435456
+          printf 'LLDB_SERVER_STRIPPED_SIZE=%s\n' "${LLDB_SERVER_SIZE}"
+
           file dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.file.txt
           readelf -h dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.elf-header.txt
           file dist/payload/bin/lldb-server-android | grep -F 'ARM aarch64'
