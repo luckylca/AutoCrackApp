@@ -12,6 +12,9 @@ import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 import kotlin.math.min
 
+/** A continue-class request was sent, but its final stop/exit reply did not arrive in time. */
+class GdbRemoteRunTimeoutException(message: String) : IOException(message)
+
 /**
  * Minimal client for the loopback gdb-remote endpoint exposed by the trusted Android lldb-server.
  *
@@ -57,7 +60,6 @@ class HostDebuggerRemoteClient(
         output = created.getOutputStream()
 
         return try {
-            // LLDB's HandshakeWithServer sends an initial ACK before negotiating no-ack mode.
             sendRawByte(ACK_BYTE)
             val noAckReply = requestWithTimeout(
                 payload = "QStartNoAckMode",
@@ -83,20 +85,9 @@ class HostDebuggerRemoteClient(
         }
     }
 
-    /**
-     * Attach the already authorized PID using LLDB's typed vAttach packet. PID is encoded in
-     * hexadecimal exactly as LLDB's ProcessGDBRemote client does.
-     *
-     * vAttach is a run/continue-class request: attaching a large Android process can take much
-     * longer than an ordinary metadata query. We therefore send the packet once and wait for its
-     * stop reply with a bounded 90-second deadline, while waking every five seconds so a stalled
-     * socket does not get mistaken for an immediate protocol failure.
-     */
     fun attach(pid: Int): String {
         require(pid > 0) { "Attach PID must be positive" }
 
-        // LLDB's own DoAttachToProcessWithID configures this immediately before vAttach. Older or
-        // non-LLDB stubs may return an empty unsupported response, which is safe to tolerate.
         val detachOnErrorReply = requestWithTimeout(
             payload = "QSetDetachOnError:1",
             timeoutMillis = ATTACH_PREPARE_TIMEOUT_MILLIS,
@@ -121,6 +112,7 @@ class HostDebuggerRemoteClient(
 
     fun queryStopReason(): String {
         val response = request("?")
+        GdbRemoteRunReplyValidator.requireStopOrExit("stop reason", response)
         rememberStopReply(response)
         return response
     }
@@ -164,19 +156,12 @@ class HostDebuggerRemoteClient(
 
     fun continueUntilStop(): String {
         val response = requestWithTimeout("vCont;c", timeoutMillis = 0)
+        GdbRemoteRunReplyValidator.requireStopOrExit("continue", response)
         rememberStopReply(response)
         return response
     }
 
-    /**
-     * Single-step only the thread identified by the most recent LLDB stop reply.
-     *
-     * A bare `vCont;s` is a default action and can be applied to every thread not otherwise named.
-     * On large Android apps that caused lldb-server to issue PTRACE_SINGLESTEP to multiple TIDs and
-     * never produce the one-stop reply AutoCrack was waiting for. LLDB's own ProcessGDBRemote client
-     * emits `;s:<tid>` for a selected stepping thread, so AutoCrack mirrors that typed shape here.
-     * The thread id is never user supplied: it must be parsed from the last validated T/S stop reply.
-     */
+    /** Single-step only the thread identified by the most recent LLDB stop reply. */
     fun step(): String {
         val stopReply = requireNotNull(lastStopReply) {
             "Cannot single-step before LLDB has reported a stopped thread"
@@ -187,13 +172,12 @@ class HostDebuggerRemoteClient(
             totalTimeoutMillis = STEP_WAIT_TIMEOUT_MILLIS,
             operationName = payload,
         )
-        require(response.startsWith('T') || response.startsWith('S')) {
-            "Unexpected LLDB step response: $response"
-        }
+        GdbRemoteRunReplyValidator.requireStopOrExit(payload, response)
         rememberStopReply(response)
         return response
     }
 
+    /** Send only the fixed gdb-remote interrupt byte; this is not a raw-packet adapter. */
     fun interrupt() {
         requireConnected()
         synchronized(writeLock) {
@@ -201,6 +185,40 @@ class HostDebuggerRemoteClient(
                 write(INTERRUPT_BYTE)
                 flush()
             }
+        }
+    }
+
+    /**
+     * Recover a continue-class command whose bounded reader already timed out.
+     *
+     * The interrupt byte is sent separately by [interrupt]. This method sends no packet at all; it
+     * only consumes the next validated stop/exit reply so a late step can be brought back to a
+     * known stopped state without issuing another step/continue request.
+     */
+    fun awaitStopAfterInterrupt(): String = synchronized(requestLock) {
+        requireConnected()
+        val activeSocket = requireNotNull(socket)
+        val previousTimeout = activeSocket.soTimeout
+        activeSocket.soTimeout = min(RUN_REPLY_POLL_TIMEOUT_MILLIS, INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS)
+        val deadlineNanos =
+            System.nanoTime() + INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS * NANOS_PER_MILLISECOND
+        try {
+            while (true) {
+                val response = readPacketWithDeadline(
+                    activeSocket = activeSocket,
+                    deadlineNanos = deadlineNanos,
+                    operationName = "interrupt recovery",
+                    totalTimeoutMillis = INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS,
+                )
+                if (isConsoleOutputPacket(response)) continue
+                GdbRemoteRunReplyValidator.requireStopOrExit("interrupt recovery", response)
+                rememberStopReply(response)
+                return@synchronized response
+            }
+            @Suppress("UNREACHABLE_CODE")
+            error("unreachable")
+        } finally {
+            if (!activeSocket.isClosed) activeSocket.soTimeout = previousTimeout
         }
     }
 
@@ -216,7 +234,7 @@ class HostDebuggerRemoteClient(
     }
 
     private fun rememberStopReply(response: String) {
-        if (response.startsWith('T') || response.startsWith('S')) lastStopReply = response
+        if (GdbRemoteRunReplyValidator.isStopOrExit(response)) lastStopReply = response
     }
 
     private fun request(payload: String): String = requestWithTimeout(
@@ -257,10 +275,6 @@ class HostDebuggerRemoteClient(
         }
     }
 
-    /**
-     * Continue-class packet reader with a bounded total deadline. Unlike a normal request, a
-     * five-second socket timeout is only a wake-up point; it does not mean vAttach/step failed.
-     */
     private fun requestRunUntilStop(
         payload: String,
         totalTimeoutMillis: Int,
@@ -292,7 +306,6 @@ class HostDebuggerRemoteClient(
         }
     }
 
-    /** Preserve packet parser state across five-second wake-up timeouts. */
     private fun readPacketWithDeadline(
         activeSocket: Socket,
         deadlineNanos: Long,
@@ -347,7 +360,7 @@ class HostDebuggerRemoteClient(
         while (true) {
             val remainingNanos = deadlineNanos - System.nanoTime()
             if (remainingNanos <= 0L) {
-                throw IOException(
+                throw GdbRemoteRunTimeoutException(
                     "GDB remote $operationName timed out after ${totalTimeoutMillis}ms waiting for stop reply",
                 )
             }
@@ -359,7 +372,7 @@ class HostDebuggerRemoteClient(
             try {
                 return requireNotNull(input).read()
             } catch (_: SocketTimeoutException) {
-                // Continue until the total deadline. This mirrors LLDB's continue-class wakeups.
+                // Wake up periodically but preserve parser state until the total deadline.
             }
         }
     }
@@ -462,6 +475,7 @@ class HostDebuggerRemoteClient(
         const val DEFAULT_REGISTER_LIMIT = 128
         internal const val ATTACH_WAIT_TIMEOUT_MILLIS = 90_000
         internal const val RUN_REPLY_POLL_TIMEOUT_MILLIS = 5_000
+        internal const val INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS = 30_000
 
         internal fun ipv4LoopbackEndpoint(port: Int): InetSocketAddress {
             require(port in MIN_PORT..MAX_PORT) { "Debugger port must be $MIN_PORT..$MAX_PORT" }
@@ -511,15 +525,25 @@ data class GdbRemoteMemoryRead(val address: Long, val bytes: ByteArray) {
         get() = bytes.joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
 }
 
+/** Validate only protocol-defined continue-class stop/exit replies. */
+object GdbRemoteRunReplyValidator {
+    fun isStopOrExit(response: String): Boolean =
+        response.firstOrNull() == 'T' || response.firstOrNull() == 'S' ||
+            response.firstOrNull() == 'W' || response.firstOrNull() == 'X'
+
+    fun requireStopOrExit(operationName: String, response: String): String {
+        require(!response.startsWith('E')) { "LLDB $operationName failed: $response" }
+        require(isStopOrExit(response)) { "Unexpected LLDB $operationName response: $response" }
+        return response
+    }
+}
+
 /** Parse only the stopped-thread identity reported by LLDB itself. */
 object GdbRemoteStopReplyParser {
     fun threadId(stopReply: String): String? {
         if (stopReply.length < 3 || !stopReply.startsWith('T')) return null
         if (!stopReply.substring(1, 3).all(::isHexDigit)) return null
 
-        // A T stop reply starts with T + two signal hex digits. The first key/value field may
-        // begin immediately after those three characters, e.g. T13thread:393;..., so normalize
-        // away the Txx prefix before splitting fields.
         val fields = stopReply.substring(3).split(';')
         val value = fields
             .firstOrNull { field -> field.startsWith("thread:") }
