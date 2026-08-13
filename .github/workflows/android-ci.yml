@@ -24,7 +24,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Pin phase 5.14.11 thread-specific step with seize-interrupt LLDB toolpack
+      - name: Pin phase 5.14.12 step-timeout recovery with seize-interrupt LLDB toolpack
         run: |
           set -euxo pipefail
           python3 - <<'PY'
@@ -100,15 +100,15 @@ jobs:
           replace_exact(manager, OLD_VERSION, NEW_VERSION, 1)
 
           catalog = "app/src/main/assets/runtime/dynamic-host-tool-catalog-v1.json"
-          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.11"', 1)
+          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.12"', 1)
           replace_exact(catalog, OLD_VERSION, NEW_VERSION, 2)
 
           gradle = "app/build.gradle.kts"
-          replace_exact(gradle, "versionCode = 42", "versionCode = 46", 1)
+          replace_exact(gradle, "versionCode = 42", "versionCode = 47", 1)
           replace_exact(
               gradle,
               'versionName = "0.5.14.7-phase5.14-server-ptrace-trace"',
-              'versionName = "0.5.14.11-phase5.14-thread-specific-step"',
+              'versionName = "0.5.14.12-phase5.14-step-timeout-recovery"',
               1,
           )
           PY
@@ -119,9 +119,19 @@ jobs:
             app/src/main app/src/test
           grep -R -F "AUTOCRACK_LLDB_ANDROID_BINARY_OK" \
             app/src/main app/src/test
-          grep -F 'versionName = "0.5.14.11-phase5.14-thread-specific-step"' app/build.gradle.kts
+          grep -F 'versionName = "0.5.14.12-phase5.14-step-timeout-recovery"' app/build.gradle.kts
           grep -F 'fun stepFromStopReply(stopReply: String)' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'fun awaitStopAfterInterrupt()' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'class GdbRemoteRunTimeoutException' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'step_timeout_target_state_unresolved' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
+          grep -F 'interrupt_stop_recovered' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
+          grep -F 'gdb-remote packets process step thread:posix ptrace process thread' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerSessionManager.kt
           ! grep -F 'payload = "vCont;s",' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
 
@@ -160,7 +170,7 @@ jobs:
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
             | jq -e '
-                .catalogVersion == "0.5.14.11" and
+                .catalogVersion == "0.5.14.12" and
                 .safetyBoundary.defaultOperationMode == "read_only" and
                 .safetyBoundary.attachAllowed == true and
                 .safetyBoundary.attachRequiresExplicitAuthorization == true and
@@ -216,15 +226,15 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.11-thread-specific-step-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.12-step-timeout-recovery-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.14.11-thread-specific-step-debug.apk \
-            > AutoCrackApp-0.5.14.11-thread-specific-step-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.14.12-step-timeout-recovery-debug.apk \
+            > AutoCrackApp-0.5.14.12-step-timeout-recovery-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.11-thread-specific-step-debug
+          name: AutoCrackApp-0.5.14.12-step-timeout-recovery-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -233,7 +243,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.11-thread-specific-step-reports
+          name: AutoCrackApp-0.5.14.12-step-timeout-recovery-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
