@@ -35,6 +35,7 @@ class HostDebuggerRemoteClient(
 
     private var input: InputStream? = null
     private var output: OutputStream? = null
+    private var lastStopReply: String? = null
 
     val connected: Boolean
         get() = socket?.let { candidate -> candidate.isConnected && !candidate.isClosed } == true
@@ -114,10 +115,15 @@ class HostDebuggerRemoteClient(
         require(response.startsWith('T') || response.startsWith('S')) {
             "Unexpected LLDB attach response: $response"
         }
+        rememberStopReply(response)
         return response
     }
 
-    fun queryStopReason(): String = request("?")
+    fun queryStopReason(): String {
+        val response = request("?")
+        rememberStopReply(response)
+        return response
+    }
 
     fun queryRegisters(maxCount: Int = DEFAULT_REGISTER_LIMIT): List<GdbRemoteRegisterInfo> {
         require(maxCount in 1..MAX_REGISTER_LIMIT) {
@@ -156,17 +162,35 @@ class HostDebuggerRemoteClient(
         return GdbRemoteMemoryRead(address = address, bytes = bytes)
     }
 
-    fun continueUntilStop(): String = requestWithTimeout("vCont;c", timeoutMillis = 0)
+    fun continueUntilStop(): String {
+        val response = requestWithTimeout("vCont;c", timeoutMillis = 0)
+        rememberStopReply(response)
+        return response
+    }
 
+    /**
+     * Single-step only the thread identified by the most recent LLDB stop reply.
+     *
+     * A bare `vCont;s` is a default action and can be applied to every thread not otherwise named.
+     * On large Android apps that caused lldb-server to issue PTRACE_SINGLESTEP to multiple TIDs and
+     * never produce the one-stop reply AutoCrack was waiting for. LLDB's own ProcessGDBRemote client
+     * emits `;s:<tid>` for a selected stepping thread, so AutoCrack mirrors that typed shape here.
+     * The thread id is never user supplied: it must be parsed from the last validated T/S stop reply.
+     */
     fun step(): String {
+        val stopReply = requireNotNull(lastStopReply) {
+            "Cannot single-step before LLDB has reported a stopped thread"
+        }
+        val payload = GdbRemoteExecutionPacketFactory.stepFromStopReply(stopReply)
         val response = requestRunUntilStop(
-            payload = "vCont;s",
+            payload = payload,
             totalTimeoutMillis = STEP_WAIT_TIMEOUT_MILLIS,
-            operationName = "vCont;s",
+            operationName = payload,
         )
         require(response.startsWith('T') || response.startsWith('S')) {
             "Unexpected LLDB step response: $response"
         }
+        rememberStopReply(response)
         return response
     }
 
@@ -188,6 +212,11 @@ class HostDebuggerRemoteClient(
         output = null
         socket = null
         noAckMode = false
+        lastStopReply = null
+    }
+
+    private fun rememberStopReply(response: String) {
+        if (response.startsWith('T') || response.startsWith('S')) lastStopReply = response
     }
 
     private fun request(payload: String): String = requestWithTimeout(
@@ -480,6 +509,38 @@ data class GdbRemoteRegisterValue(val index: Int, val rawHex: String)
 data class GdbRemoteMemoryRead(val address: Long, val bytes: ByteArray) {
     val hex: String
         get() = bytes.joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
+
+/** Parse only the stopped-thread identity reported by LLDB itself. */
+object GdbRemoteStopReplyParser {
+    fun threadId(stopReply: String): String? {
+        if (!stopReply.startsWith('T')) return null
+        val value = stopReply
+            .split(';')
+            .firstOrNull { field -> field.startsWith("thread:") }
+            ?.substringAfter(':')
+            ?.lowercase()
+            ?.takeIf(String::isNotBlank)
+            ?: return null
+        if (!THREAD_ID_PATTERN.matches(value)) return null
+
+        val tidPart = value.substringAfterLast('.')
+        val tid = tidPart.toULongOrNull(16) ?: return null
+        if (tid == 0uL) return null
+        return value
+    }
+
+    fun requireThreadId(stopReply: String): String = requireNotNull(threadId(stopReply)) {
+        "LLDB stop reply does not contain a valid positive stopped thread id"
+    }
+
+    private val THREAD_ID_PATTERN = Regex("^(?:p[0-9a-f]+\\.)?[0-9a-f]+$")
+}
+
+/** Fixed execution-control packet shapes; no caller can provide an arbitrary packet string. */
+object GdbRemoteExecutionPacketFactory {
+    fun stepFromStopReply(stopReply: String): String =
+        "vCont;s:${GdbRemoteStopReplyParser.requireThreadId(stopReply)}"
 }
 
 object GdbRemoteRegisterInfoParser {
