@@ -234,15 +234,24 @@ class HostDebuggerControlBridge(
             synchronized(lock) {
                 mutable.lastStopReply = stopReply
                 mutable.targetRunning = false
+                mutable.failure = null
             }
             appendAudit("step_stop")
             snapshot()
         } catch (exception: Exception) {
+            val unresolved = exception is GdbRemoteRunTimeoutException
             synchronized(lock) {
-                mutable.targetRunning = false
-                mutable.failure = exception.message ?: exception::class.java.simpleName
+                // A continue-class timeout means only that AutoCrack's bounded reader expired.
+                // The packet was already sent and the target/server may still be stepping, so it
+                // is unsafe to expose another step/continue as if the target were known stopped.
+                mutable.targetRunning = unresolved
+                mutable.failure = if (unresolved) {
+                    "${exception.message}；step 已发送但目标状态仍未确认，请使用 interrupt 恢复 stop reply，暂勿再次 step/continue"
+                } else {
+                    exception.message ?: exception::class.java.simpleName
+                }
             }
-            appendAudit("step_failed")
+            appendAudit(if (unresolved) "step_timeout_target_state_unresolved" else "step_failed")
             throw exception
         }
     }
@@ -263,11 +272,14 @@ class HostDebuggerControlBridge(
                     synchronized(lock) {
                         mutable.lastStopReply = stopReply
                         mutable.targetRunning = false
+                        mutable.failure = null
                     }
                     appendAudit("continue_stop")
                 }
                 .onFailure { exception ->
                     synchronized(lock) {
+                        // continue was only issued from a previously known stopped state. A direct
+                        // E-response means the resume request itself was rejected, not a new stop.
                         mutable.targetRunning = false
                         mutable.failure = exception.message ?: exception::class.java.simpleName
                     }
@@ -281,14 +293,48 @@ class HostDebuggerControlBridge(
     suspend fun interrupt(): HostDebuggerControlSnapshot = withContext(Dispatchers.IO) {
         val activeClient = synchronized(lock) {
             require(mutable.connected) { "LLDB client 未连接" }
-            require(mutable.targetRunning) { "目标当前不是 continue 运行状态" }
+            require(mutable.targetRunning) { "目标当前不是运行或状态未确认状态" }
             mutable.interruptCommandSent = true
             requireNotNull(client)
         }
+
         activeClient.interrupt()
         appendAudit("interrupt_sent")
-        val job = synchronized(lock) { controlJob }
-        if (job != null) withTimeoutOrNull(INTERRUPT_WAIT_MILLIS) { joinAll(job) }
+
+        val activeContinueJob = synchronized(lock) { controlJob?.takeIf { it.isActive } }
+        if (activeContinueJob != null) {
+            val completed = withTimeoutOrNull(INTERRUPT_WAIT_MILLIS) {
+                joinAll(activeContinueJob)
+                true
+            } ?: false
+            if (!completed) {
+                synchronized(lock) {
+                    mutable.failure = "interrupt 已发送，但 continue reader 尚未收到 stop reply；目标状态仍未确认"
+                }
+                appendAudit("interrupt_wait_continue_reader_timeout")
+            }
+        } else {
+            // This is the recovery path for a synchronous step whose bounded reader timed out.
+            // The step requestLock has already been released, so consume the stop reply generated
+            // by the interrupt without sending any additional continue/step/raw packet.
+            try {
+                val stopReply = activeClient.awaitStopAfterInterrupt()
+                synchronized(lock) {
+                    mutable.lastStopReply = stopReply
+                    mutable.targetRunning = false
+                    mutable.failure = null
+                }
+                appendAudit("interrupt_stop_recovered")
+            } catch (exception: Exception) {
+                synchronized(lock) {
+                    mutable.targetRunning = true
+                    mutable.failure =
+                        "interrupt 已发送，但仍未取得可信 stop reply：${exception.message ?: exception::class.java.simpleName}"
+                }
+                appendAudit("interrupt_recovery_failed_state_unresolved")
+                throw exception
+            }
+        }
         snapshot()
     }
 
@@ -334,7 +380,9 @@ class HostDebuggerControlBridge(
         synchronized(lock) {
             require(mutable.controlAuthorizationVerified) { "尚未完成 CONTROL 精确授权" }
             require(mutable.connected && client?.connected == true) { "LLDB client 未连接" }
-            require(!mutable.targetRunning) { "目标正在运行；请先 interrupt 后再读取状态" }
+            require(!mutable.targetRunning) {
+                "目标正在运行或状态未确认；请先 interrupt 恢复可信 stop reply"
+            }
         }
     }
 
