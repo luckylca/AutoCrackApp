@@ -33,15 +33,15 @@ jobs:
           OLD_VERSION = "ndk-r27d-clang-r522817d_autocrack-1.0.0"
           NEW_VERSION = "android-llvm-r522817_autocrack-1.1.0-leader-first"
           OLD_PAYLOAD_SHA = "2cc969ff785e8c0c3d4473649edaaf18f64faae4c7e016941dd0c0944944a14a"
-          NEW_PAYLOAD_SHA = "361279dffd0bfe9472ab44adf4a53197002f7c15ac72f6a732f0332f58097805"
+          NEW_PAYLOAD_SHA = "9a02aab0a9400e3e6548fe80e75b404f29422cde902b47538b3cfe94536ecba1"
           OLD_PAYLOAD_SIZE = "27_698_528L"
-          NEW_PAYLOAD_SIZE = "28_392_626L"
+          NEW_PAYLOAD_SIZE = "28_393_472L"
           OLD_SOURCE_VERSION = "ndk-r27d-clang-r522817d"
           NEW_SOURCE_VERSION = "android-llvm-r522817-autocrack-leader-first"
           OLD_SOURCE_URL = "https://github.com/android/ndk/releases/tag/r27d"
           NEW_SOURCE_URL = "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262"
           OLD_BINARY_SHA = "ff96d83baa872b2226bb1f4f38cd38aa2622416722fb76543cc536edfeea3018"
-          NEW_BINARY_SHA = "f94f7943e79cb45cba712583264007cca6553745cf9f2576ed13697ad80894e8"
+          NEW_BINARY_SHA = "b813cf2f23d69c5a30d9b4206bd40d9c2a39fabb485e1fd9c5573e4f379b2bfd"
 
           def replace_exact(path, old, new, expected):
               p = Path(path)
