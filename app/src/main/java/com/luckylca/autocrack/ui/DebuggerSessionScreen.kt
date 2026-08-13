@@ -209,7 +209,10 @@ fun DebuggerSessionScreen(
                     controlSnapshot = result
                     status = "单步完成：stop=${result.lastStopReply ?: "未知"}"
                 }
-                .onFailure { exception -> status = exception.message ?: "单步失败" }
+                .onFailure { exception ->
+                    controlSnapshot = controlBridge.snapshot()
+                    status = exception.message ?: "单步失败"
+                }
             loading = false
         }
     }
@@ -265,17 +268,25 @@ fun DebuggerSessionScreen(
     }
 
     fun copyDiagnostics() {
+        // Always copy the bridge's live state rather than the last Compose-rendered snapshot.
+        // This matters while a blocking step/read operation is still in flight: the bridge has
+        // already marked stepCommandSent/targetRunning, while the UI snapshot is only refreshed
+        // when that suspend call returns.
+        val liveServer = manager.snapshot() ?: serverSnapshot
+        val liveControl = controlBridge.snapshot()
+        serverSnapshot = liveServer
+        controlSnapshot = liveControl
         val text = buildDebuggerDiagnostic(
             status,
-            serverSnapshot,
-            controlSnapshot,
+            liveServer,
+            liveControl,
             manager.auditFile.path,
             controlBridge.auditFile.path,
         )
         context.getSystemService(ClipboardManager::class.java).setPrimaryClip(
             ClipData.newPlainText("AutoCrackApp Debugger 诊断", text),
         )
-        Toast.makeText(context, "Debugger 诊断已复制", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Debugger 诊断已复制（实时状态）", Toast.LENGTH_SHORT).show()
     }
 
     LazyColumn(
