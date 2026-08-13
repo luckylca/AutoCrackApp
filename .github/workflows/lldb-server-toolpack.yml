@@ -120,9 +120,6 @@ jobs:
           while (Host::FindProcessThreads(pid, tids_to_attach)) {'''
           text = text.replace(leader_needle, leader_patch, 1)
 
-          # Match the stable code statement only. The exact r522817 comments are not
-          # part of the patch contract; requiring them made the previous workflow
-          # needlessly brittle even though the executable code shape was unchanged.
           sibling_attach_old = '      if ((status = PtraceWrapper(PTRACE_ATTACH, tid)).Fail()) {'
           sibling_attach_new = '      if ((status = PtraceWrapper(PTRACE_SEIZE, tid)).Fail()) {'
           if text.count(sibling_attach_old) != 1:
@@ -131,41 +128,45 @@ jobs:
               )
           text = text.replace(sibling_attach_old, sibling_attach_new, 1)
 
-          sibling_wait_old = '''      int wpid =
-          llvm::sys::RetryAfterSignal(-1, ::waitpid, tid, nullptr, __WALL);'''
-          sibling_wait_new = '''      if ((status = PtraceWrapper(PTRACE_INTERRUPT, tid)).Fail()) {
-        if (status.GetError() == ESRCH) {
-          it = tids_to_attach.erase(it);
-          continue;
-        }
-        return status.ToError();
-      }
-
-      int wstatus = -1;
-      int wpid = 0;
-      for (int attempt = 0; attempt < 1000; ++attempt) {
-        wpid = llvm::sys::RetryAfterSignal(
-            -1, ::waitpid, tid, &wstatus, __WALL | WNOHANG);
-        if (wpid != 0)
-          break;
-        ::usleep(10 * 1000);
-      }
-      if (wpid == 0) {
-        LLDB_LOG(log,
-                 "AutoCrack seize-interrupt timeout waiting for sibling tid = {0}",
-                 tid);
-        return llvm::make_error<StringError>(
-            "Timed out waiting for sibling PTRACE_INTERRUPT stop",
-            llvm::inconvertibleErrorCode());
-      }
-      if (wpid > 0 && !WIFSTOPPED(wstatus)) {
-        LLDB_LOG(log,
-                 "AutoCrack seize-interrupt sibling returned non-stop status: tid = {0}, status = {1:x}",
-                 tid, wstatus);
-        return llvm::make_error<StringError>(
-            "Sibling PTRACE_INTERRUPT did not produce ptrace-stop",
-            llvm::inconvertibleErrorCode());
-      }'''
+          sibling_wait_old = (
+              '      int wpid =\n'
+              '          llvm::sys::RetryAfterSignal(-1, ::waitpid, tid, nullptr, __WALL);'
+          )
+          sibling_wait_new = (
+              '      if ((status = PtraceWrapper(PTRACE_INTERRUPT, tid)).Fail()) {\n'
+              '        if (status.GetError() == ESRCH) {\n'
+              '          it = tids_to_attach.erase(it);\n'
+              '          continue;\n'
+              '        }\n'
+              '        return status.ToError();\n'
+              '      }\n'
+              '\n'
+              '      int wstatus = -1;\n'
+              '      int wpid = 0;\n'
+              '      for (int attempt = 0; attempt < 1000; ++attempt) {\n'
+              '        wpid = llvm::sys::RetryAfterSignal(\n'
+              '            -1, ::waitpid, tid, &wstatus, __WALL | WNOHANG);\n'
+              '        if (wpid != 0)\n'
+              '          break;\n'
+              '        ::usleep(10 * 1000);\n'
+              '      }\n'
+              '      if (wpid == 0) {\n'
+              '        LLDB_LOG(log,\n'
+              '                 "AutoCrack seize-interrupt timeout waiting for sibling tid = {0}",\n'
+              '                 tid);\n'
+              '        return llvm::make_error<StringError>(\n'
+              '            "Timed out waiting for sibling PTRACE_INTERRUPT stop",\n'
+              '            llvm::inconvertibleErrorCode());\n'
+              '      }\n'
+              '      if (wpid > 0 && !WIFSTOPPED(wstatus)) {\n'
+              '        LLDB_LOG(log,\n'
+              '                 "AutoCrack seize-interrupt sibling returned non-stop status: tid = {0}, status = {1:x}",\n'
+              '                 tid, wstatus);\n'
+              '        return llvm::make_error<StringError>(\n'
+              '            "Sibling PTRACE_INTERRUPT did not produce ptrace-stop",\n'
+              '            llvm::inconvertibleErrorCode());\n'
+              '      }'
+          )
           if text.count(sibling_wait_old) != 1:
               raise SystemExit(
                   f'Expected exactly one sibling blocking waitpid statement, found {text.count(sibling_wait_old)}'
