@@ -7,6 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HostDebuggerSessionManagerTest {
+    private val expectedLogChannels =
+        "gdb-remote packets process step thread:posix ptrace process thread"
+
     @Test
     fun authorization_requiresExactTargetPhrase() {
         val expected = HostDebuggerAuthorization.expected("com.example.target", 1234)
@@ -39,7 +42,7 @@ class HostDebuggerSessionManagerTest {
         assertTrue(shell.contains("127.0.0.1:5039"))
         assertTrue(shell.contains("gdbserver"))
         assertTrue(shell.contains("--log-channels"))
-        assertTrue(shell.contains("gdb-remote packets:posix ptrace"))
+        assertTrue(shell.contains(expectedLogChannels))
         assertTrue(shell.contains("AUTOCRACK_LLDB_TRACE"))
         assertFalse(shell.contains("--attach"))
         assertFalse(shell.contains("0.0.0.0"))
@@ -61,7 +64,7 @@ class HostDebuggerSessionManagerTest {
         assertTrue(shell.contains("helper_pid=9001"))
         assertTrue(shell.contains("DEBUG_HELPER_IDENTITY_MISMATCH"))
         assertTrue(shell.contains("gdbserver --log-channels"))
-        assertTrue(shell.contains("gdb-remote packets:posix ptrace"))
+        assertTrue(shell.contains(expectedLogChannels))
         assertTrue(shell.contains("127.0.0.1:5039"))
         assertTrue(shell.contains("/proc/net/tcp"))
         assertTrue(shell.contains("socket:["))
@@ -70,15 +73,14 @@ class HostDebuggerSessionManagerTest {
 
     @Test
     fun helperProbeParserReadsVerifiedListenerState() {
+        val commandLine =
+            "/trusted/lldb-server gdbserver --log-channels $expectedLogChannels 127.0.0.1:5039"
         val probe = HostDebuggerHelperProbeParser.parse(
-            "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver --log-channels gdb-remote packets:posix ptrace 127.0.0.1:5039\n",
+            "helper_verified=true\nlistener_ready=true\nhelper_cmdline=$commandLine\n",
         )
         assertTrue(probe.helperVerified)
         assertTrue(probe.listenerReady)
-        assertEquals(
-            "/trusted/lldb-server gdbserver --log-channels gdb-remote packets:posix ptrace 127.0.0.1:5039",
-            probe.helperCommandLine,
-        )
+        assertEquals(commandLine, probe.helperCommandLine)
     }
 
     @Test
@@ -96,7 +98,7 @@ class HostDebuggerSessionManagerTest {
     fun helperProbePolicyInvalidatesTrustWhenProbeCommandFails() {
         val probe = HostDebuggerHelperProbePolicy.evaluate(
             commandSucceeded = false,
-            stdout = "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver --log-channels gdb-remote packets:posix ptrace 127.0.0.1:5039\n",
+            stdout = "helper_verified=true\nlistener_ready=true\nhelper_cmdline=/trusted/lldb-server gdbserver --log-channels $expectedLogChannels 127.0.0.1:5039\n",
         )
 
         assertFalse(probe.helperVerified)
