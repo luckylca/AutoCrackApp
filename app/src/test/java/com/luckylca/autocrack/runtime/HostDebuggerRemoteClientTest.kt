@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HostDebuggerRemoteClientTest {
@@ -52,9 +53,10 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
-    fun typedAttachUsesBoundedContinueClassWaitInsteadOfOrdinaryRequestTimeout() {
+    fun typedAttachAndInterruptRecoveryUseBoundedContinueClassWaits() {
         assertEquals(90_000, HostDebuggerRemoteClient.ATTACH_WAIT_TIMEOUT_MILLIS)
         assertEquals(5_000, HostDebuggerRemoteClient.RUN_REPLY_POLL_TIMEOUT_MILLIS)
+        assertEquals(30_000, HostDebuggerRemoteClient.INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS)
     }
 
     @Test
@@ -129,6 +131,31 @@ class HostDebuggerRemoteClientTest {
 
         assertEquals("vCont;s:393", packet)
         assertFalse(packet == "vCont;s")
+    }
+
+    @Test
+    fun runReplyValidatorAcceptsOnlyStopOrExitPackets() {
+        assertTrue(GdbRemoteRunReplyValidator.isStopOrExit("T05thread:393;reason:trace;"))
+        assertTrue(GdbRemoteRunReplyValidator.isStopOrExit("S05"))
+        assertTrue(GdbRemoteRunReplyValidator.isStopOrExit("W00"))
+        assertTrue(GdbRemoteRunReplyValidator.isStopOrExit("X09"))
+        assertFalse(GdbRemoteRunReplyValidator.isStopOrExit("E37"))
+        assertFalse(GdbRemoteRunReplyValidator.isStopOrExit("OK"))
+    }
+
+    @Test
+    fun e37CanNeverBeAcceptedAsContinueStopReply() {
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            GdbRemoteRunReplyValidator.requireStopOrExit("continue", "E37")
+        }
+        assertTrue(error.message.orEmpty().contains("LLDB continue failed: E37"))
+    }
+
+    @Test
+    fun boundedRunTimeoutHasDistinctTypeForConservativeStateRecovery() {
+        val timeout = GdbRemoteRunTimeoutException("step timed out")
+        assertTrue(timeout is java.io.IOException)
+        assertEquals("step timed out", timeout.message)
     }
 
     @Test
