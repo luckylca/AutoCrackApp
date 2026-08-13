@@ -153,8 +153,8 @@ class HostDebuggerRemoteClientTest {
 
     @Test
     fun boundedRunTimeoutHasDistinctTypeForConservativeStateRecovery() {
-        val timeout = GdbRemoteRunTimeoutException("step timed out")
-        assertTrue(timeout is java.io.IOException)
+        val timeout: java.io.IOException = GdbRemoteRunTimeoutException("step timed out")
+        assertEquals(GdbRemoteRunTimeoutException::class.java, timeout.javaClass)
         assertEquals("step timed out", timeout.message)
     }
 
