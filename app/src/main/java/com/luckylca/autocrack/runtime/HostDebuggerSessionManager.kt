@@ -120,11 +120,6 @@ object HostDebuggerHelperProbePolicy {
         }
 }
 
-/**
- * After AutoCrack's TCP client has already connected, lldb-server may consume its single-client
- * LISTEN socket. Post-accept validation therefore verifies the same live trusted helper and target
- * state, but deliberately does not require the pre-connect LISTEN socket to still exist.
- */
 object HostDebuggerPostAcceptGate {
     fun canSendTypedAttach(
         running: Boolean,
@@ -142,14 +137,6 @@ object HostDebuggerPostAcceptGate {
 }
 
 object HostDebuggerCommandFactory {
-    /**
-     * Start a targetless lldb-server. The selected target is revalidated here, but the actual
-     * ptrace attach is deferred until the typed CONTROL client sends vAttach for this same PID.
-     *
-     * Server-side GDB-remote packet and POSIX ptrace logging are enabled only to diagnose the
-     * current Android attach stall. lldb-server emits these bounded diagnostics to stderr, which
-     * AutoCrack already captures and includes in copied diagnostics.
-     */
     fun buildAttach(
         suPath: String,
         binaryPath: String,
@@ -264,7 +251,8 @@ object HostDebuggerCommandFactory {
         }
     }
 
-    private const val DEBUG_LOG_CHANNELS = "gdb-remote packets:posix ptrace"
+    private const val DEBUG_LOG_CHANNELS =
+        "gdb-remote packets process step thread:posix ptrace process thread"
     private const val MIN_PORT = 1024
     private const val MAX_PORT = 65535
 }
@@ -378,11 +366,6 @@ class HostDebuggerSessionManager(
         return snapshot(session)
     }
 
-    /**
-     * Revalidate the target immediately after AutoCrack has successfully established the TCP
-     * transport and immediately before the typed client sends vAttach. The pre-connect LISTEN
-     * socket is intentionally not required here because lldb-server may consume it on accept.
-     */
     suspend fun prepareClientAttach(expectedSessionId: String): HostDebuggerSessionSnapshot {
         val session = synchronized(lock) {
             requireNotNull(activeSession) { "当前没有 LLDB server session" }
