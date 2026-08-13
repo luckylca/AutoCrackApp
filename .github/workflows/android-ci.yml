@@ -24,24 +24,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Pin phase 5.14.8 leader-first LLDB toolpack
+      - name: Pin phase 5.14.9 seize-interrupt LLDB toolpack
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
           OLD_VERSION = "ndk-r27d-clang-r522817d_autocrack-1.0.0"
-          NEW_VERSION = "android-llvm-r522817_autocrack-1.1.0-leader-first"
+          NEW_VERSION = "android-llvm-r522817_autocrack-1.2.0-seize-interrupt"
           OLD_PAYLOAD_SHA = "2cc969ff785e8c0c3d4473649edaaf18f64faae4c7e016941dd0c0944944a14a"
-          NEW_PAYLOAD_SHA = "9a02aab0a9400e3e6548fe80e75b404f29422cde902b47538b3cfe94536ecba1"
+          NEW_PAYLOAD_SHA = "2e97eb33e7a52c2931306dc50bf4d9b7caa476e2ed73d2d1d5e1173074174bea"
           OLD_PAYLOAD_SIZE = "27_698_528L"
-          NEW_PAYLOAD_SIZE = "28_393_472L"
+          NEW_PAYLOAD_SIZE = "28_395_904L"
           OLD_SOURCE_VERSION = "ndk-r27d-clang-r522817d"
-          NEW_SOURCE_VERSION = "android-llvm-r522817-autocrack-leader-first"
+          NEW_SOURCE_VERSION = "android-llvm-r522817-autocrack-seize-interrupt"
           OLD_SOURCE_URL = "https://github.com/android/ndk/releases/tag/r27d"
           NEW_SOURCE_URL = "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262"
           OLD_BINARY_SHA = "ff96d83baa872b2226bb1f4f38cd38aa2622416722fb76543cc536edfeea3018"
-          NEW_BINARY_SHA = "b813cf2f23d69c5a30d9b4206bd40d9c2a39fabb485e1fd9c5573e4f379b2bfd"
+          NEW_BINARY_SHA = "df14e59e179cda639b0043e1999ca6ab322e57a8f1c9a5c3ee44040cd907a95a"
+          NEW_SELF_TEST_COMMAND = r'command = "test -x /opt/autocrack/toolpacks/packs/android-lldb-server/android-llvm-r522817_autocrack-1.2.0-seize-interrupt/bin/lldb-server-android && printf \"AUTOCRACK_LLDB_ANDROID_BINARY_OK\\n\"",'
 
           def replace_exact(path, old, new, expected):
               p = Path(path)
@@ -60,6 +61,19 @@ jobs:
           replace_exact(trust, OLD_SOURCE_VERSION, NEW_SOURCE_VERSION, 1)
           replace_exact(trust, OLD_SOURCE_URL, NEW_SOURCE_URL, 1)
           replace_exact(trust, OLD_BINARY_SHA, NEW_BINARY_SHA, 1)
+          replace_exact(
+              trust,
+              '"lldb-server-version" to TrustedSelfTest(\n                    title = "Android LLDB server",',
+              '"lldb-server-android-binary" to TrustedSelfTest(\n                    title = "Android LLDB server payload",',
+              1,
+          )
+          replace_exact(trust, 'command = "lldb-server-android v",', NEW_SELF_TEST_COMMAND, 1)
+          replace_exact(
+              trust,
+              'outputContains = listOf("lldb"),',
+              'outputContains = listOf("AUTOCRACK_LLDB_ANDROID_BINARY_OK"),',
+              1,
+          )
 
           test = "app/src/test/java/com/luckylca/autocrack/runtime/AndroidLldbToolpackTrustPolicyTest.kt"
           replace_exact(test, OLD_VERSION, NEW_VERSION, 1)
@@ -68,29 +82,44 @@ jobs:
           replace_exact(test, OLD_SOURCE_VERSION, NEW_SOURCE_VERSION, 1)
           replace_exact(test, OLD_SOURCE_URL, NEW_SOURCE_URL, 1)
           replace_exact(test, OLD_BINARY_SHA, NEW_BINARY_SHA, 1)
+          replace_exact(
+              test,
+              'id = "lldb-server-version",\n                title = "Android LLDB server",',
+              'id = "lldb-server-android-binary",\n                title = "Android LLDB server payload",',
+              1,
+          )
+          replace_exact(test, 'command = "lldb-server-android v",', NEW_SELF_TEST_COMMAND, 1)
+          replace_exact(
+              test,
+              'outputContains = listOf("lldb"),',
+              'outputContains = listOf("AUTOCRACK_LLDB_ANDROID_BINARY_OK"),',
+              1,
+          )
 
           manager = "app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerSessionManager.kt"
           replace_exact(manager, OLD_VERSION, NEW_VERSION, 1)
 
           catalog = "app/src/main/assets/runtime/dynamic-host-tool-catalog-v1.json"
-          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.8"', 1)
+          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.9"', 1)
           replace_exact(catalog, OLD_VERSION, NEW_VERSION, 2)
 
           gradle = "app/build.gradle.kts"
-          replace_exact(gradle, "versionCode = 42", "versionCode = 43", 1)
+          replace_exact(gradle, "versionCode = 42", "versionCode = 44", 1)
           replace_exact(
               gradle,
               'versionName = "0.5.14.7-phase5.14-server-ptrace-trace"',
-              'versionName = "0.5.14.8-phase5.14-leader-first-lldb"',
+              'versionName = "0.5.14.9-phase5.14-seize-interrupt-lldb"',
               1,
           )
           PY
 
           ! grep -R -F "ndk-r27d-clang-r522817d_autocrack-1.0.0" \
             app/src/main app/src/test app/build.gradle.kts
-          grep -R -F "android-llvm-r522817_autocrack-1.1.0-leader-first" \
+          grep -R -F "android-llvm-r522817_autocrack-1.2.0-seize-interrupt" \
             app/src/main app/src/test
-          grep -F 'versionName = "0.5.14.8-phase5.14-leader-first-lldb"' app/build.gradle.kts
+          grep -R -F "AUTOCRACK_LLDB_ANDROID_BINARY_OK" \
+            app/src/main app/src/test
+          grep -F 'versionName = "0.5.14.9-phase5.14-seize-interrupt-lldb"' app/build.gradle.kts
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -127,7 +156,7 @@ jobs:
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
             | jq -e '
-                .catalogVersion == "0.5.14.8" and
+                .catalogVersion == "0.5.14.9" and
                 .safetyBoundary.defaultOperationMode == "read_only" and
                 .safetyBoundary.attachAllowed == true and
                 .safetyBoundary.attachRequiresExplicitAuthorization == true and
@@ -150,7 +179,7 @@ jobs:
                   .networkScope == "127.0.0.1 only" and
                   .networkAddressFamily == "IPv4" and
                   .changesTargetState == false and
-                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.1.0-leader-first" and
+                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.2.0-seize-interrupt" and
                   ([.guarantees[]] | index("start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach") != null) and
                   ([.guarantees[]] | index("verify the 127.0.0.1 listener socket inode is owned by the verified helper PID") != null) and
                   ([.guarantees[]] | index("create the helper PID file under controller ownership before the root helper writes its PID") != null)) and
@@ -174,7 +203,7 @@ jobs:
                 (.tools[] | select(.id == "host.debugger.orphan_recovery") |
                   .confirmation == "exact_target_and_tracer_phrase" and
                   .authorizationTemplate == "RECOVER <packageName> <pid> <tracerPid>" and
-                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.1.0-leader-first" and
+                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.2.0-seize-interrupt" and
                   ([.guarantees[]] | index("accept only a trusted IPv4 loopback gdbserver command from either legacy --attach or typed client-driven attach sessions") != null) and
                   ([.guarantees[]] | index("send TERM only to the verified LLDB helper and never to the target PID") != null) and
                   ([.guarantees[]] | index("never escalate recovery to SIGKILL") != null))
@@ -183,15 +212,15 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.8-leader-first-lldb-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.9-seize-interrupt-lldb-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.14.8-leader-first-lldb-debug.apk \
-            > AutoCrackApp-0.5.14.8-leader-first-lldb-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.14.9-seize-interrupt-lldb-debug.apk \
+            > AutoCrackApp-0.5.14.9-seize-interrupt-lldb-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.8-leader-first-lldb-debug
+          name: AutoCrackApp-0.5.14.9-seize-interrupt-lldb-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -200,7 +229,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.8-leader-first-lldb-reports
+          name: AutoCrackApp-0.5.14.9-seize-interrupt-lldb-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
