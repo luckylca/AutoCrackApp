@@ -514,9 +514,14 @@ data class GdbRemoteMemoryRead(val address: Long, val bytes: ByteArray) {
 /** Parse only the stopped-thread identity reported by LLDB itself. */
 object GdbRemoteStopReplyParser {
     fun threadId(stopReply: String): String? {
-        if (!stopReply.startsWith('T')) return null
-        val value = stopReply
-            .split(';')
+        if (stopReply.length < 3 || !stopReply.startsWith('T')) return null
+        if (!stopReply.substring(1, 3).all(::isHexDigit)) return null
+
+        // A T stop reply starts with T + two signal hex digits. The first key/value field may
+        // begin immediately after those three characters, e.g. T13thread:393;..., so normalize
+        // away the Txx prefix before splitting fields.
+        val fields = stopReply.substring(3).split(';')
+        val value = fields
             .firstOrNull { field -> field.startsWith("thread:") }
             ?.substringAfter(':')
             ?.lowercase()
