@@ -3,6 +3,7 @@ package com.luckylca.autocrack.runtime
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -95,11 +96,48 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
+    fun stopReplyParserExtractsExactStoppedThread() {
+        val stop = "T13thread:393;name:bin.mt.plus;20:4c1ddb367e000000;reason:signal;"
+
+        assertEquals("393", GdbRemoteStopReplyParser.threadId(stop))
+        assertEquals("vCont;s:393", GdbRemoteExecutionPacketFactory.stepFromStopReply(stop))
+    }
+
+    @Test
+    fun stopReplyParserSupportsMultiprocessThreadSyntax() {
+        val stop = "T05thread:p123.456;reason:trace;"
+
+        assertEquals("p123.456", GdbRemoteStopReplyParser.threadId(stop))
+        assertEquals("vCont;s:p123.456", GdbRemoteExecutionPacketFactory.stepFromStopReply(stop))
+    }
+
+    @Test
+    fun threadSpecificStepRejectsMissingZeroOrMalformedThreadId() {
+        assertNull(GdbRemoteStopReplyParser.threadId("S05"))
+        assertNull(GdbRemoteStopReplyParser.threadId("T05thread:0;reason:trace;"))
+        assertNull(GdbRemoteStopReplyParser.threadId("T05thread:393,evil;reason:trace;"))
+        assertThrows(IllegalArgumentException::class.java) {
+            GdbRemoteExecutionPacketFactory.stepFromStopReply("T05reason:trace;")
+        }
+    }
+
+    @Test
+    fun threadSpecificStepFactoryNeverFallsBackToBareStep() {
+        val packet = GdbRemoteExecutionPacketFactory.stepFromStopReply(
+            "T05thread:393;reason:trace;",
+        )
+
+        assertEquals("vCont;s:393", packet)
+        assertFalse(packet == "vCont;s")
+    }
+
+    @Test
     fun phase514ClientContainsNoWriteOrBreakpointAdapters() {
         val methodNames = HostDebuggerRemoteClient::class.java.methods.map { method -> method.name }.toSet()
         assertFalse("writeMemory" in methodNames)
         assertFalse("writeRegister" in methodNames)
         assertFalse("insertBreakpoint" in methodNames)
         assertFalse("removeBreakpoint" in methodNames)
+        assertFalse("sendRawPacket" in methodNames)
     }
 }
