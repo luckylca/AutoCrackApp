@@ -54,6 +54,7 @@ jobs:
         run: |
           set -euxo pipefail
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           path = Path('android-llvm/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp')
@@ -128,10 +129,16 @@ jobs:
               )
           text = text.replace(sibling_attach_old, sibling_attach_new, 1)
 
-          sibling_wait_old = (
-              '      int wpid =\n'
-              '          llvm::sys::RetryAfterSignal(-1, ::waitpid, tid, nullptr, __WALL);'
+          sibling_wait_pattern = re.compile(
+              r'(?m)^[ \t]*int wpid\s*=\s*'
+              r'llvm::sys::RetryAfterSignal\(\s*-1,\s*::waitpid,\s*tid,\s*nullptr,\s*__WALL\s*\);'
           )
+          wait_matches = list(sibling_wait_pattern.finditer(text))
+          if len(wait_matches) != 1:
+              raise SystemExit(
+                  f'Expected exactly one sibling blocking waitpid statement, found {len(wait_matches)}'
+              )
+
           sibling_wait_new = (
               '      if ((status = PtraceWrapper(PTRACE_INTERRUPT, tid)).Fail()) {\n'
               '        if (status.GetError() == ESRCH) {\n'
@@ -167,11 +174,7 @@ jobs:
               '            llvm::inconvertibleErrorCode());\n'
               '      }'
           )
-          if text.count(sibling_wait_old) != 1:
-              raise SystemExit(
-                  f'Expected exactly one sibling blocking waitpid statement, found {text.count(sibling_wait_old)}'
-              )
-          text = text.replace(sibling_wait_old, sibling_wait_new, 1)
+          text = sibling_wait_pattern.sub(lambda _: sibling_wait_new, text, count=1)
 
           old_log = '      LLDB_LOG(log, "adding tid = {0}", tid);'
           new_log = '      LLDB_LOG(log, "AutoCrack seize-interrupt sibling stopped: tid = {0}, status = {1:x}", tid, wstatus);'
