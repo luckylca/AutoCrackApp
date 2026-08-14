@@ -12,18 +12,18 @@ permissions:
 
 concurrency:
   group: lldb-server-toolpack-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build-lldb-server-toolpack:
-    name: Build Android LLVM r522817 seize-interrupt lldb-server
+    name: Build Android LLVM r522817 seize-runtime-stop lldb-server
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       NDK_VERSION: "27.3.13750724"
       ANDROID_LLVM_COMMIT: "d8003a456d14a3deb8054cdaa529ffbf02d9b262"
       TOOLPACK_ID: android-lldb-server
-      TOOLPACK_VERSION: android-llvm-r522817_autocrack-1.2.0-seize-interrupt
+      TOOLPACK_VERSION: android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop
 
     steps:
       - name: Check out AutoCrackApp
@@ -50,16 +50,19 @@ jobs:
           git -C android-llvm rev-parse HEAD | tee android-llvm.commit.txt
           test "$(cat android-llvm.commit.txt)" = "${ANDROID_LLVM_COMMIT}"
 
-      - name: Patch LLDB attach to use seize interrupt and bounded wait
+      - name: Patch LLDB for seized attach and runtime all-stop semantics
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           import re
           from pathlib import Path
 
-          path = Path('android-llvm/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp')
-          text = path.read_text(encoding='utf-8')
+          process_path = Path('android-llvm/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp')
+          text = process_path.read_text(encoding='utf-8')
 
+          # 1) Attach the explicitly authorized thread-group leader first using
+          # PTRACE_SEIZE + PTRACE_INTERRUPT, then seize each sibling with the
+          # same bounded stop wait. This is the already validated 1.2 attach fix.
           leader_needle = '  Host::TidMap tids_to_attach;\n  while (Host::FindProcessThreads(pid, tids_to_attach)) {'
           if text.count(leader_needle) != 1:
               raise SystemExit(
@@ -184,17 +187,178 @@ jobs:
               )
           text = text.replace(old_log, new_log, 1)
 
-          path.write_text(text, encoding='utf-8')
+          # 2) PTRACE_SEIZE changes the initial stop of auto-attached clone
+          # children from SIGSTOP to PTRACE_EVENT_STOP/SIGTRAP. Preserve such
+          # unowned child stops until the parent clone event identifies them.
+          manager_old = '''    if (!handled) {
+              if (status.type == WaitStatus::Stop && status.status == SIGSTOP) {
+                // Store the thread creation event for later collection.
+                m_unowned_threads.insert(pid);
+              } else {
+                LLDB_LOG(log, "Ignoring waitpid event {0} for pid {1}", status, pid);
+              }
+            }'''
+          manager_new = '''    if (!handled) {
+              if (status.type == WaitStatus::Stop &&
+                  (status.status == SIGSTOP || status.status == SIGTRAP)) {
+                // AutoCrack seize-runtime-stop patch: PTRACE_SEIZE is inherited by
+                // PTRACE_O_TRACECLONE children. Their initial stop is reported as
+                // PTRACE_EVENT_STOP with WSTOPSIG == SIGTRAP rather than the
+                // SIGSTOP assumed by the upstream PTRACE_ATTACH path. Keep either
+                // stop until the parent clone event identifies the new thread.
+                LLDB_LOG(log,
+                         "AutoCrack preserving unowned seized child stop pid {0}, signal {1}",
+                         pid, status.status);
+                m_unowned_threads.insert(pid);
+              } else {
+                LLDB_LOG(log, "Ignoring waitpid event {0} for pid {1}", status, pid);
+              }
+            }'''
+          if text.count(manager_old) != 1:
+              raise SystemExit(
+                  f'Expected exactly one Manager::SigchldHandler unowned-stop block, found {text.count(manager_old)}'
+              )
+          text = text.replace(manager_old, manager_new, 1)
+
+          # 3) PTRACE_INTERRUPT produces PTRACE_EVENT_STOP. The r522817 Linux
+          # plugin has no explicit case for it because upstream attaches with
+          # PTRACE_ATTACH. During an AutoCrack all-stop, mark the triggering
+          # thread as the user-visible SIGSTOP reason and the other threads as
+          # stopped-with-no-reason, then let SignalIfAllThreadsStopped publish
+          # exactly one all-stop notification.
+          event_needle = '''  case (SIGTRAP | (PTRACE_EVENT_EXIT << 8)): {'''
+          event_patch = r'''  case (SIGTRAP | (PTRACE_EVENT_STOP << 8)): {
+            LLDB_LOG(log,
+                     "AutoCrack received seized PTRACE_EVENT_STOP pid {0} tid {1}, pending tid {2}",
+                     GetID(), thread.GetID(), m_pending_notification_tid);
+
+            if (m_pending_notification_tid != LLDB_INVALID_THREAD_ID) {
+              if (m_pending_notification_tid == thread.GetID())
+                thread.SetStoppedBySignal(SIGSTOP);
+              else
+                thread.SetStoppedWithNoReason();
+
+              SetCurrentThreadID(thread.GetID());
+              SignalIfAllThreadsStopped();
+            } else {
+              // No internal all-stop is pending. Keep upstream's conservative
+              // behavior for an externally generated/event stop by reporting it
+              // and coordinating the remaining threads into all-stop.
+              thread.SetStoppedBySignal(SIGTRAP, &info);
+              StopRunningThreads(thread.GetID());
+            }
+            break;
+          }
+
+          case (SIGTRAP | (PTRACE_EVENT_EXIT << 8)): {'''
+          if text.count(event_needle) != 1:
+              raise SystemExit(
+                  f'Expected exactly one PTRACE_EVENT_EXIT insertion point, found {text.count(event_needle)}'
+              )
+          text = text.replace(event_needle, event_patch, 1)
+
+          # 4) Add explicit all-stop diagnostics so device logs show which
+          # thread is still considered running if the coordinator cannot
+          # complete.
+          stop_loop_old = '''  for (const auto &thread : m_threads) {
+            if (StateIsRunningState(thread->GetState()))
+              static_cast<NativeThreadLinux *>(thread.get())->RequestStop();
+          }'''
+          stop_loop_new = '''  for (const auto &thread : m_threads) {
+            LLDB_LOG(log,
+                     "AutoCrack all-stop inspect pid {0} tid {1} state {2}",
+                     GetID(), thread->GetID(), thread->GetState());
+            if (StateIsRunningState(thread->GetState())) {
+              Status stop_error =
+                  static_cast<NativeThreadLinux *>(thread.get())->RequestStop();
+              if (stop_error.Fail())
+                LLDB_LOG(log,
+                         "AutoCrack all-stop request failed pid {0} tid {1}: {2}",
+                         GetID(), thread->GetID(), stop_error);
+            }
+          }'''
+          if text.count(stop_loop_old) != 1:
+              raise SystemExit(
+                  f'Expected exactly one StopRunningThreads loop, found {text.count(stop_loop_old)}'
+              )
+          text = text.replace(stop_loop_old, stop_loop_new, 1)
+
+          process_path.write_text(text, encoding='utf-8')
+
+          # 5) Runtime RequestStop must match seized tracing semantics. Prefer
+          # PTRACE_INTERRUPT for a seized running/stepping tracee; retain the
+          # upstream tgkill(SIGSTOP) path only as a compatibility fallback for
+          # non-seized usage of the same lldb-server binary.
+          thread_path = Path('android-llvm/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp')
+          thread_text = thread_path.read_text(encoding='utf-8')
+          request_old = '''  Status err;
+            errno = 0;
+            if (::tgkill(pid, tid, SIGSTOP) != 0) {
+              err.SetErrorToErrno();
+              LLDB_LOGF(log,
+                        "NativeThreadLinux::%s tgkill(%" PRIu64 ", %" PRIu64
+                        ", SIGSTOP) failed: %s",
+                        __FUNCTION__, pid, tid, err.AsCString());
+            }
+
+            return err;'''
+          request_new = '''  Status interrupt_error = NativeProcessLinux::PtraceWrapper(
+                PTRACE_INTERRUPT, tid, nullptr, nullptr);
+            if (interrupt_error.Success()) {
+              LLDB_LOGF(log,
+                        "NativeThreadLinux::%s AutoCrack PTRACE_INTERRUPT requested "
+                        "for seized thread(pid: %" PRIu64 ", tid: %" PRIu64 ")",
+                        __FUNCTION__, pid, tid);
+              return interrupt_error;
+            }
+
+            // PTRACE_INTERRUPT is valid only for PTRACE_SEIZEd tracees. Keep
+            // upstream compatibility when this binary is used in a non-seized
+            // launch path, but do not silently hide other ptrace failures.
+            if (interrupt_error.GetError() != EIO &&
+                interrupt_error.GetError() != EINVAL) {
+              LLDB_LOGF(log,
+                        "NativeThreadLinux::%s PTRACE_INTERRUPT failed for pid "
+                        "%" PRIu64 ", tid %" PRIu64 ": %s",
+                        __FUNCTION__, pid, tid, interrupt_error.AsCString());
+              return interrupt_error;
+            }
+
+            LLDB_LOGF(log,
+                      "NativeThreadLinux::%s falling back to tgkill(SIGSTOP) "
+                      "for non-seized thread(pid: %" PRIu64 ", tid: %" PRIu64 ")",
+                      __FUNCTION__, pid, tid);
+            Status err;
+            errno = 0;
+            if (::tgkill(pid, tid, SIGSTOP) != 0) {
+              err.SetErrorToErrno();
+              LLDB_LOGF(log,
+                        "NativeThreadLinux::%s tgkill(%" PRIu64 ", %" PRIu64
+                        ", SIGSTOP) failed: %s",
+                        __FUNCTION__, pid, tid, err.AsCString());
+            }
+
+            return err;'''
+          if thread_text.count(request_old) != 1:
+              raise SystemExit(
+                  f'Expected exactly one NativeThreadLinux::RequestStop body tail, found {thread_text.count(request_old)}'
+              )
+          thread_text = thread_text.replace(request_old, request_new, 1)
+          thread_path.write_text(thread_text, encoding='utf-8')
           PY
 
           git -C android-llvm diff --check
-          git -C android-llvm diff -- lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp \
-            | tee autocrack-lldb-seize-interrupt.patch
-          grep -F 'AutoCrack seize-interrupt leader stopped' autocrack-lldb-seize-interrupt.patch
-          grep -F 'PTRACE_SEIZE' autocrack-lldb-seize-interrupt.patch
-          grep -F 'PTRACE_INTERRUPT' autocrack-lldb-seize-interrupt.patch
-          grep -F '__WALL | WNOHANG' autocrack-lldb-seize-interrupt.patch
-          sha256sum autocrack-lldb-seize-interrupt.patch | tee autocrack-lldb-seize-interrupt.patch.sha256
+          git -C android-llvm diff -- \
+            lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp \
+            lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp \
+            | tee autocrack-lldb-seize-runtime-stop.patch
+          grep -F 'AutoCrack seize-interrupt leader stopped' autocrack-lldb-seize-runtime-stop.patch
+          grep -F 'AutoCrack received seized PTRACE_EVENT_STOP' autocrack-lldb-seize-runtime-stop.patch
+          grep -F 'AutoCrack PTRACE_INTERRUPT requested' autocrack-lldb-seize-runtime-stop.patch
+          grep -F 'AutoCrack preserving unowned seized child stop' autocrack-lldb-seize-runtime-stop.patch
+          grep -F 'AutoCrack all-stop inspect' autocrack-lldb-seize-runtime-stop.patch
+          grep -F '__WALL | WNOHANG' autocrack-lldb-seize-runtime-stop.patch
+          sha256sum autocrack-lldb-seize-runtime-stop.patch | tee autocrack-lldb-seize-runtime-stop.patch.sha256
 
       - name: Cross-compile patched lldb-server for Android arm64
         run: |
@@ -249,8 +413,8 @@ jobs:
           readelf -h dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.elf-header.txt
           file dist/payload/bin/lldb-server-android | grep -F 'ARM aarch64'
           sha256sum dist/payload/bin/lldb-server-android | tee dist/source/lldb-server.sha256
-          cp autocrack-lldb-seize-interrupt.patch dist/source/
-          cp autocrack-lldb-seize-interrupt.patch.sha256 dist/source/
+          cp autocrack-lldb-seize-runtime-stop.patch dist/source/
+          cp autocrack-lldb-seize-runtime-stop.patch.sha256 dist/source/
           cp android-llvm.commit.txt dist/source/
           printf '%s\n' "https://android.googlesource.com/toolchain/llvm-project/+/${ANDROID_LLVM_COMMIT}" \
             > dist/source/lldb-server.source-url.txt
@@ -311,7 +475,7 @@ jobs:
               'sources': [
                   {
                       'name': 'lldb-server',
-                      'version': 'android-llvm-r522817-autocrack-seize-interrupt',
+                      'version': 'android-llvm-r522817-autocrack-seize-runtime-stop',
                       'url': source_url,
                       'sha256': binary_sha
                   }
@@ -337,7 +501,7 @@ jobs:
           import zipfile
           from pathlib import Path
 
-          output = Path('dist/AutoCrackApp-android-lldb-server-seize-interrupt-toolpack.zip')
+          output = Path('dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip')
           fixed_time = (1980, 1, 1, 0, 0, 0)
           with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_STORED) as archive:
               for name in ('manifest.json', 'payload.zip'):
@@ -355,18 +519,18 @@ jobs:
           print(f'LLDB_SERVER_TOOLPACK_SHA256={digest}')
           PY
 
-          unzip -t dist/AutoCrackApp-android-lldb-server-seize-interrupt-toolpack.zip
+          unzip -t dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip
           jq -e '.id == "android-lldb-server"' dist/manifest.json >/dev/null
-          jq -e '.version == "android-llvm-r522817_autocrack-1.2.0-seize-interrupt"' dist/manifest.json >/dev/null
+          jq -e '.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"' dist/manifest.json >/dev/null
           jq -e '.selfTests[0].id == "lldb-server-android-binary"' dist/manifest.json >/dev/null
 
       - name: Upload patched Android LLDB server toolpack
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-android-lldb-server-seize-interrupt-toolpack
+          name: AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack
           path: |
-            dist/AutoCrackApp-android-lldb-server-seize-interrupt-toolpack.zip
-            dist/AutoCrackApp-android-lldb-server-seize-interrupt-toolpack.zip.sha256
+            dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip
+            dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip.sha256
             dist/manifest.json
             dist/payload.sha256
             dist/payload.size
