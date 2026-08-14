@@ -237,35 +237,9 @@ jobs:
               )
           text = text.replace(event_needle, event_patch, 1)
 
-          # 4) Add explicit all-stop diagnostics so device logs show which
-          # thread is still considered running if the coordinator cannot
-          # complete.
-          stop_loop_old = '''  for (const auto &thread : m_threads) {
-            if (StateIsRunningState(thread->GetState()))
-              static_cast<NativeThreadLinux *>(thread.get())->RequestStop();
-          }'''
-          stop_loop_new = '''  for (const auto &thread : m_threads) {
-            LLDB_LOG(log,
-                     "AutoCrack all-stop inspect pid {0} tid {1} state {2}",
-                     GetID(), thread->GetID(), thread->GetState());
-            if (StateIsRunningState(thread->GetState())) {
-              Status stop_error =
-                  static_cast<NativeThreadLinux *>(thread.get())->RequestStop();
-              if (stop_error.Fail())
-                LLDB_LOG(log,
-                         "AutoCrack all-stop request failed pid {0} tid {1}: {2}",
-                         GetID(), thread->GetID(), stop_error);
-            }
-          }'''
-          if text.count(stop_loop_old) != 1:
-              raise SystemExit(
-                  f'Expected exactly one StopRunningThreads loop, found {text.count(stop_loop_old)}'
-              )
-          text = text.replace(stop_loop_old, stop_loop_new, 1)
-
           process_path.write_text(text, encoding='utf-8')
 
-          # 5) Runtime RequestStop must match seized tracing semantics. Prefer
+          # 4) Runtime RequestStop must match seized tracing semantics. Prefer
           # PTRACE_INTERRUPT for a seized running/stepping tracee; retain the
           # upstream tgkill(SIGSTOP) path only as a compatibility fallback for
           # non-seized usage of the same lldb-server binary.
@@ -336,7 +310,6 @@ jobs:
           grep -F 'AutoCrack received seized PTRACE_EVENT_STOP' autocrack-lldb-seize-runtime-stop.patch
           grep -F 'AutoCrack PTRACE_INTERRUPT requested' autocrack-lldb-seize-runtime-stop.patch
           grep -F '(status.status == SIGSTOP || status.status == SIGTRAP)' autocrack-lldb-seize-runtime-stop.patch
-          grep -F 'AutoCrack all-stop inspect' autocrack-lldb-seize-runtime-stop.patch
           grep -F '__WALL | WNOHANG' autocrack-lldb-seize-runtime-stop.patch
           sha256sum autocrack-lldb-seize-runtime-stop.patch | tee autocrack-lldb-seize-runtime-stop.patch.sha256
 
