@@ -24,25 +24,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Pin phase 5.14.12 step-timeout recovery with seize-interrupt LLDB toolpack
+      - name: Pin phase 5.14.13 seize-runtime-stop LLDB toolpack
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
           OLD_VERSION = "ndk-r27d-clang-r522817d_autocrack-1.0.0"
-          NEW_VERSION = "android-llvm-r522817_autocrack-1.2.0-seize-interrupt"
+          NEW_VERSION = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
           OLD_PAYLOAD_SHA = "2cc969ff785e8c0c3d4473649edaaf18f64faae4c7e016941dd0c0944944a14a"
-          NEW_PAYLOAD_SHA = "2e97eb33e7a52c2931306dc50bf4d9b7caa476e2ed73d2d1d5e1173074174bea"
+          NEW_PAYLOAD_SHA = "f2d3b3925ffc49419508dd97cd657d4a8a2e0b0b313f473105173b96ce31b899"
           OLD_PAYLOAD_SIZE = "27_698_528L"
-          NEW_PAYLOAD_SIZE = "28_395_904L"
+          NEW_PAYLOAD_SIZE = "28_396_656L"
           OLD_SOURCE_VERSION = "ndk-r27d-clang-r522817d"
-          NEW_SOURCE_VERSION = "android-llvm-r522817-autocrack-seize-interrupt"
+          NEW_SOURCE_VERSION = "android-llvm-r522817-autocrack-seize-runtime-stop"
           OLD_SOURCE_URL = "https://github.com/android/ndk/releases/tag/r27d"
           NEW_SOURCE_URL = "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262"
           OLD_BINARY_SHA = "ff96d83baa872b2226bb1f4f38cd38aa2622416722fb76543cc536edfeea3018"
-          NEW_BINARY_SHA = "df14e59e179cda639b0043e1999ca6ab322e57a8f1c9a5c3ee44040cd907a95a"
-          NEW_SELF_TEST_COMMAND = r'command = "test -x /opt/autocrack/toolpacks/packs/android-lldb-server/android-llvm-r522817_autocrack-1.2.0-seize-interrupt/bin/lldb-server-android && printf \"AUTOCRACK_LLDB_ANDROID_BINARY_OK\\n\"",'
+          NEW_BINARY_SHA = "71d9ed6a90776d7dbdbcb315ea2171a763c071e5a370ec1b8b0c28157af41b20"
+          NEW_SELF_TEST_COMMAND = r'command = "test -x /opt/autocrack/toolpacks/packs/android-lldb-server/android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop/bin/lldb-server-android && printf \"AUTOCRACK_LLDB_ANDROID_BINARY_OK\\n\"",'
 
           def replace_exact(path, old, new, expected):
               p = Path(path)
@@ -100,26 +100,30 @@ jobs:
           replace_exact(manager, OLD_VERSION, NEW_VERSION, 1)
 
           catalog = "app/src/main/assets/runtime/dynamic-host-tool-catalog-v1.json"
-          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.12"', 1)
+          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.13"', 1)
           replace_exact(catalog, OLD_VERSION, NEW_VERSION, 2)
 
           gradle = "app/build.gradle.kts"
-          replace_exact(gradle, "versionCode = 42", "versionCode = 47", 1)
+          replace_exact(gradle, "versionCode = 42", "versionCode = 48", 1)
           replace_exact(
               gradle,
               'versionName = "0.5.14.7-phase5.14-server-ptrace-trace"',
-              'versionName = "0.5.14.12-phase5.14-step-timeout-recovery"',
+              'versionName = "0.5.14.13-phase5.14-seize-runtime-stop"',
               1,
           )
           PY
 
           ! grep -R -F "ndk-r27d-clang-r522817d_autocrack-1.0.0" \
             app/src/main app/src/test app/build.gradle.kts
-          grep -R -F "android-llvm-r522817_autocrack-1.2.0-seize-interrupt" \
+          grep -R -F "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" \
+            app/src/main app/src/test
+          grep -R -F "f2d3b3925ffc49419508dd97cd657d4a8a2e0b0b313f473105173b96ce31b899" \
+            app/src/main app/src/test
+          grep -R -F "71d9ed6a90776d7dbdbcb315ea2171a763c071e5a370ec1b8b0c28157af41b20" \
             app/src/main app/src/test
           grep -R -F "AUTOCRACK_LLDB_ANDROID_BINARY_OK" \
             app/src/main app/src/test
-          grep -F 'versionName = "0.5.14.12-phase5.14-step-timeout-recovery"' app/build.gradle.kts
+          grep -F 'versionName = "0.5.14.13-phase5.14-seize-runtime-stop"' app/build.gradle.kts
           grep -F 'fun stepFromStopReply(stopReply: String)' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
           grep -F 'fun awaitStopAfterInterrupt()' \
@@ -170,7 +174,7 @@ jobs:
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
             | jq -e '
-                .catalogVersion == "0.5.14.12" and
+                .catalogVersion == "0.5.14.13" and
                 .safetyBoundary.defaultOperationMode == "read_only" and
                 .safetyBoundary.attachAllowed == true and
                 .safetyBoundary.attachRequiresExplicitAuthorization == true and
@@ -193,7 +197,7 @@ jobs:
                   .networkScope == "127.0.0.1 only" and
                   .networkAddressFamily == "IPv4" and
                   .changesTargetState == false and
-                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.2.0-seize-interrupt" and
+                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" and
                   ([.guarantees[]] | index("start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach") != null) and
                   ([.guarantees[]] | index("verify the 127.0.0.1 listener socket inode is owned by the verified helper PID") != null) and
                   ([.guarantees[]] | index("create the helper PID file under controller ownership before the root helper writes its PID") != null)) and
@@ -217,7 +221,7 @@ jobs:
                 (.tools[] | select(.id == "host.debugger.orphan_recovery") |
                   .confirmation == "exact_target_and_tracer_phrase" and
                   .authorizationTemplate == "RECOVER <packageName> <pid> <tracerPid>" and
-                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.2.0-seize-interrupt" and
+                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" and
                   ([.guarantees[]] | index("accept only a trusted IPv4 loopback gdbserver command from either legacy --attach or typed client-driven attach sessions") != null) and
                   ([.guarantees[]] | index("send TERM only to the verified LLDB helper and never to the target PID") != null) and
                   ([.guarantees[]] | index("never escalate recovery to SIGKILL") != null))
@@ -226,15 +230,15 @@ jobs:
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.12-step-timeout-recovery-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.13-seize-runtime-stop-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.14.12-step-timeout-recovery-debug.apk \
-            > AutoCrackApp-0.5.14.12-step-timeout-recovery-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.14.13-seize-runtime-stop-debug.apk \
+            > AutoCrackApp-0.5.14.13-seize-runtime-stop-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.12-step-timeout-recovery-debug
+          name: AutoCrackApp-0.5.14.13-seize-runtime-stop-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -243,7 +247,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.14.12-step-timeout-recovery-reports
+          name: AutoCrackApp-0.5.14.13-seize-runtime-stop-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml
