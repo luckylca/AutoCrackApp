@@ -188,37 +188,17 @@ jobs:
           text = text.replace(old_log, new_log, 1)
 
           # 2) PTRACE_SEIZE changes the initial stop of auto-attached clone
-          # children from SIGSTOP to PTRACE_EVENT_STOP/SIGTRAP. Preserve such
-          # unowned child stops until the parent clone event identifies them.
-          manager_old = '''    if (!handled) {
-              if (status.type == WaitStatus::Stop && status.status == SIGSTOP) {
-                // Store the thread creation event for later collection.
-                m_unowned_threads.insert(pid);
-              } else {
-                LLDB_LOG(log, "Ignoring waitpid event {0} for pid {1}", status, pid);
-              }
-            }'''
-          manager_new = '''    if (!handled) {
-              if (status.type == WaitStatus::Stop &&
-                  (status.status == SIGSTOP || status.status == SIGTRAP)) {
-                // AutoCrack seize-runtime-stop patch: PTRACE_SEIZE is inherited by
-                // PTRACE_O_TRACECLONE children. Their initial stop is reported as
-                // PTRACE_EVENT_STOP with WSTOPSIG == SIGTRAP rather than the
-                // SIGSTOP assumed by the upstream PTRACE_ATTACH path. Keep either
-                // stop until the parent clone event identifies the new thread.
-                LLDB_LOG(log,
-                         "AutoCrack preserving unowned seized child stop pid {0}, signal {1}",
-                         pid, status.status);
-                m_unowned_threads.insert(pid);
-              } else {
-                LLDB_LOG(log, "Ignoring waitpid event {0} for pid {1}", status, pid);
-              }
-            }'''
-          if text.count(manager_old) != 1:
+          # children from SIGSTOP to PTRACE_EVENT_STOP/SIGTRAP. Match only the
+          # unique condition rather than the whole surrounding block so Android
+          # merge whitespace/comment differences cannot prevent the safety-checked patch.
+          manager_condition_old = 'if (status.type == WaitStatus::Stop && status.status == SIGSTOP) {'
+          manager_condition_new = '''if (status.type == WaitStatus::Stop &&
+                  (status.status == SIGSTOP || status.status == SIGTRAP)) {'''
+          if text.count(manager_condition_old) != 1:
               raise SystemExit(
-                  f'Expected exactly one Manager::SigchldHandler unowned-stop block, found {text.count(manager_old)}'
+                  f'Expected exactly one Manager::SigchldHandler SIGSTOP condition, found {text.count(manager_condition_old)}'
               )
-          text = text.replace(manager_old, manager_new, 1)
+          text = text.replace(manager_condition_old, manager_condition_new, 1)
 
           # 3) PTRACE_INTERRUPT produces PTRACE_EVENT_STOP. The r522817 Linux
           # plugin has no explicit case for it because upstream attaches with
@@ -355,7 +335,7 @@ jobs:
           grep -F 'AutoCrack seize-interrupt leader stopped' autocrack-lldb-seize-runtime-stop.patch
           grep -F 'AutoCrack received seized PTRACE_EVENT_STOP' autocrack-lldb-seize-runtime-stop.patch
           grep -F 'AutoCrack PTRACE_INTERRUPT requested' autocrack-lldb-seize-runtime-stop.patch
-          grep -F 'AutoCrack preserving unowned seized child stop' autocrack-lldb-seize-runtime-stop.patch
+          grep -F '(status.status == SIGSTOP || status.status == SIGTRAP)' autocrack-lldb-seize-runtime-stop.patch
           grep -F 'AutoCrack all-stop inspect' autocrack-lldb-seize-runtime-stop.patch
           grep -F '__WALL | WNOHANG' autocrack-lldb-seize-runtime-stop.patch
           sha256sum autocrack-lldb-seize-runtime-stop.patch | tee autocrack-lldb-seize-runtime-stop.patch.sha256
