@@ -33,11 +33,14 @@ jobs:
           python3 scripts/apply_phase5152_automatic_code_context.py
           python3 scripts/apply_phase5152_generated_source_fix.py
           python3 scripts/apply_phase5153_live_auto_observation_timeline.py
+          python3 scripts/apply_phase5154_compat_pre.py
           python3 scripts/apply_phase5154_exact_signal_passthrough.py
+          python3 scripts/apply_phase5154_compat_post.py
 
           grep -F 'versionName = "0.5.15.4-phase5.15-exact-signal-passthrough"' app/build.gradle.kts
           grep -F 'fun continuePassingLastStoppedSignal()' app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
           grep -F 'object GdbRemoteStoppedSignalPassthrough' app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'Single-step only the explicitly selected, validated LLDB thread.' app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
           grep -F 'continueLiveAutoObservation(activeClient)' app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
           grep -F 'auto_live_exact_signal_passthrough' app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
           grep -F 'autoSignalPassthroughCount' app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
