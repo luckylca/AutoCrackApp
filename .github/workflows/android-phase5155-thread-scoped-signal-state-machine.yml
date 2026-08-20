@@ -33,6 +33,7 @@ jobs:
           python3 scripts/apply_phase5152_automatic_code_context.py
           python3 scripts/apply_phase5152_generated_source_fix.py
           python3 scripts/apply_phase5153_live_auto_observation_timeline.py
+          python3 scripts/apply_phase5154_thread_aware_compat.py
           python3 scripts/apply_phase5154_exact_signal_passthrough.py
           python3 scripts/apply_phase5155_thread_scoped_signal_state_machine.py
 
