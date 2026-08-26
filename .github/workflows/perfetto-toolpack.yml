@@ -1,0 +1,150 @@
+name: Build Perfetto analysis toolpack
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perfetto-toolpack-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-perfetto-toolpack:
+    name: Build verified Perfetto trace_processor package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      PERFETTO_VERSION: "58.2"
+      PERFETTO_LINUX_ARM64_SHA256: "a82bf4111a340a7ea8577bcfd62e014e8e81b9e6a35a3190f5415fb800051ab0"
+      EXPECTED_PAYLOAD_SHA256: "0000000000000000000000000000000000000000000000000000000000000000"
+      EXPECTED_PAYLOAD_SIZE: "0"
+      TOOLPACK_ID: perfetto-analysis
+      TOOLPACK_VERSION: perfetto-58.2-autocrack-1.0.0
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends curl jq unzip zip file
+
+      - name: Download and verify official Linux ARM64 Perfetto bundle
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/source dist/unpacked dist/payload/bin
+          PERFETTO_URL="https://github.com/google/perfetto/releases/download/v${PERFETTO_VERSION}/linux-arm64.zip"
+          curl --fail --location --retry 4 --retry-all-errors \
+            --output dist/source/linux-arm64.zip "$PERFETTO_URL"
+          printf '%s  %s\n' "$PERFETTO_LINUX_ARM64_SHA256" dist/source/linux-arm64.zip \
+            | sha256sum --check --strict -
+          unzip -t dist/source/linux-arm64.zip
+          unzip -q dist/source/linux-arm64.zip -d dist/unpacked
+          printf '%s' "$PERFETTO_URL" > dist/source/perfetto.url
+
+      - name: Assemble deterministic trace_processor payload
+        run: |
+          set -euxo pipefail
+          TRACE_PROCESSOR=$(find dist/unpacked -type f \( -name trace_processor -o -name trace_processor_shell \) -print -quit)
+          test -n "$TRACE_PROCESSOR"
+          cp "$TRACE_PROCESSOR" dist/payload/bin/trace_processor
+          chmod 0755 dist/payload/bin/trace_processor
+          file dist/payload/bin/trace_processor | tee dist/source/trace-processor.file.txt
+          grep -Eq 'ELF 64-bit.*(ARM aarch64|ARM64|aarch64)' dist/source/trace-processor.file.txt
+          sha256sum dist/payload/bin/trace_processor > dist/source/trace-processor.binary.sha256
+
+          python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_STORED, ZipFile, ZipInfo
+
+          root = Path("dist/payload")
+          output = Path("dist/payload.zip")
+          with ZipFile(output, "w", compression=ZIP_STORED) as archive:
+              for path in sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: p.relative_to(root).as_posix()):
+                  relative = path.relative_to(root).as_posix()
+                  info = ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
+                  info.create_system = 3
+                  info.external_attr = (0o100755 if relative == "bin/trace_processor" else 0o100644) << 16
+                  info.compress_type = ZIP_STORED
+                  archive.writestr(info, path.read_bytes())
+          PY
+
+          ACTUAL_PAYLOAD_SHA256=$(sha256sum dist/payload.zip | awk '{print $1}')
+          ACTUAL_PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
+          printf 'PERFETTO_PAYLOAD_SHA256=%s\nPERFETTO_PAYLOAD_SIZE=%s\n' \
+            "$ACTUAL_PAYLOAD_SHA256" "$ACTUAL_PAYLOAD_SIZE" | tee dist/build-summary.txt
+          test "$ACTUAL_PAYLOAD_SHA256" = "$EXPECTED_PAYLOAD_SHA256"
+          test "$ACTUAL_PAYLOAD_SIZE" = "$EXPECTED_PAYLOAD_SIZE"
+
+      - name: Generate pinned manifest and package
+        run: |
+          set -euxo pipefail
+          PERFETTO_URL=$(cat dist/source/perfetto.url)
+          export PERFETTO_URL
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = {
+              "schemaVersion": 1,
+              "id": os.environ["TOOLPACK_ID"],
+              "title": "Perfetto trace analysis",
+              "version": os.environ["TOOLPACK_VERSION"],
+              "architecture": "arm64",
+              "payloadEntry": "payload.zip",
+              "payloadSha256": os.environ["EXPECTED_PAYLOAD_SHA256"],
+              "payloadSizeBytes": int(os.environ["EXPECTED_PAYLOAD_SIZE"]),
+              "requiredPaths": ["bin/trace_processor"],
+              "commands": [{"name": "trace_processor", "relativePath": "bin/trace_processor"}],
+              "selfTests": [{
+                  "id": "trace-processor-help",
+                  "title": "Perfetto trace_processor ARM64 CLI",
+                  "command": "trace_processor --help >/dev/null",
+                  "expectedExitCodes": [0],
+                  "outputContains": [],
+              }],
+              "sources": [{
+                  "name": "perfetto-linux-arm64",
+                  "version": os.environ["PERFETTO_VERSION"],
+                  "url": os.environ["PERFETTO_URL"],
+                  "sha256": os.environ["PERFETTO_LINUX_ARM64_SHA256"],
+              }],
+          }
+          Path("dist/manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+
+          jq -e '.id == "perfetto-analysis" and .version == "perfetto-58.2-autocrack-1.0.0"' dist/manifest.json >/dev/null
+          (
+            cd dist
+            zip -0 -q AutoCrackApp-perfetto-analysis-toolpack.zip manifest.json payload.zip
+            sha256sum AutoCrackApp-perfetto-analysis-toolpack.zip > AutoCrackApp-perfetto-analysis-toolpack.zip.sha256
+          )
+
+      - name: Verify final package
+        run: |
+          set -euxo pipefail
+          unzip -t dist/AutoCrackApp-perfetto-analysis-toolpack.zip
+          test "$(unzip -Z1 dist/AutoCrackApp-perfetto-analysis-toolpack.zip | wc -l)" -eq 2
+          unzip -p dist/AutoCrackApp-perfetto-analysis-toolpack.zip manifest.json \
+            | jq -e '.commands | map(.name) == ["trace_processor"]' >/dev/null
+
+      - name: Upload Perfetto analysis toolpack
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-perfetto-analysis-toolpack
+          path: |
+            dist/AutoCrackApp-perfetto-analysis-toolpack.zip
+            dist/AutoCrackApp-perfetto-analysis-toolpack.zip.sha256
+            dist/manifest.json
+            dist/build-summary.txt
+            dist/source/trace-processor.binary.sha256
+            dist/source/trace-processor.file.txt
+          if-no-files-found: error
+          retention-days: 14
