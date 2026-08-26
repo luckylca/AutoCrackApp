@@ -10,7 +10,7 @@ on:
       - toolpacks/frida/**
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: frida-toolpack-${{ github.workflow }}-${{ github.ref }}
@@ -34,73 +34,97 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare directories and packages
+        id: prepare
         run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y xz-utils unzip file jq
-          mkdir -p dist/download dist/payload/bin dist/payload/libexec dist/payload/python dist/source
+          set -o pipefail
+          {
+            set -euxo pipefail
+            sudo apt-get update
+            sudo apt-get install -y xz-utils unzip file jq
+            mkdir -p dist/download dist/payload/bin dist/payload/libexec dist/payload/python dist/source
+          } 2>&1 | tee /tmp/frida-prepare.log
 
       - name: Fetch pinned official Android ARM64 frida-server
+        id: server
         run: |
-          set -euxo pipefail
-          SERVER_XZ="dist/download/frida-server-${FRIDA_VERSION}-android-arm64.xz"
-          SERVER_URL="https://github.com/frida/frida/releases/download/${FRIDA_VERSION}/frida-server-${FRIDA_VERSION}-android-arm64.xz"
-          curl --fail --location --retry 4 --retry-all-errors -o "${SERVER_XZ}" "${SERVER_URL}"
-          printf '%s  %s\n' "${FRIDA_SERVER_SHA256}" "${SERVER_XZ}" | sha256sum -c -
-          xz -dc "${SERVER_XZ}" > dist/payload/bin/frida-server-android
-          chmod 0755 dist/payload/bin/frida-server-android
-          file dist/payload/bin/frida-server-android | tee dist/source/frida-server.file.txt
-          file dist/payload/bin/frida-server-android | grep -F 'ARM aarch64'
-          printf '%s\n' "${SERVER_URL}" > dist/source/frida-server.source-url.txt
-          sha256sum "${SERVER_XZ}" > dist/source/frida-server.asset.sha256
-          sha256sum dist/payload/bin/frida-server-android > dist/source/frida-server.binary.sha256
+          set -o pipefail
+          {
+            set -euxo pipefail
+            SERVER_XZ="dist/download/frida-server-${FRIDA_VERSION}-android-arm64.xz"
+            SERVER_URL="https://github.com/frida/frida/releases/download/${FRIDA_VERSION}/frida-server-${FRIDA_VERSION}-android-arm64.xz"
+            curl --fail --location --retry 4 --retry-all-errors -o "${SERVER_XZ}" "${SERVER_URL}"
+            printf '%s  %s\n' "${FRIDA_SERVER_SHA256}" "${SERVER_XZ}" | sha256sum -c -
+            xz -dc "${SERVER_XZ}" > dist/payload/bin/frida-server-android
+            chmod 0755 dist/payload/bin/frida-server-android
+            file dist/payload/bin/frida-server-android | tee dist/source/frida-server.file.txt
+            file dist/payload/bin/frida-server-android | grep -F 'ARM aarch64'
+            printf '%s\n' "${SERVER_URL}" > dist/source/frida-server.source-url.txt
+            sha256sum "${SERVER_XZ}" > dist/source/frida-server.asset.sha256
+            sha256sum dist/payload/bin/frida-server-android > dist/source/frida-server.binary.sha256
+          } 2>&1 | tee /tmp/frida-server.log
 
       - name: Fetch pinned official ARM64 Frida Python binding
+        id: python
         run: |
-          set -euxo pipefail
-          python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all: \
-            --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi abi3 \
-            "frida==${FRIDA_VERSION}" --dest dist/download
-          WHEEL="$(find dist/download -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
-          test -n "${WHEEL}"
-          printf '%s  %s\n' "${FRIDA_PYTHON_WHEEL_SHA256}" "${WHEEL}" | sha256sum -c -
-          unzip -q "${WHEEL}" -d dist/payload/python
-          sha256sum "${WHEEL}" > dist/source/frida-python.wheel.sha256
+          set -o pipefail
+          {
+            set -euxo pipefail
+            python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all: \
+              --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi abi3 \
+              "frida==${FRIDA_VERSION}" --dest dist/download
+            WHEEL="$(find dist/download -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
+            test -n "${WHEEL}"
+            printf '%s  %s\n' "${FRIDA_PYTHON_WHEEL_SHA256}" "${WHEEL}" | sha256sum -c -
+            unzip -q "${WHEEL}" -d dist/payload/python
+            sha256sum "${WHEEL}" > dist/source/frida-python.wheel.sha256
+          } 2>&1 | tee /tmp/frida-python.log
 
       - name: Compile fixed bounded Frida RPC agent
+        id: agent
         working-directory: toolpacks/frida
         run: |
-          set -euxo pipefail
-          npm install --ignore-scripts --no-audit --no-fund \
-            "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" "frida-compile@${FRIDA_COMPILE_VERSION}"
-          mkdir -p dist
-          npx --no-install frida-compile agent.ts -o dist/autocrack-frida-agent.js -c
-          test -s dist/autocrack-frida-agent.js
-          sha256sum dist/autocrack-frida-agent.js > ../../dist/source/autocrack-frida-agent.sha256
-          npm view "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" dist.tarball > ../../dist/source/frida-java-bridge.source-url.txt
-          curl --fail --location --retry 4 --retry-all-errors \
-            -o ../../dist/download/frida-java-bridge.tgz "$(cat ../../dist/source/frida-java-bridge.source-url.txt)"
-          sha256sum ../../dist/download/frida-java-bridge.tgz > ../../dist/source/frida-java-bridge.tgz.sha256
+          set -o pipefail
+          {
+            set -euxo pipefail
+            npm install --ignore-scripts --no-audit --no-fund \
+              "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" "frida-compile@${FRIDA_COMPILE_VERSION}"
+            mkdir -p dist
+            npx --no-install frida-compile agent.ts -o dist/autocrack-frida-agent.js -c
+            test -s dist/autocrack-frida-agent.js
+            sha256sum dist/autocrack-frida-agent.js > ../../dist/source/autocrack-frida-agent.sha256
+            npm view "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" dist.tarball > ../../dist/source/frida-java-bridge.source-url.txt
+            curl --fail --location --retry 4 --retry-all-errors \
+              -o ../../dist/download/frida-java-bridge.tgz "$(cat ../../dist/source/frida-java-bridge.source-url.txt)"
+            sha256sum ../../dist/download/frida-java-bridge.tgz > ../../dist/source/frida-java-bridge.tgz.sha256
+          } 2>&1 | tee /tmp/frida-agent.log
 
       - name: Assemble bounded client payload
+        id: assemble
         run: |
-          set -euxo pipefail
-          cp toolpacks/frida/dist/autocrack-frida-agent.js dist/payload/libexec/autocrack-frida-agent.js
-          cp toolpacks/frida/frida_autocrack_client.py dist/payload/libexec/frida_autocrack_client.py
-          cp toolpacks/frida/frida-autocrack-client dist/payload/bin/frida-autocrack-client
-          chmod 0755 dist/payload/bin/frida-autocrack-client dist/payload/libexec/frida_autocrack_client.py
-          python3 -m py_compile toolpacks/frida/frida_autocrack_client.py
-          grep -F 'Interceptor.attach' toolpacks/frida/agent.ts
-          ! grep -Eq 'Interceptor\.replace|Memory\.write|rpc\.exports\..*eval' toolpacks/frida/agent.ts
+          set -o pipefail
+          {
+            set -euxo pipefail
+            cp toolpacks/frida/dist/autocrack-frida-agent.js dist/payload/libexec/autocrack-frida-agent.js
+            cp toolpacks/frida/frida_autocrack_client.py dist/payload/libexec/frida_autocrack_client.py
+            cp toolpacks/frida/frida-autocrack-client dist/payload/bin/frida-autocrack-client
+            chmod 0755 dist/payload/bin/frida-autocrack-client dist/payload/libexec/frida_autocrack_client.py
+            python3 -m py_compile toolpacks/frida/frida_autocrack_client.py
+            grep -F 'Interceptor.attach' toolpacks/frida/agent.ts
+            ! grep -Eq 'Interceptor\.replace|Memory\.write|rpc\.exports\..*eval' toolpacks/frida/agent.ts
+          } 2>&1 | tee /tmp/frida-assemble.log
 
       - name: Build and validate deterministic toolpack
+        id: package
         run: |
-          set -euxo pipefail
-          python3 toolpacks/frida/build_toolpack.py | tee dist/build-summary.txt
-          unzip -t dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
-          jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
-          jq -e '.version == "frida-17.17.0-autocrack-1.0.0"' dist/manifest.json >/dev/null
-          jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
+          set -o pipefail
+          {
+            set -euxo pipefail
+            python3 toolpacks/frida/build_toolpack.py | tee dist/build-summary.txt
+            unzip -t dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
+            jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
+            jq -e '.version == "frida-17.17.0-autocrack-1.0.0"' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
+          } 2>&1 | tee /tmp/frida-package.log
 
       - name: Upload Frida toolpack artifact
         uses: actions/upload-artifact@v4
@@ -116,3 +140,28 @@ jobs:
             dist/source/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish temporary failure diagnostics branch
+        if: failure()
+        run: |
+          set -euxo pipefail
+          DIAG_DIR="$(mktemp -d)"
+          cp /tmp/frida-*.log "${DIAG_DIR}/" 2>/dev/null || true
+          printf 'commit=%s\nprepare=%s\nserver=%s\npython=%s\nagent=%s\nassemble=%s\npackage=%s\n' \
+            "${GITHUB_SHA}" \
+            '${{ steps.prepare.outcome }}' \
+            '${{ steps.server.outcome }}' \
+            '${{ steps.python.outcome }}' \
+            '${{ steps.agent.outcome }}' \
+            '${{ steps.assemble.outcome }}' \
+            '${{ steps.package.outcome }}' \
+            > "${DIAG_DIR}/outcomes.txt"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --orphan ci-frida-toolpack-diagnostics
+          git rm -rf .
+          mkdir diagnostics
+          cp "${DIAG_DIR}"/* diagnostics/
+          git add diagnostics
+          git commit -m "Frida toolpack failure diagnostics ${GITHUB_SHA}"
+          git push --force origin HEAD:refs/heads/ci/frida-toolpack-diagnostics
