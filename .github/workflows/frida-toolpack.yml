@@ -2,6 +2,12 @@ name: Build Android Frida toolpack
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - agent/phase-5.15.6-continuation
+    paths:
+      - .github/workflows/frida-toolpack.yml
+      - toolpacks/frida/**
 
 permissions:
   contents: read
