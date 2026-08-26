@@ -135,6 +135,10 @@ rpc.exports = {
       throw new Error('offset must be inside the selected module');
     }
     const target = module.base.add(offset);
+    const targetRange = Process.findRangeByAddress(target);
+    if (targetRange === null || !targetRange.protection.includes('x')) {
+      throw new Error('trace target must resolve to an executable memory range');
+    }
     traceLimit = clampInt(maxEvents, 1, 128);
     traceTarget = target;
     traceListener = Interceptor.attach(target, {
