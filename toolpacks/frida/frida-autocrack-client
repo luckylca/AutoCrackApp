@@ -3,4 +3,5 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PACK_ROOT=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 export PYTHONPATH="$PACK_ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
-exec /usr/bin/python3 "$PACK_ROOT/libexec/frida_autocrack_client.py" "$@"
+export PYTHONDONTWRITEBYTECODE=1
+exec /usr/bin/python3 -B "$PACK_ROOT/libexec/frida_autocrack_client.py" "$@"

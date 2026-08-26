@@ -74,7 +74,7 @@ def main() -> None:
             {
                 "id": "frida-python-import",
                 "title": "ARM64 Frida Python binding import",
-                "command": f'PYTHONPATH={root}/python python3 -c "import frida; print(frida.__version__)"',
+                "command": f'PYTHONDONTWRITEBYTECODE=1 PYTHONPATH={root}/python python3 -B -c "import frida; print(frida.__version__)"',
                 "expectedExitCodes": [0],
                 "outputContains": [frida_version],
             },
