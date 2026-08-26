@@ -138,6 +138,21 @@ jobs:
             jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
           } 2>&1 | tee /tmp/frida-package.log
 
+      - name: Upload Frida provenance metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-frida-17.17.0-provenance
+          path: |
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/build-summary.txt
+            dist/source/frida-agent.package-lock.json
+            dist/source/*.sha256
+            dist/source/*.txt
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload Frida toolpack artifact
         uses: actions/upload-artifact@v4
         with:
