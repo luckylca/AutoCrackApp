@@ -86,7 +86,9 @@ jobs:
           set -o pipefail
           {
             set -euxo pipefail
-            npm install --ignore-scripts --no-audit --no-fund \
+            node --version
+            npm --version
+            npm install --no-audit --no-fund \
               "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" "frida-compile@${FRIDA_COMPILE_VERSION}"
             mkdir -p dist
             npx --no-install frida-compile agent.ts -o dist/autocrack-frida-agent.js -c
