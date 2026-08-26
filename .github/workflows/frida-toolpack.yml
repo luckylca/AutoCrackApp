@@ -93,7 +93,7 @@ jobs:
             set -euxo pipefail
             node --version
             npm --version
-            npm install --save-exact --ignore-scripts --no-audit --no-fund \
+            npm install --save-exact --no-audit --no-fund \
               "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" "frida-compile@${FRIDA_COMPILE_VERSION}"
             JAVA_BRIDGE_ACTUAL=$(node -p "require('./node_modules/frida-java-bridge/package.json').version")
             COMPILE_ACTUAL=$(node -p "require('./node_modules/frida-compile/package.json').version")
