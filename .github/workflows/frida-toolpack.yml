@@ -153,7 +153,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch --orphan ci-frida-toolpack-build-metadata
-          git rm -rf .
+          git rm -rf . || true
           mkdir metadata
           cp "${META_DIR}"/* metadata/
           git add metadata
@@ -178,7 +178,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch --orphan ci-frida-toolpack-diagnostics
-          git rm -rf .
+          git rm -rf . || true
           mkdir diagnostics
           cp "${DIAG_DIR}"/* diagnostics/
           git add diagnostics
