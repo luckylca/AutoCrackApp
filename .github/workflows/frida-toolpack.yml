@@ -95,8 +95,10 @@ jobs:
             npm --version
             npm install --save-exact --ignore-scripts --no-audit --no-fund \
               "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" "frida-compile@${FRIDA_COMPILE_VERSION}"
-            test "$(node -p \"require('./node_modules/frida-java-bridge/package.json').version\")" = "${FRIDA_JAVA_BRIDGE_VERSION}"
-            test "$(node -p \"require('./node_modules/frida-compile/package.json').version\")" = "${FRIDA_COMPILE_VERSION}"
+            JAVA_BRIDGE_ACTUAL=$(node -p "require('./node_modules/frida-java-bridge/package.json').version")
+            COMPILE_ACTUAL=$(node -p "require('./node_modules/frida-compile/package.json').version")
+            test "${JAVA_BRIDGE_ACTUAL}" = "${FRIDA_JAVA_BRIDGE_VERSION}"
+            test "${COMPILE_ACTUAL}" = "${FRIDA_COMPILE_VERSION}"
             cp package-lock.json ../../dist/source/frida-agent.package-lock.json
             mkdir -p dist
             npx --no-install frida-compile agent.ts -o dist/autocrack-frida-agent.js -c
