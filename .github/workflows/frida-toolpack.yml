@@ -137,6 +137,8 @@ jobs:
             jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
             jq -e '.version == "frida-17.17.0-autocrack-1.0.0"' dist/manifest.json >/dev/null
             jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida-server-android")) != null' dist/manifest.json >/dev/null
+            jq -e '.commands | length == 2' dist/manifest.json >/dev/null
           } 2>&1 | tee /tmp/frida-package.log
 
       - name: Upload Frida provenance metadata

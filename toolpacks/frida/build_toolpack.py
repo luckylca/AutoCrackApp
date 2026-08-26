@@ -60,6 +60,7 @@ def main() -> None:
             "libexec/frida_autocrack_client.py",
         ],
         "commands": [
+            {"name": "frida-server-android", "relativePath": "bin/frida-server-android"},
             {"name": "frida-autocrack-client", "relativePath": "bin/frida-autocrack-client"},
         ],
         "selfTests": [
