@@ -143,6 +143,23 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Publish temporary success metadata branch
+        if: success()
+        run: |
+          set -euxo pipefail
+          META_DIR="$(mktemp -d)"
+          cp dist/manifest.json dist/payload.sha256 dist/payload.size dist/build-summary.txt \
+            dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip.sha256 "${META_DIR}/"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --orphan ci-frida-toolpack-build-metadata
+          git rm -rf .
+          mkdir metadata
+          cp "${META_DIR}"/* metadata/
+          git add metadata
+          git commit -m "Frida toolpack build metadata ${GITHUB_SHA}"
+          git push --force origin HEAD:refs/heads/ci/frida-toolpack-build-metadata
+
       - name: Publish temporary failure diagnostics branch
         if: failure()
         run: |
