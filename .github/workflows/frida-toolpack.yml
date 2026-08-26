@@ -10,7 +10,7 @@ on:
       - toolpacks/frida/**
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: frida-toolpack-${{ github.workflow }}-${{ github.ref }}
@@ -32,6 +32,11 @@ jobs:
     steps:
       - name: Check out AutoCrackApp
         uses: actions/checkout@v4
+
+      - name: Set up Node.js for deterministic agent bootstrap
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Prepare directories and packages
         id: prepare
@@ -88,8 +93,11 @@ jobs:
             set -euxo pipefail
             node --version
             npm --version
-            npm install --no-audit --no-fund \
+            npm install --save-exact --ignore-scripts --no-audit --no-fund \
               "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" "frida-compile@${FRIDA_COMPILE_VERSION}"
+            test "$(node -p \"require('./node_modules/frida-java-bridge/package.json').version\")" = "${FRIDA_JAVA_BRIDGE_VERSION}"
+            test "$(node -p \"require('./node_modules/frida-compile/package.json').version\")" = "${FRIDA_COMPILE_VERSION}"
+            cp package-lock.json ../../dist/source/frida-agent.package-lock.json
             mkdir -p dist
             npx --no-install frida-compile agent.ts -o dist/autocrack-frida-agent.js -c
             test -s dist/autocrack-frida-agent.js
@@ -142,45 +150,3 @@ jobs:
             dist/source/
           if-no-files-found: error
           retention-days: 14
-
-      - name: Publish temporary success metadata branch
-        if: success()
-        run: |
-          set -euxo pipefail
-          META_DIR="$(mktemp -d)"
-          cp dist/manifest.json dist/payload.sha256 dist/payload.size dist/build-summary.txt \
-            dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip.sha256 "${META_DIR}/"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch --orphan ci-frida-toolpack-build-metadata
-          git rm -rf . || true
-          mkdir metadata
-          cp "${META_DIR}"/* metadata/
-          git add metadata
-          git commit -m "Frida toolpack build metadata ${GITHUB_SHA}"
-          git push --force origin HEAD:refs/heads/ci/frida-toolpack-build-metadata
-
-      - name: Publish temporary failure diagnostics branch
-        if: failure()
-        run: |
-          set -euxo pipefail
-          DIAG_DIR="$(mktemp -d)"
-          cp /tmp/frida-*.log "${DIAG_DIR}/" 2>/dev/null || true
-          printf 'commit=%s\nprepare=%s\nserver=%s\npython=%s\nagent=%s\nassemble=%s\npackage=%s\n' \
-            "${GITHUB_SHA}" \
-            '${{ steps.prepare.outcome }}' \
-            '${{ steps.server.outcome }}' \
-            '${{ steps.python.outcome }}' \
-            '${{ steps.agent.outcome }}' \
-            '${{ steps.assemble.outcome }}' \
-            '${{ steps.package.outcome }}' \
-            > "${DIAG_DIR}/outcomes.txt"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch --orphan ci-frida-toolpack-diagnostics
-          git rm -rf . || true
-          mkdir diagnostics
-          cp "${DIAG_DIR}"/* diagnostics/
-          git add diagnostics
-          git commit -m "Frida toolpack failure diagnostics ${GITHUB_SHA}"
-          git push --force origin HEAD:refs/heads/ci/frida-toolpack-diagnostics

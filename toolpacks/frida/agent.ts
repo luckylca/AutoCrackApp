@@ -53,7 +53,6 @@ rpc.exports = {
       base: module.base.toString(),
       size: module.size,
       path: module.path,
-      version: module.version ?? null,
     }));
   },
 
@@ -103,19 +102,24 @@ rpc.exports = {
     const limit = clampInt(maxCount, 1, 512);
     return new Promise((resolve, reject) => {
       Java.perform(() => {
-        let wrapper: any = null;
         try {
-          wrapper = Java.use(requested);
-          const declared = wrapper.class.getDeclaredMethods();
           const methods: string[] = [];
-          for (let index = 0; index < declared.length && methods.length < limit; index++) {
-            methods.push(String(declared[index].toString()).slice(0, 2048));
+          const groups = Java.enumerateMethods(`${requested}!*/s`);
+          for (const group of groups) {
+            for (const klass of group.classes) {
+              if (klass.name !== requested) continue;
+              for (const method of klass.methods) {
+                methods.push(String(method).slice(0, 2048));
+                if (methods.length >= limit) {
+                  resolve({ available: true, className: requested, methods });
+                  return;
+                }
+              }
+            }
           }
           resolve({ available: true, className: requested, methods });
         } catch (error) {
           reject(error);
-        } finally {
-          if (wrapper !== null && typeof wrapper.$dispose === 'function') wrapper.$dispose();
         }
       });
     });
@@ -136,9 +140,14 @@ rpc.exports = {
     traceListener = Interceptor.attach(target, {
       onEnter() {
         if (traceEvents.length >= traceLimit) return;
-        const frames = Thread.backtrace(this.context, Backtracer.ACCURATE)
-          .slice(0, 12)
-          .map((address) => DebugSymbol.fromAddress(address).toString().slice(0, 512));
+        let frames: string[] = [];
+        try {
+          frames = Thread.backtrace(this.context, Backtracer.ACCURATE)
+            .slice(0, 12)
+            .map((address) => DebugSymbol.fromAddress(address).toString().slice(0, 512));
+        } catch (_) {
+          frames = [];
+        }
         traceEvents.push({
           sequence: ++traceSequence,
           timestampMs: Date.now(),
