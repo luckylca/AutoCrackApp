@@ -27,7 +27,7 @@ jobs:
       FRIDA_PYTHON_WHEEL_SHA256: "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8"
       FRIDA_JAVA_BRIDGE_VERSION: "7.0.13"
       FRIDA_COMPILE_VERSION: "19.0.5"
-      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.0.2
+      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.0.3
 
     steps:
       - name: Check out AutoCrackApp
@@ -137,7 +137,7 @@ jobs:
             python3 toolpacks/frida/build_toolpack.py | tee dist/build-summary.txt
             unzip -t dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
             jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
-            jq -e '.version == "frida-17.17.0-autocrack-1.0.2"' dist/manifest.json >/dev/null
+            jq -e '.version == "frida-17.17.0-autocrack-1.0.3"' dist/manifest.json >/dev/null
             jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
             jq -e '([.commands[].name] | index("frida-server-android")) != null' dist/manifest.json >/dev/null
             jq -e '.commands | length == 2' dist/manifest.json >/dev/null

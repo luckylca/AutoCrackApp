@@ -8,7 +8,7 @@ import time
 
 import frida
 
-ENDPOINT = "127.0.0.1:27042"
+DEFAULT_PORT = 27042
 MAX_TEXT = 512
 MODULE_RE = re.compile(r"^[A-Za-z0-9._+@-]{1,256}$")
 CLASS_RE = re.compile(r"^[A-Za-z0-9_.$\[\]/-]{1,512}$")
@@ -62,11 +62,13 @@ def agent_source():
     return path.read_text(encoding="utf-8")
 
 
-def connect(pid):
+def connect(pid, port):
     if pid <= 0:
         fail("pid must be positive")
+    port = bounded_int(port, 10240, 65535, "port")
+    endpoint = f"127.0.0.1:{port}"
     manager = frida.get_device_manager()
-    device = manager.add_remote_device(ENDPOINT)
+    device = manager.add_remote_device(endpoint)
     session = device.attach(pid)
     script = session.create_script(agent_source(), name="autocrack-bounded-agent")
     script.load()
@@ -77,7 +79,7 @@ def invoke(args):
     session = None
     script = None
     try:
-        session, script = connect(args.pid)
+        session, script = connect(args.pid, args.port)
         rpc = script.exports_sync
         if args.command == "ping":
             result = rpc.ping()
@@ -95,6 +97,8 @@ def invoke(args):
             start = rpc.tlstracestart(args.max_events, args.max_bytes_per_event)
             time.sleep(args.duration_ms / 1000.0)
             result = {"start": start, "trace": rpc.tlstracestop()}
+        elif args.command == "net-hints":
+            result = rpc.networkhints(args.max_count)
         elif args.command == "native-trace":
             rpc.tracestart(require_module(args.module), parse_offset(args.offset), args.max_events)
             time.sleep(args.duration_ms / 1000.0)
@@ -126,6 +130,7 @@ def invoke(args):
 def build_parser():
     parser = argparse.ArgumentParser(prog="frida-autocrack-client")
     parser.add_argument("--pid", required=True, type=int)
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("ping")
@@ -153,6 +158,9 @@ def build_parser():
     tls_trace.add_argument("--duration-ms", type=lambda v: bounded_int(v, 50, 5000, "duration-ms"), default=1000)
     tls_trace.add_argument("--max-events", type=lambda v: bounded_int(v, 1, 128, "max-events"), default=64)
     tls_trace.add_argument("--max-bytes-per-event", type=lambda v: bounded_int(v, 16, 1024, "max-bytes-per-event"), default=256)
+
+    net_hints = sub.add_parser("net-hints")
+    net_hints.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 128, "max-count"), default=64)
 
     trace = sub.add_parser("native-trace")
     trace.add_argument("--module", required=True)

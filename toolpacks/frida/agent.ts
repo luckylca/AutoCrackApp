@@ -278,6 +278,43 @@ rpc.exports = {
     });
   },
 
+  networkhints(maxCount: number) {
+    if (!Java.available) return Promise.resolve({ available: false, hints: [] as any[] });
+    const limit = clampInt(maxCount, 1, 128);
+    const rules = [
+      { id: 'okhttp', needles: ['okhttp3.'], meaning: 'OkHttp stack loaded' },
+      { id: 'okhttp_pinner', needles: ['okhttp3.CertificatePinner'], meaning: 'OkHttp certificate pinning class loaded' },
+      { id: 'urlconnection', needles: ['java.net.HttpURLConnection', 'javax.net.ssl.HttpsURLConnection'], meaning: 'JDK URLConnection stack loaded' },
+      { id: 'conscrypt', needles: ['com.android.org.conscrypt.', 'org.conscrypt.'], meaning: 'Conscrypt TLS stack loaded' },
+      { id: 'cronet', needles: ['org.chromium.net.', 'cronet'], meaning: 'Cronet / Chromium network stack loaded' },
+      { id: 'trust_manager', needles: ['X509TrustManager', 'TrustManager'], meaning: 'Trust manager related class loaded' },
+    ];
+    return new Promise((resolve, reject) => {
+      Java.perform(() => {
+        try {
+          const classNames: string[] = [];
+          Java.enumerateLoadedClasses({
+            onMatch(name) {
+              if (classNames.length >= 4096) return;
+              classNames.push(name);
+            },
+            onComplete() {
+              const hints: any[] = [];
+              for (const rule of rules) {
+                const evidence = classNames.filter((name) => rule.needles.some((needle) => name.includes(needle))).slice(0, 12);
+                if (evidence.length > 0) hints.push({ id: rule.id, meaning: rule.meaning, evidence });
+                if (hints.length >= limit) break;
+              }
+              resolve({ available: true, hintCount: hints.length, hints });
+            },
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
   tlstracestart(maxEvents: number, maxBytesPerEvent: number) {
     clearTlsTrace();
     tlsTraceLimit = clampInt(maxEvents, 1, 128);
