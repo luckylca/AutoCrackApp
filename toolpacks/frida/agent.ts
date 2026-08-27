@@ -9,11 +9,30 @@ type TraceEvent = {
   backtrace: string[];
 };
 
+type TlsTraceEvent = {
+  sequence: number;
+  timestampMs: number;
+  threadId: number;
+  direction: 'read' | 'write';
+  className: string;
+  method: string;
+  byteCount: number;
+  capturedBytes: number;
+  previewHex: string;
+  previewText: string;
+};
+
 let traceListener: InvocationListener | null = null;
 let traceEvents: TraceEvent[] = [];
 let traceLimit = 64;
 let traceTarget: NativePointer | null = null;
 let traceSequence = 0;
+
+let tlsTraceListeners: Array<{ overload: any; original: any }> = [];
+let tlsTraceEvents: TlsTraceEvent[] = [];
+let tlsTraceLimit = 64;
+let tlsPreviewLimit = 256;
+let tlsTraceSequence = 0;
 
 function clampInt(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
@@ -34,10 +53,113 @@ function clearTrace(): void {
   traceSequence = 0;
 }
 
+function clearTlsTrace(): void {
+  for (const entry of tlsTraceListeners) {
+    try {
+      entry.overload.implementation = entry.original;
+    } catch (_) {
+      // Best-effort cleanup only; the script unload still removes all hooks.
+    }
+  }
+  tlsTraceListeners = [];
+  tlsTraceEvents = [];
+  tlsTraceSequence = 0;
+}
+
+function bytePreview(bytes: any, offset: number, count: number): { hex: string; text: string; captured: number } {
+  const start = Math.max(0, Math.trunc(offset));
+  const requested = Math.max(0, Math.trunc(count));
+  const available = Math.max(0, Number(bytes?.length ?? 0) - start);
+  const captured = Math.min(requested, available, tlsPreviewLimit);
+  const hex: string[] = [];
+  const text: string[] = [];
+  for (let index = 0; index < captured; index += 1) {
+    const value = Number(bytes[start + index]) & 0xff;
+    hex.push(value.toString(16).padStart(2, '0'));
+    text.push(value >= 0x20 && value <= 0x7e ? String.fromCharCode(value) : '.');
+  }
+  return { hex: hex.join(''), text: text.join(''), captured };
+}
+
+function appendTlsEvent(
+  direction: 'read' | 'write',
+  className: string,
+  method: string,
+  bytes: any,
+  offset: number,
+  count: number,
+): void {
+  if (tlsTraceEvents.length >= tlsTraceLimit || count <= 0) return;
+  const preview = bytePreview(bytes, offset, count);
+  tlsTraceEvents.push({
+    sequence: ++tlsTraceSequence,
+    timestampMs: Date.now(),
+    threadId: Process.getCurrentThreadId(),
+    direction,
+    className,
+    method,
+    byteCount: Math.max(0, Math.trunc(count)),
+    capturedBytes: preview.captured,
+    previewHex: preview.hex,
+    previewText: preview.text,
+  });
+}
+
+function installConscryptTlsHooks(): Promise<{ available: boolean; hookCount: number; classes: string[] }> {
+  if (!Java.available) return Promise.resolve({ available: false, hookCount: 0, classes: [] });
+  return new Promise((resolve, reject) => {
+    Java.perform(() => {
+      try {
+        const hookedClasses: string[] = [];
+        const candidates = ['com.android.org.conscrypt.NativeCrypto', 'org.conscrypt.NativeCrypto'];
+        for (const className of candidates) {
+          let klass: any;
+          try {
+            klass = Java.use(className);
+          } catch (_) {
+            continue;
+          }
+          let classHooked = false;
+          for (const methodName of ['SSL_write', 'SSL_read']) {
+            const method = klass[methodName];
+            if (method === undefined) continue;
+            for (const overload of method.overloads as any[]) {
+              const argumentTypes = (overload.argumentTypes as any[]).map((type) => String(type.className ?? type.name ?? type));
+              const byteIndex = argumentTypes.findIndex((type) => type === '[B');
+              if (byteIndex < 0 || byteIndex + 2 >= argumentTypes.length) continue;
+              if (argumentTypes[byteIndex + 1] !== 'int' || argumentTypes[byteIndex + 2] !== 'int') continue;
+              const original = overload.implementation;
+              const direction: 'read' | 'write' = methodName === 'SSL_read' ? 'read' : 'write';
+              overload.implementation = function (...args: any[]) {
+                const offset = Number(args[byteIndex + 1]);
+                const requested = Number(args[byteIndex + 2]);
+                if (direction === 'write') {
+                  appendTlsEvent(direction, className, methodName, args[byteIndex], offset, requested);
+                }
+                const result = overload.call(this, ...args);
+                if (direction === 'read') {
+                  appendTlsEvent(direction, className, methodName, args[byteIndex], offset, Number(result));
+                }
+                return result;
+              };
+              tlsTraceListeners.push({ overload, original });
+              classHooked = true;
+            }
+          }
+          if (classHooked) hookedClasses.push(className);
+        }
+        resolve({ available: true, hookCount: tlsTraceListeners.length, classes: hookedClasses });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
 rpc.exports = {
   ping() {
     return {
-      agentVersion: '1.0.0',
+      agentVersion: '1.1.0',
       fridaVersion: Frida.version,
       pid: Process.id,
       arch: Process.arch,
@@ -123,6 +245,64 @@ rpc.exports = {
         }
       });
     });
+  },
+
+  netstack(maxCount: number) {
+    if (!Java.available) return Promise.resolve({ available: false, classes: [] as string[] });
+    const limit = clampInt(maxCount, 1, 128);
+    const needles = [
+      'okhttp3.',
+      'java.net.HttpURLConnection',
+      'javax.net.ssl.',
+      'com.android.org.conscrypt.',
+      'org.conscrypt.',
+      'org.chromium.net.',
+    ];
+    return new Promise((resolve, reject) => {
+      Java.perform(() => {
+        try {
+          const matches: string[] = [];
+          Java.enumerateLoadedClasses({
+            onMatch(name) {
+              if (matches.length >= limit) return;
+              if (needles.some((needle) => name.startsWith(needle) || name === needle)) matches.push(name);
+            },
+            onComplete() {
+              resolve({ available: true, classes: matches });
+            },
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
+  tlstracestart(maxEvents: number, maxBytesPerEvent: number) {
+    clearTlsTrace();
+    tlsTraceLimit = clampInt(maxEvents, 1, 128);
+    tlsPreviewLimit = clampInt(maxBytesPerEvent, 16, 1024);
+    return installConscryptTlsHooks();
+  },
+
+  tlstracestop() {
+    for (const entry of tlsTraceListeners) {
+      try {
+        entry.overload.implementation = entry.original;
+      } catch (_) {
+        // Script unload remains the final cleanup boundary.
+      }
+    }
+    const result = {
+      eventCount: tlsTraceEvents.length,
+      maxEvents: tlsTraceLimit,
+      maxBytesPerEvent: tlsPreviewLimit,
+      events: tlsTraceEvents.slice(0, tlsTraceLimit),
+    };
+    tlsTraceListeners = [];
+    tlsTraceEvents = [];
+    tlsTraceSequence = 0;
+    return result;
   },
 
   tracestart(moduleName: string, offsetText: string, maxEvents: number) {

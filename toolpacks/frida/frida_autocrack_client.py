@@ -89,6 +89,12 @@ def invoke(args):
             result = rpc.javaclasses(args.query[:MAX_TEXT], args.max_count)
         elif args.command == "java-methods":
             result = rpc.javamethods(require_class(args.class_name), args.max_count)
+        elif args.command == "net-stack":
+            result = rpc.netstack(args.max_count)
+        elif args.command == "tls-trace":
+            start = rpc.tlstracestart(args.max_events, args.max_bytes_per_event)
+            time.sleep(args.duration_ms / 1000.0)
+            result = {"start": start, "trace": rpc.tlstracestop()}
         elif args.command == "native-trace":
             rpc.tracestart(require_module(args.module), parse_offset(args.offset), args.max_events)
             time.sleep(args.duration_ms / 1000.0)
@@ -139,6 +145,14 @@ def build_parser():
     methods = sub.add_parser("java-methods")
     methods.add_argument("--class-name", required=True)
     methods.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 512, "max-count"), default=128)
+
+    net_stack = sub.add_parser("net-stack")
+    net_stack.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 128, "max-count"), default=64)
+
+    tls_trace = sub.add_parser("tls-trace")
+    tls_trace.add_argument("--duration-ms", type=lambda v: bounded_int(v, 50, 5000, "duration-ms"), default=1000)
+    tls_trace.add_argument("--max-events", type=lambda v: bounded_int(v, 1, 128, "max-events"), default=64)
+    tls_trace.add_argument("--max-bytes-per-event", type=lambda v: bounded_int(v, 16, 1024, "max-bytes-per-event"), default=256)
 
     trace = sub.add_parser("native-trace")
     trace.add_argument("--module", required=True)
