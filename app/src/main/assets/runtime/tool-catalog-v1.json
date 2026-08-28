@@ -1,13 +1,24 @@
 {
   "schemaVersion": 1,
   "catalogVersion": "0.5.10-hotfix1",
-  "priorityModes": ["FULL_ROOT", "SHIZUKU"],
+  "runtimeTarget": "android_rootfs_only",
+  "runtimeTargetNotes": [
+    "Agent-callable production tools run only in the Android app, Android root shell, Android loopback, or Debian ARM64 rootfs.",
+    "GitHub Actions may build toolpack artifacts, but final Agent runtime must not depend on desktop-side services or developer machine paths.",
+    "Legacy runtime names containing host mean Android host OS, not a desktop host. New tools should prefer android/device/rootfs names."
+  ],
+  "priorityModes": [
+    "FULL_ROOT",
+    "SHIZUKU"
+  ],
   "tools": [
     {
       "id": "runtime.health",
       "title": "Inspect Root runtime health",
       "runtime": "host_bridge",
-      "requiresCapabilities": ["ROOT_IDENTITY"],
+      "requiresCapabilities": [
+        "ROOT_IDENTITY"
+      ],
       "changesState": false,
       "confirmation": "none",
       "output": "RuntimeHealthReport"
@@ -16,7 +27,10 @@
       "id": "shell.exec",
       "title": "Execute a one-shot shell command",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["ROOT_SHELL", "CHROOT"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "CHROOT"
+      ],
       "changesState": "depends_on_command",
       "confirmation": "manual_now_agent_policy_later",
       "inputs": {
@@ -33,7 +47,9 @@
       "id": "shell.cancel_all",
       "title": "Cancel all active one-shot shell commands",
       "runtime": "root_host_foundation",
-      "requiresCapabilities": ["ROOT_SHELL"],
+      "requiresCapabilities": [
+        "ROOT_SHELL"
+      ],
       "changesState": true,
       "confirmation": "none",
       "output": "cancelled_process_count"
@@ -42,7 +58,11 @@
       "id": "pty.open",
       "title": "Open a persistent Debian PTY session",
       "runtime": "native_pty",
-      "requiresCapabilities": ["ROOT_SHELL", "CHROOT", "PTY"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "CHROOT",
+        "PTY"
+      ],
       "changesState": true,
       "confirmation": "none",
       "audit": "runtime/audit/pty-sessions.jsonl"
@@ -51,7 +71,10 @@
       "id": "pty.process_tree",
       "title": "Inspect the active PTY process subtree",
       "runtime": "host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none"
     },
@@ -59,7 +82,10 @@
       "id": "pty.terminate",
       "title": "Send SIGTERM to every process group in the active PTY subtree",
       "runtime": "host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_SIGNAL"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_SIGNAL"
+      ],
       "changesState": true,
       "confirmation": "required"
     },
@@ -67,7 +93,10 @@
       "id": "pty.kill",
       "title": "Send SIGKILL to every process group in the active PTY subtree",
       "runtime": "host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_SIGNAL"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_SIGNAL"
+      ],
       "changesState": true,
       "confirmation": "two_step_required"
     },
@@ -75,7 +104,9 @@
       "id": "fs.list",
       "title": "List workspace files",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none"
     },
@@ -83,7 +114,9 @@
       "id": "fs.read_text",
       "title": "Read bounded UTF-8 text from the workspace",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none"
     },
@@ -91,7 +124,9 @@
       "id": "fs.write_text",
       "title": "Write UTF-8 text inside the workspace",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "agent_policy"
     },
@@ -99,7 +134,10 @@
       "id": "fs.copy",
       "title": "Copy a workspace file or directory",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_READ", "WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "WORKSPACE_READ",
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "agent_policy"
     },
@@ -107,7 +145,9 @@
       "id": "fs.move",
       "title": "Move a workspace file or directory",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "agent_policy"
     },
@@ -115,7 +155,9 @@
       "id": "fs.delete",
       "title": "Delete a workspace file or directory",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "required"
     },
@@ -123,7 +165,9 @@
       "id": "fs.sha256",
       "title": "Calculate SHA-256 for a workspace file",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none"
     },
@@ -131,7 +175,11 @@
       "id": "runtime.rootfs.install",
       "title": "Install or update the pinned Debian arm64 rootfs",
       "runtime": "host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "MOUNT", "CHROOT"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "MOUNT",
+        "CHROOT"
+      ],
       "changesState": true,
       "confirmation": "required",
       "status": "available"
@@ -140,7 +188,10 @@
       "id": "toolpack.install",
       "title": "Verify and install a versioned reverse-analysis toolpack",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["CHROOT", "WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "required",
       "inputs": {
@@ -153,7 +204,9 @@
       "id": "toolpack.self_test",
       "title": "Run manifest-defined read-only tool self-tests",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT"],
+      "requiresCapabilities": [
+        "CHROOT"
+      ],
       "changesState": false,
       "confirmation": "none",
       "output": "ToolpackSelfTestReport"
@@ -162,7 +215,10 @@
       "id": "toolpack.uninstall",
       "title": "Remove an installed reverse-analysis toolpack and its command shims",
       "runtime": "app_workspace",
-      "requiresCapabilities": ["CHROOT", "WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "required",
       "audit": "runtime/toolpacks/toolpack-audit.jsonl"
@@ -171,27 +227,41 @@
       "id": "apk.jadx",
       "title": "Decompile APK or DEX input with JADX CLI",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_APK_DEX_STATIC"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_APK_DEX_STATIC"
+      ],
       "changesState": true,
       "confirmation": "workspace_write",
       "commandTemplate": "jadx --output-dir <artifact-dir> <input-apk-or-dex>",
-      "expectedArtifacts": ["workspace-relative output directory"]
+      "expectedArtifacts": [
+        "workspace-relative output directory"
+      ]
     },
     {
       "id": "apk.apktool",
       "title": "Decode Android resources and smali with Apktool",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_APK_DEX_STATIC"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_APK_DEX_STATIC"
+      ],
       "changesState": true,
       "confirmation": "workspace_write",
       "commandTemplate": "apktool decode --force --output <artifact-dir> <input-apk>",
-      "expectedArtifacts": ["workspace-relative decoded project"]
+      "expectedArtifacts": [
+        "workspace-relative decoded project"
+      ]
     },
     {
       "id": "native.checksec",
       "title": "Inspect ELF and Android SO hardening properties",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_ELF_NATIVE_STATIC", "WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ELF_NATIVE_STATIC",
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "checksec file <workspace-elf-or-so> --output json",
@@ -201,7 +271,11 @@
       "id": "native.elf_deps",
       "title": "Inspect ELF SONAME, dependencies, RPATH, RUNPATH and flags",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_ELF_NATIVE_STATIC", "WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ELF_NATIVE_STATIC",
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "elf-deps <workspace-elf-or-so>",
@@ -211,7 +285,12 @@
       "id": "native.elf_report",
       "title": "Generate a complete workspace-scoped ELF or SO static report",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_ELF_NATIVE_STATIC", "WORKSPACE_READ", "WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ELF_NATIVE_STATIC",
+        "WORKSPACE_READ",
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "workspace_write",
       "commandTemplate": "elf-report <workspace-elf-or-so> </workspace/report-directory>",
@@ -234,7 +313,11 @@
       "id": "native.rizin",
       "title": "Open the pinned Rizin CLI in read-oriented mode",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_RIZIN_DEEP_STATIC",
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "rizin <workspace-elf-or-so>",
@@ -244,7 +327,11 @@
       "id": "native.rz_functions",
       "title": "Analyze and export the Rizin function inventory",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_RIZIN_DEEP_STATIC",
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "rz-functions <workspace-elf-or-so>",
@@ -254,7 +341,11 @@
       "id": "native.rz_disasm",
       "title": "Generate bounded Rizin disassembly JSON",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_RIZIN_DEEP_STATIC",
+        "WORKSPACE_READ"
+      ],
       "changesState": false,
       "confirmation": "none",
       "commandTemplate": "rz-disasm <workspace-elf-or-so> <address-or-symbol> [1..4096]",
@@ -264,7 +355,12 @@
       "id": "native.rz_deep_report",
       "title": "Generate a complete workspace-scoped Rizin static report",
       "runtime": "debian_chroot",
-      "requiresCapabilities": ["CHROOT", "TOOLPACK_RIZIN_DEEP_STATIC", "WORKSPACE_READ", "WORKSPACE_WRITE"],
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_RIZIN_DEEP_STATIC",
+        "WORKSPACE_READ",
+        "WORKSPACE_WRITE"
+      ],
       "changesState": true,
       "confirmation": "workspace_write",
       "commandTemplate": "rz-deep-report <workspace-elf-or-so> </workspace/report-directory>",
@@ -285,10 +381,302 @@
       ]
     },
     {
+      "id": "android_surfing_status",
+      "title": "Read-only Surfing / box proxy environment detection",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "output": "Bounded Surfing / box module, config fingerprint and process status report"
+    },
+    {
+      "id": "android_net_environment",
+      "title": "Read Android network interfaces, routes and proxy settings",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "NETWORK_INSPECTION"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "output": "Bounded Android network environment report"
+    },
+    {
+      "id": "android_net_target_connections",
+      "title": "Correlate selected package UID with /proc/net socket rows",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION",
+        "NETWORK_INSPECTION"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "output": "Bounded UID-scoped TCP/UDP socket snapshot"
+    },
+    {
+      "id": "android_pcap_start",
+      "title": "Start bounded root tcpdump capture into the selected package workspace",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "NETWORK_INSPECTION",
+        "WORKSPACE_WRITE"
+      ],
+      "changesState": true,
+      "confirmation": "dynamic_tool_authorization",
+      "inputs": {
+        "duration_seconds": "1..300",
+        "snaplen": "96..2048",
+        "max_bytes": "1MiB..64MiB"
+      },
+      "disallowedInputs": [
+        "interface",
+        "iptables_rule",
+        "nft_rule",
+        "proxy_config_path",
+        "surfing_config_patch",
+        "install_ca_certificate",
+        "vpn_mode",
+        "mitm_enabled",
+        "raw_filter"
+      ],
+      "output": "Bounded pcap capture session metadata; no VPN, no CA install, no Surfing config edit"
+    },
+    {
+      "id": "android_pcap_status",
+      "title": "Inspect AutoCrack tcpdump capture state and pcap size",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "NETWORK_INSPECTION",
+        "WORKSPACE_READ"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "output": "Current or last pcap capture state for this selected package workspace"
+    },
+    {
+      "id": "android_pcap_stop",
+      "title": "Stop only the verified AutoCrack tcpdump helper",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "NETWORK_INSPECTION",
+        "PROCESS_SIGNAL"
+      ],
+      "changesState": true,
+      "confirmation": "dynamic_tool_authorization",
+      "output": "Stop result for AutoCrack-owned pcap helper; Surfing processes are not signalled"
+    },
+    {
+      "id": "rootfs_pcap_info",
+      "title": "Read global info from the latest AutoCrack workspace pcap",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ROOTFS_PCAP_ANALYSIS",
+        "WORKSPACE_READ"
+      ],
+      "requiresToolpack": {
+        "id": "rootfs-pcap-analysis",
+        "version": "pcap-summary-1.0.0"
+      },
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {},
+      "pathPolicy": "latest AutoCrack pcap metadata only; no model-supplied path",
+      "output": "Bounded pcap global metadata JSON"
+    },
+    {
+      "id": "rootfs_pcap_protocol_summary",
+      "title": "Summarize protocol counts from the latest AutoCrack workspace pcap",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ROOTFS_PCAP_ANALYSIS",
+        "WORKSPACE_READ"
+      ],
+      "requiresToolpack": {
+        "id": "rootfs-pcap-analysis",
+        "version": "pcap-summary-1.0.0"
+      },
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "max_records": "1..128"
+      },
+      "pathPolicy": "latest AutoCrack pcap metadata only; no model-supplied path or BPF filter",
+      "output": "Bounded protocol-count JSON"
+    },
+    {
+      "id": "rootfs_pcap_dns_summary",
+      "title": "Summarize DNS query names from the latest AutoCrack workspace pcap",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ROOTFS_PCAP_ANALYSIS",
+        "WORKSPACE_READ"
+      ],
+      "requiresToolpack": {
+        "id": "rootfs-pcap-analysis",
+        "version": "pcap-summary-1.0.0"
+      },
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "max_records": "1..128"
+      },
+      "pathPolicy": "latest AutoCrack pcap metadata only; no model-supplied path or BPF filter",
+      "output": "Bounded DNS query JSON"
+    },
+    {
+      "id": "rootfs_pcap_tls_summary",
+      "title": "Summarize visible TLS ClientHello SNI and ALPN from the latest AutoCrack workspace pcap",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ROOTFS_PCAP_ANALYSIS",
+        "WORKSPACE_READ"
+      ],
+      "requiresToolpack": {
+        "id": "rootfs-pcap-analysis",
+        "version": "pcap-summary-1.0.0"
+      },
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "max_records": "1..128"
+      },
+      "pathPolicy": "metadata only; does not decrypt HTTPS, install CA, bypass pinning, or perform MITM",
+      "output": "Bounded TLS metadata JSON"
+    },
+    {
+      "id": "rootfs_pcap_top_connections",
+      "title": "Rank TCP/UDP endpoint pairs from the latest AutoCrack workspace pcap",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_ROOTFS_PCAP_ANALYSIS",
+        "WORKSPACE_READ"
+      ],
+      "requiresToolpack": {
+        "id": "rootfs-pcap-analysis",
+        "version": "pcap-summary-1.0.0"
+      },
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "max_records": "1..128"
+      },
+      "pathPolicy": "latest AutoCrack pcap metadata only; no model-supplied path or BPF filter",
+      "output": "Bounded top-connection JSON"
+    },
+    {
+      "id": "android_device_diagnostics",
+      "title": "Read Android/rootfs device readiness diagnostics",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {},
+      "output": "Read-only root provider, SELinux, rootfs, managed tcpdump and loopback helper diagnostics"
+    },
+    {
+      "id": "android_tooling_status",
+      "title": "Read Android command and managed helper availability",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {},
+      "output": "Read-only availability report for su, toybox, ip, ss, tcpdump, perfetto, logcat, settings, cmd, dumpsys and managed tcpdump"
+    },
+    {
+      "id": "perfetto_capture",
+      "title": "Capture a short fixed-category Android Perfetto trace",
+      "runtime": "typed_android_root_bridge",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "WORKSPACE_WRITE"
+      ],
+      "requiresToolpack": {
+        "id": "perfetto-analysis",
+        "version": "perfetto-58.2-autocrack-1.0.0"
+      },
+      "changesState": true,
+      "confirmation": "dynamic_tool_authorization",
+      "inputs": {
+        "duration_seconds": "1..5",
+        "launch_target": "boolean"
+      },
+      "output": "Managed workspace Perfetto trace metadata; no arbitrary trace config or output path"
+    },
+    {
+      "id": "perfetto_target_stats",
+      "title": "Run fixed read-only PerfettoSQL target statistics",
+      "runtime": "debian_chroot",
+      "requiresCapabilities": [
+        "CHROOT",
+        "TOOLPACK_PERFETTO_ANALYSIS",
+        "WORKSPACE_READ"
+      ],
+      "requiresToolpack": {
+        "id": "perfetto-analysis",
+        "version": "perfetto-58.2-autocrack-1.0.0"
+      },
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {},
+      "output": "Bounded scheduler/thread statistics for the selected package; arbitrary SQL unavailable"
+    },
+    {
+      "id": "native_import_risk_summary",
+      "title": "Summarize native import and string risk hints",
+      "runtime": "app_process",
+      "requiresCapabilities": [
+        "WORKSPACE_READ"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "library": "selected APK native library"
+      },
+      "pathPolicy": "selected APK extraction libraries only; no model-supplied file path",
+      "output": "Bounded heuristic JSON for dynamic loading, network, crypto, anti-debug and JNI registration hints"
+    },
+    {
+      "id": "native_strings_cluster",
+      "title": "Cluster selected native library strings into behavior hints",
+      "runtime": "app_process",
+      "requiresCapabilities": [
+        "WORKSPACE_READ"
+      ],
+      "changesState": false,
+      "confirmation": "none",
+      "inputs": {
+        "library": "selected APK native library",
+        "max_count": "1..64"
+      },
+      "pathPolicy": "selected APK extraction libraries only; no model-supplied file path",
+      "output": "Bounded string clusters for network, crypto, JNI, debug/root and dynamic-loading hints"
+    },
+    {
       "id": "shizuku.user_service",
       "title": "Connect to the Shizuku UserService host bridge",
       "runtime": "host_bridge",
-      "requiresCapabilities": ["SHIZUKU_BINDER"],
+      "requiresCapabilities": [
+        "SHIZUKU_BINDER"
+      ],
       "changesState": false,
       "confirmation": "android_permission",
       "status": "planned_after_full_root"

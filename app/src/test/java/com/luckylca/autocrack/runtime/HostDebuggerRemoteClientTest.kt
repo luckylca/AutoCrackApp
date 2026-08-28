@@ -56,6 +56,7 @@ class HostDebuggerRemoteClientTest {
     fun typedAttachAndInterruptRecoveryUseBoundedContinueClassWaits() {
         assertEquals(90_000, HostDebuggerRemoteClient.ATTACH_WAIT_TIMEOUT_MILLIS)
         assertEquals(5_000, HostDebuggerRemoteClient.RUN_REPLY_POLL_TIMEOUT_MILLIS)
+        assertEquals(2_000, HostDebuggerRemoteClient.STEP_WAIT_TIMEOUT_MILLIS)
         assertEquals(30_000, HostDebuggerRemoteClient.INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS)
     }
 
@@ -134,6 +135,69 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
+    fun typedThreadIdsAreValidatedBeforePacketConstruction() {
+        assertEquals("1b24", GdbRemoteThreadIdValidator.normalize("1B24"))
+        assertEquals("p123.456", GdbRemoteThreadIdValidator.normalize("p123.456"))
+        assertEquals("vCont;s:1b24", GdbRemoteExecutionPacketFactory.stepThread("1B24"))
+        assertTrue(GdbRemoteThreadIdValidator.matchesTid("1b24", 6948))
+        assertThrows(IllegalArgumentException::class.java) {
+            GdbRemoteExecutionPacketFactory.stepThread("1b24;vCont;c")
+        }
+    }
+
+    @Test
+    fun parsesBoundedThreadListAndNames() {
+        assertEquals(
+            listOf("1b24", "p123.456"),
+            GdbRemoteThreadInfoParser.parseThreadBatch("m1b24,p123.456"),
+        )
+        assertTrue(GdbRemoteThreadInfoParser.parseThreadBatch("l").isEmpty())
+        assertEquals(
+            "Signal Catcher",
+            GdbRemoteThreadInfoParser.parseExtraInfo("5369676e616c2043617463686572"),
+        )
+        assertNull(GdbRemoteThreadInfoParser.parseExtraInfo("E01"))
+    }
+
+    @Test
+    fun typedHardwareBreakpointPacketsAreFixedAndAddressValidated() {
+        assertEquals(
+            "Z1,7f12345000,4",
+            GdbRemoteBreakpointPacketFactory.insertHardwareExecution(0x7f12345000L),
+        )
+        assertEquals(
+            "z1,7f12345000,4",
+            GdbRemoteBreakpointPacketFactory.removeHardwareExecution(0x7f12345000L),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            GdbRemoteBreakpointPacketFactory.insertHardwareExecution(0L)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            GdbRemoteBreakpointPacketFactory.insertHardwareExecution(0x1002L)
+        }
+    }
+
+    @Test
+    fun hardwareBreakpointHitPolicyRequiresTrapPcMatchAndNonSignalReason() {
+        val address = 0x7f12345000L
+        assertTrue(GdbRemoteHardwareBreakpointHitPolicy.isTrustedHit("T05thread:393;reason:breakpoint;", address, address))
+        assertFalse(GdbRemoteHardwareBreakpointHitPolicy.isTrustedHit("T05thread:393;reason:trace;", address, address))
+        assertFalse(GdbRemoteHardwareBreakpointHitPolicy.isTrustedHit("T05thread:393;reason:signal;", address, address))
+        assertFalse(GdbRemoteHardwareBreakpointHitPolicy.isTrustedHit("T05thread:393;reason:breakpoint;", address + 4, address))
+    }
+
+    @Test
+    fun decodesAarch64LittleEndianProgramCounter() {
+        assertEquals(
+            0x0000007daa219a8cL,
+            GdbRemoteRegisterValueDecoder.unsignedLittleEndianLong("8c9a21aa7d000000"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            GdbRemoteRegisterValueDecoder.unsignedLittleEndianLong("0000000000000000")
+        }
+    }
+
+    @Test
     fun runReplyValidatorAcceptsOnlyStopOrExitPackets() {
         assertTrue(GdbRemoteRunReplyValidator.isStopOrExit("T05thread:393;reason:trace;"))
         assertTrue(GdbRemoteRunReplyValidator.isStopOrExit("S05"))
@@ -159,12 +223,14 @@ class HostDebuggerRemoteClientTest {
     }
 
     @Test
-    fun phase514ClientContainsNoWriteOrBreakpointAdapters() {
+    fun phase515ClientExposesOnlyTypedHardwareBreakpointAdapters() {
         val methodNames = HostDebuggerRemoteClient::class.java.methods.map { method -> method.name }.toSet()
         assertFalse("writeMemory" in methodNames)
         assertFalse("writeRegister" in methodNames)
         assertFalse("insertBreakpoint" in methodNames)
         assertFalse("removeBreakpoint" in methodNames)
         assertFalse("sendRawPacket" in methodNames)
+        assertTrue("setHardwareExecutionBreakpoint" in methodNames)
+        assertTrue("removeHardwareExecutionBreakpoint" in methodNames)
     }
 }

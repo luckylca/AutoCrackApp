@@ -24,106 +24,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Pin phase 5.14.13 seize-runtime-stop LLDB toolpack
+      - name: Verify phase 5.15.6 source markers
         run: |
           set -euxo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          OLD_VERSION = "ndk-r27d-clang-r522817d_autocrack-1.0.0"
-          NEW_VERSION = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
-          OLD_PAYLOAD_SHA = "2cc969ff785e8c0c3d4473649edaaf18f64faae4c7e016941dd0c0944944a14a"
-          NEW_PAYLOAD_SHA = "f2d3b3925ffc49419508dd97cd657d4a8a2e0b0b313f473105173b96ce31b899"
-          OLD_PAYLOAD_SIZE = "27_698_528L"
-          NEW_PAYLOAD_SIZE = "28_396_656L"
-          OLD_SOURCE_VERSION = "ndk-r27d-clang-r522817d"
-          NEW_SOURCE_VERSION = "android-llvm-r522817-autocrack-seize-runtime-stop"
-          OLD_SOURCE_URL = "https://github.com/android/ndk/releases/tag/r27d"
-          NEW_SOURCE_URL = "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262"
-          OLD_BINARY_SHA = "ff96d83baa872b2226bb1f4f38cd38aa2622416722fb76543cc536edfeea3018"
-          NEW_BINARY_SHA = "71d9ed6a90776d7dbdbcb315ea2171a763c071e5a370ec1b8b0c28157af41b20"
-          NEW_SELF_TEST_COMMAND = r'command = "test -x /opt/autocrack/toolpacks/packs/android-lldb-server/android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop/bin/lldb-server-android && printf \"AUTOCRACK_LLDB_ANDROID_BINARY_OK\\n\"",'
-
-          def replace_exact(path, old, new, expected):
-              p = Path(path)
-              text = p.read_text(encoding="utf-8")
-              actual = text.count(old)
-              if actual != expected:
-                  raise SystemExit(
-                      f"{path}: expected {expected} occurrence(s) of {old!r}, found {actual}"
-                  )
-              p.write_text(text.replace(old, new), encoding="utf-8")
-
-          trust = "app/src/main/java/com/luckylca/autocrack/runtime/BuiltInToolpackTrustPolicy.kt"
-          replace_exact(trust, OLD_VERSION, NEW_VERSION, 1)
-          replace_exact(trust, OLD_PAYLOAD_SHA, NEW_PAYLOAD_SHA, 1)
-          replace_exact(trust, OLD_PAYLOAD_SIZE, NEW_PAYLOAD_SIZE, 1)
-          replace_exact(trust, OLD_SOURCE_VERSION, NEW_SOURCE_VERSION, 1)
-          replace_exact(trust, OLD_SOURCE_URL, NEW_SOURCE_URL, 1)
-          replace_exact(trust, OLD_BINARY_SHA, NEW_BINARY_SHA, 1)
-          replace_exact(
-              trust,
-              '"lldb-server-version" to TrustedSelfTest(\n                    title = "Android LLDB server",',
-              '"lldb-server-android-binary" to TrustedSelfTest(\n                    title = "Android LLDB server payload",',
-              1,
-          )
-          replace_exact(trust, 'command = "lldb-server-android v",', NEW_SELF_TEST_COMMAND, 1)
-          replace_exact(
-              trust,
-              'outputContains = listOf("lldb"),',
-              'outputContains = listOf("AUTOCRACK_LLDB_ANDROID_BINARY_OK"),',
-              1,
-          )
-
-          test = "app/src/test/java/com/luckylca/autocrack/runtime/AndroidLldbToolpackTrustPolicyTest.kt"
-          replace_exact(test, OLD_VERSION, NEW_VERSION, 1)
-          replace_exact(test, OLD_PAYLOAD_SHA, NEW_PAYLOAD_SHA, 1)
-          replace_exact(test, OLD_PAYLOAD_SIZE, NEW_PAYLOAD_SIZE, 1)
-          replace_exact(test, OLD_SOURCE_VERSION, NEW_SOURCE_VERSION, 1)
-          replace_exact(test, OLD_SOURCE_URL, NEW_SOURCE_URL, 1)
-          replace_exact(test, OLD_BINARY_SHA, NEW_BINARY_SHA, 1)
-          replace_exact(
-              test,
-              'id = "lldb-server-version",\n                title = "Android LLDB server",',
-              'id = "lldb-server-android-binary",\n                title = "Android LLDB server payload",',
-              1,
-          )
-          replace_exact(test, 'command = "lldb-server-android v",', NEW_SELF_TEST_COMMAND, 1)
-          replace_exact(
-              test,
-              'outputContains = listOf("lldb"),',
-              'outputContains = listOf("AUTOCRACK_LLDB_ANDROID_BINARY_OK"),',
-              1,
-          )
-
-          manager = "app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerSessionManager.kt"
-          replace_exact(manager, OLD_VERSION, NEW_VERSION, 1)
-
-          catalog = "app/src/main/assets/runtime/dynamic-host-tool-catalog-v1.json"
-          replace_exact(catalog, '"catalogVersion": "0.5.14.5"', '"catalogVersion": "0.5.14.13"', 1)
-          replace_exact(catalog, OLD_VERSION, NEW_VERSION, 2)
-
-          gradle = "app/build.gradle.kts"
-          replace_exact(gradle, "versionCode = 42", "versionCode = 48", 1)
-          replace_exact(
-              gradle,
-              'versionName = "0.5.14.7-phase5.14-server-ptrace-trace"',
-              'versionName = "0.5.14.13-phase5.14-seize-runtime-stop"',
-              1,
-          )
-          PY
-
-          ! grep -R -F "ndk-r27d-clang-r522817d_autocrack-1.0.0" \
-            app/src/main app/src/test app/build.gradle.kts
-          grep -R -F "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" \
-            app/src/main app/src/test
-          grep -R -F "f2d3b3925ffc49419508dd97cd657d4a8a2e0b0b313f473105173b96ce31b899" \
-            app/src/main app/src/test
-          grep -R -F "71d9ed6a90776d7dbdbcb315ea2171a763c071e5a370ec1b8b0c28157af41b20" \
-            app/src/main app/src/test
-          grep -R -F "AUTOCRACK_LLDB_ANDROID_BINARY_OK" \
-            app/src/main app/src/test
-          grep -F 'versionName = "0.5.14.13-phase5.14-seize-runtime-stop"' app/build.gradle.kts
+          grep -F 'versionCode = 57' app/build.gradle.kts
+          grep -F 'versionName = "0.5.15.6-phase5.15-bounded-call-stack-hit-accounting"' app/build.gradle.kts
+          grep -F '"catalogVersion": "0.5.15.6"' app/src/main/assets/runtime/dynamic-host-tool-catalog-v1.json
+          grep -F '"runtimeTarget": "android_rootfs_only"' app/src/main/assets/runtime/tool-catalog-v1.json
           grep -F 'fun stepFromStopReply(stopReply: String)' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
           grep -F 'fun awaitStopAfterInterrupt()' \
@@ -134,10 +41,17 @@ jobs:
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
           grep -F 'interrupt_stop_recovered' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
-          grep -F 'gdb-remote packets process step thread:posix ptrace process thread' \
-            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerSessionManager.kt
+          grep -F 'HostDebuggerBreakpointHitAccounting' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
+          grep -F 'frida_tls_trace' \
+            app/src/main/java/com/luckylca/autocrack/agent/AgentFridaToolExecutor.kt
+          grep -F 'android_pcap_start' \
+            app/src/main/java/com/luckylca/autocrack/agent/AgentAndroidNetworkToolExecutor.kt
           ! grep -F 'payload = "vCont;s",' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+
+      - name: Verify Android/rootfs-only runtime policy
+        run: bash scripts/check_android_rootfs_only.sh
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -163,7 +77,7 @@ jobs:
             "cmake;3.22.1"
 
       - name: Lint, unit test, and assemble debug APK
-        run: gradle --no-daemon --stacktrace clean lintDebug testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon --max-workers=1 --stacktrace clean lintDebug testDebugUnitTest assembleDebug
 
       - name: Verify native PTY library is packaged
         run: |

@@ -45,11 +45,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.BuildConfig
+import com.luckylca.autocrack.agent.AgentToolSession
+import com.luckylca.autocrack.agent.AgentToolSessionFactory
 import com.luckylca.autocrack.agent.LlmAgentAnswer
 import com.luckylca.autocrack.agent.LlmPromptBuilder
 import com.luckylca.autocrack.agent.LlmProviderConfig
 import com.luckylca.autocrack.agent.LocalEvidenceSearchEngine
 import com.luckylca.autocrack.agent.OpenAiCompatibleClient
+import com.luckylca.autocrack.agent.OpenAiCompatibleToolClient
 import com.luckylca.autocrack.agent.PhaseFiveDiagnosticEvent
 import com.luckylca.autocrack.agent.PhaseFiveDiagnosticReportFormatter
 import com.luckylca.autocrack.agent.PhaseFiveDiagnosticSeverity
@@ -69,6 +72,7 @@ import com.luckylca.autocrack.dex.LocalAgentResult
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.root.RootStatus
+import com.luckylca.autocrack.runtime.AgentExecutionForegroundService
 import kotlinx.coroutines.launch
 
 private enum class PhaseFiveTab(val title: String) {
@@ -116,6 +120,10 @@ fun PhaseFiveTabbedScreen() {
     val dexIndexBuilder = remember { DexIndexBuilder() }
     val searchEngine = remember { LocalEvidenceSearchEngine() }
     val llmClient = remember { OpenAiCompatibleClient() }
+    val toolLlmClient = remember { OpenAiCompatibleToolClient() }
+    val toolSessionFactory = remember(appContext, runner, detector) {
+        AgentToolSessionFactory(appContext, runner, detector)
+    }
     val configStore = remember(appContext) { SecureLlmConfigStore(appContext) }
     val scope = rememberCoroutineScope()
 
@@ -130,6 +138,7 @@ fun PhaseFiveTabbedScreen() {
     var agentQuestion by remember { mutableStateOf("") }
     var lastLocalResult by remember { mutableStateOf<LocalAgentResult?>(null) }
     var lastLlmAnswer by remember { mutableStateOf<LlmAgentAnswer?>(null) }
+    var allowDynamicTools by remember { mutableStateOf(false) }
 
     var savedConfig by remember { mutableStateOf<LlmProviderConfig?>(null) }
     var baseUrlInput by remember { mutableStateOf("") }
@@ -234,6 +243,7 @@ fun PhaseFiveTabbedScreen() {
         selectedTab = PhaseFiveTab.WORKSPACE
         lastLocalResult = null
         lastLlmAnswer = null
+        allowDynamicTools = false
         queryState = TabbedQueryState.Idle
 
         scope.launch {
@@ -305,6 +315,8 @@ fun PhaseFiveTabbedScreen() {
     fun runModelAnalysis(workspace: TabbedAgentWorkspace) {
         scope.launch {
             var stage = "本地证据检索"
+            var toolSession: AgentToolSession? = null
+            var agentExecutionLeaseId: String? = null
             queryState = TabbedQueryState.Running(stage)
             lastLlmAnswer = null
             recordEvent(stage, "开始为外部模型准备本地证据")
@@ -317,8 +329,6 @@ fun PhaseFiveTabbedScreen() {
                 lastLocalResult = local
                 recordEvent(stage, "本地检索完成，返回 ${local.evidence.size} 条证据")
 
-                stage = "外部模型请求"
-                queryState = TabbedQueryState.Running(stage)
                 val config = configStore.load() ?: error("尚未保存外部模型配置")
                 val prompt = LlmPromptBuilder.build(
                     packageName = workspace.extraction.packageName,
@@ -326,19 +336,82 @@ fun PhaseFiveTabbedScreen() {
                     dexIndex = workspace.dexIndex,
                     localResult = local,
                 )
-                recordEvent(stage, "开始向 ${config.baseUrl} 的 ${config.model} 发送受限证据上下文")
-                val answer = llmClient.complete(
-                    config = config,
-                    prompt = prompt,
-                    evidenceCount = local.evidence.size,
+
+                stage = "Agent 工具准备"
+                queryState = TabbedQueryState.Running(stage)
+                agentExecutionLeaseId = AgentExecutionForegroundService.acquire(
+                    appContext,
+                    workspace.extraction.packageName,
                 )
+                toolSession = runCatching {
+                    toolSessionFactory.create(
+                        extraction = workspace.extraction,
+                        allowDynamicTools = allowDynamicTools,
+                        knownRootStatus = rootStatus,
+                    )
+                }.onFailure { exception ->
+                    recordEvent(
+                        stage,
+                        "工具会话不可用，将退回证据-only 模型请求：${exception.message ?: exception::class.java.simpleName}",
+                        PhaseFiveDiagnosticSeverity.WARNING,
+                        exception,
+                    )
+                }.getOrNull()
+
+                stage = "外部模型请求"
+                queryState = TabbedQueryState.Running(stage)
+                val session = toolSession
+                val answer = if (session != null && session.tools.isNotEmpty()) {
+                    recordEvent(
+                        stage,
+                        "向 ${config.model} 注册 ${session.tools.size} 个受控工具；动态工具=" +
+                            if (allowDynamicTools) "已由用户授权" else "关闭",
+                    )
+                    val toolAnswer = toolLlmClient.completeWithTools(
+                        config = config,
+                        systemPrompt = LlmPromptBuilder.SYSTEM_PROMPT +
+                            "\n你可以调用 AutoCrack 注册的受控工具补充证据。所有工具已绑定到用户当前选择的应用；" +
+                            "不要猜测路径、PID 或未返回的数据。" +
+                            if (allowDynamicTools) {
+                                " 用户已明确允许本次 Agent 使用动态调试工具；LLDB 与 Frida 不得并发使用。"
+                            } else {
+                                " 本次没有授权动态调试；不要尝试启动或附加动态调试后端。"
+                            },
+                        userPrompt = prompt,
+                        tools = session.tools,
+                        dispatcher = session::dispatch,
+                    )
+                    toolAnswer.toolExecutions.forEach { execution ->
+                        recordEvent("Agent 工具", "${execution.toolName} 已执行")
+                    }
+                    LlmAgentAnswer(
+                        model = toolAnswer.model,
+                        endpointHost = toolAnswer.endpointHost,
+                        content = toolAnswer.content,
+                        requestEvidenceCount = local.evidence.size,
+                        startedAtEpochMillis = toolAnswer.startedAtEpochMillis,
+                        completedAtEpochMillis = toolAnswer.completedAtEpochMillis,
+                    )
+                } else {
+                    recordEvent(stage, "当前没有可注册的 toolpack，使用证据-only 模型请求")
+                    llmClient.complete(
+                        config = config,
+                        prompt = prompt,
+                        evidenceCount = local.evidence.size,
+                    )
+                }
                 lastLlmAnswer = answer
-                queryState = TabbedQueryState.Success("外部模型分析")
+                queryState = TabbedQueryState.Success("外部模型 Agent 分析")
                 recordEvent(stage, "模型回答完成，耗时 ${answer.durationMillis} ms")
             } catch (exception: Exception) {
                 val message = exception.message ?: "外部模型分析失败"
                 queryState = TabbedQueryState.Error(stage, message)
                 recordEvent(stage, message, PhaseFiveDiagnosticSeverity.ERROR, exception)
+            } finally {
+                toolSession?.closeSafely()
+                agentExecutionLeaseId?.let { leaseId ->
+                    AgentExecutionForegroundService.release(appContext, leaseId)
+                }
             }
         }
     }
@@ -395,6 +468,8 @@ fun PhaseFiveTabbedScreen() {
                     localResult = lastLocalResult,
                     llmAnswer = lastLlmAnswer,
                     hasModelConfig = savedConfig != null,
+                    allowDynamicTools = allowDynamicTools,
+                    onDynamicToolsChange = { allowDynamicTools = it },
                     onLocalAnalyze = { readyWorkspace?.let(::runLocalAnalysis) },
                     onModelAnalyze = { readyWorkspace?.let(::runModelAnalysis) },
                     onOpenApps = { selectedTab = PhaseFiveTab.APPS },
@@ -690,6 +765,8 @@ private fun AnalysisTab(
     localResult: LocalAgentResult?,
     llmAnswer: LlmAgentAnswer?,
     hasModelConfig: Boolean,
+    allowDynamicTools: Boolean,
+    onDynamicToolsChange: (Boolean) -> Unit,
     onLocalAnalyze: () -> Unit,
     onModelAnalyze: () -> Unit,
     onOpenApps: () -> Unit,
@@ -723,6 +800,22 @@ private fun AnalysisTab(
                         label = { Text("输入要分析的问题") },
                         minLines = 3,
                         maxLines = 7,
+                    )
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = queryState !is TabbedQueryState.Running,
+                        onClick = { onDynamicToolsChange(!allowDynamicTools) },
+                    ) {
+                        Text(if (allowDynamicTools) "本次已允许动态调试工具" else "本次不允许动态调试工具")
+                    }
+                    Text(
+                        if (allowDynamicTools) {
+                            "仅当前选中应用、当前唯一主进程 PID 可被 Frida/LLDB 使用；两个动态后端互斥，任务结束自动清理。"
+                        } else {
+                            "默认仅提供 JADX/Apktool/Perfetto 等受控工具。需要 Frida/LLDB 时请主动开启。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Button(
                         modifier = Modifier.fillMaxWidth(),

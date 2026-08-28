@@ -1,6 +1,16 @@
 {
   "schemaVersion": 1,
-  "catalogVersion": "0.5.14.5",
+  "catalogVersion": "0.5.15.6",
+  "runtimeTarget": "android_rootfs_only",
+  "legacyTerminology": {
+    "host": "Android host OS on the same device, not a Mac/Windows/Linux desktop host",
+    "hostRuntimeAllowedForCompatibility": true,
+    "newToolNamingPreference": [
+      "android",
+      "device",
+      "rootfs"
+    ]
+  },
   "scope": "host_dynamic_scoped",
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
@@ -14,10 +24,21 @@
     "registerWriteAllowed": false,
     "memoryReadAllowed": true,
     "memoryWriteAllowed": false,
-    "breakpointAllowed": false,
+    "breakpointAllowed": true,
+    "breakpointKinds": [
+      "hardware_execution"
+    ],
+    "breakpointRequiresStoppedTarget": true,
     "rawDebuggerPacketAllowed": false,
     "signalsAllowed": false,
-    "injectionAllowed": false,
+    "stoppedSignalPassthroughAllowed": true,
+    "stoppedSignalPassthroughScope": "stopped_thread_only",
+    "explicitSignalReasonTrapPassthroughAllowed": true,
+    "injectionAllowed": true,
+    "injectionScope": "fixed_bounded_frida_agent_only",
+    "arbitraryScriptInjectionAllowed": false,
+    "returnValueReplacementAllowed": false,
+    "arbitrarySpawnAllowed": false,
     "targetFileWriteAllowed": false,
     "helperSessionLifecycleAllowed": true,
     "debuggerAttachDetachAllowed": true,
@@ -27,17 +48,24 @@
     "logcatAudit": "runtime/audit/dynamic-logcat.jsonl",
     "debuggerAudit": "runtime/audit/dynamic-debugger.jsonl",
     "debuggerControlAudit": "runtime/audit/dynamic-debugger-control.jsonl",
-    "debuggerRecoveryAudit": "runtime/audit/dynamic-debugger-recovery.jsonl"
+    "debuggerRecoveryAudit": "runtime/audit/dynamic-debugger-recovery.jsonl",
+    "fridaAudit": "runtime/audit/dynamic-frida.jsonl"
   },
   "tools": [
     {
       "id": "host.process.list",
       "title": "List Android host processes from procfs",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {"filter": "optional literal process/package substring", "maxCount": "1..2000"},
+      "inputs": {
+        "filter": "optional literal process/package substring",
+        "maxCount": "1..2000"
+      },
       "output": "HostProcessListReport",
       "implementation": "RootToolCommand.ListHostProcesses"
     },
@@ -45,10 +73,15 @@
       "id": "host.process.identity",
       "title": "Read PID identity and security status",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {"pid": "positive integer"},
+      "inputs": {
+        "pid": "positive integer"
+      },
       "output": "CommandResult",
       "implementation": "RootToolCommand.ReadProcessIdentity"
     },
@@ -56,22 +89,38 @@
       "id": "host.process.attach_preflight",
       "title": "Read debugger attach prerequisites without attaching",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {"pid": "positive integer"},
+      "inputs": {
+        "pid": "positive integer"
+      },
       "output": "CommandResult",
-      "guarantees": ["attachAttempted=false", "stateChanged=false", "no ptrace", "no target signal", "no target memory access"],
+      "guarantees": [
+        "attachAttempted=false",
+        "stateChanged=false",
+        "no ptrace",
+        "no target signal",
+        "no target memory access"
+      ],
       "implementation": "RootToolCommand.ReadProcessAttachPreflight"
     },
     {
       "id": "host.process.maps",
       "title": "Read process memory maps and aggregate loaded files",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {"pid": "positive integer"},
+      "inputs": {
+        "pid": "positive integer"
+      },
       "output": "CommandResult + HostLoadedModule[]",
       "implementation": "RootToolCommand.ReadProcessMaps"
     },
@@ -79,10 +128,16 @@
       "id": "host.process.threads",
       "title": "List bounded target threads",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {"pid": "positive integer", "maxCount": "1..8192"},
+      "inputs": {
+        "pid": "positive integer",
+        "maxCount": "1..8192"
+      },
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessThreads"
     },
@@ -90,10 +145,16 @@
       "id": "host.process.fds",
       "title": "List bounded target file descriptors",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION"
+      ],
       "changesState": false,
       "confirmation": "none",
-      "inputs": {"pid": "positive integer", "maxCount": "1..4096"},
+      "inputs": {
+        "pid": "positive integer",
+        "maxCount": "1..4096"
+      },
       "output": "bounded TSV CommandResult",
       "implementation": "RootToolCommand.ListProcessFileDescriptors"
     },
@@ -101,11 +162,18 @@
       "id": "host.logcat.session",
       "title": "Run a PID-scoped Android logcat helper session",
       "runtime": "typed_root_host_session",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "LOGCAT_READ"],
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION",
+        "LOGCAT_READ"
+      ],
       "changesState": true,
       "changesTargetState": false,
       "confirmation": "explicit_user_action",
-      "inputs": {"packageName": "validated Android package name", "pid": "positive integer whose current argv0 must match packageName or packageName:*"},
+      "inputs": {
+        "packageName": "validated Android package name",
+        "pid": "positive integer whose current argv0 must match packageName or packageName:*"
+      },
       "command": "logcat --pid=<pid> -v threadtime",
       "output": "HostLogcatSessionSnapshot",
       "implementation": "HostLogcatSessionManager"
@@ -114,17 +182,30 @@
       "id": "host.debugger.lldb_server_session",
       "title": "Arm a trusted targetless Android LLDB server for an explicitly authorized target",
       "runtime": "typed_root_host_session",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "DEBUGGER_ATTACH"],
-      "requiresToolpack": {"id": "android-lldb-server", "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"},
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION",
+        "DEBUGGER_ATTACH"
+      ],
+      "requiresToolpack": {
+        "id": "android-lldb-server",
+        "version": "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
+      },
       "changesState": true,
       "changesTargetState": false,
       "confirmation": "exact_target_phrase",
       "authorizationTemplate": "ATTACH <packageName> <pid>",
-      "inputs": {"packageName": "validated Android package name", "pid": "positive integer; AutoCrack controller PID is rejected", "port": "validated loopback TCP port"},
+      "inputs": {
+        "packageName": "validated Android package name",
+        "pid": "positive integer; AutoCrack controller PID is rejected",
+        "port": "validated loopback TCP port"
+      },
       "networkScope": "127.0.0.1 only",
       "networkAddressFamily": "IPv4",
       "output": "HostDebuggerSessionSnapshot",
-      "artifacts": ["runtime/audit/dynamic-debugger.jsonl"],
+      "artifacts": [
+        "runtime/audit/dynamic-debugger.jsonl"
+      ],
       "guarantees": [
         "revalidate package/PID identity and require TracerPid=0 before arming the server",
         "start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach",
@@ -140,7 +221,11 @@
       "id": "host.debugger.client_control",
       "title": "Bounded loopback LLDB client typed attach, observation and execution control",
       "runtime": "typed_loopback_debugger_client",
-      "requiresCapabilities": ["DEBUGGER_ATTACH", "DEBUGGER_READ", "DEBUGGER_EXECUTION_CONTROL"],
+      "requiresCapabilities": [
+        "DEBUGGER_ATTACH",
+        "DEBUGGER_READ",
+        "DEBUGGER_EXECUTION_CONTROL"
+      ],
       "requiresActiveTool": "host.debugger.lldb_server_session",
       "changesState": true,
       "changesTargetState": true,
@@ -149,16 +234,92 @@
       "networkScope": "127.0.0.1 only",
       "networkAddressFamily": "IPv4",
       "operations": [
-        {"id": "typed_attach", "changesTargetState": true, "packetShape": "vAttach;<hexPid>"},
-        {"id": "stop_reason", "changesTargetState": false},
-        {"id": "register_read", "changesTargetState": false, "maxRegisters": 128},
-        {"id": "memory_read", "changesTargetState": false, "maxBytes": 512},
-        {"id": "continue", "changesTargetState": true},
-        {"id": "step", "changesTargetState": true},
-        {"id": "interrupt", "changesTargetState": true}
+        {
+          "id": "typed_attach",
+          "changesTargetState": true,
+          "packetShape": "vAttach;<hexPid>"
+        },
+        {
+          "id": "stop_reason",
+          "changesTargetState": false
+        },
+        {
+          "id": "register_read",
+          "changesTargetState": false,
+          "maxRegisters": 128
+        },
+        {
+          "id": "memory_read",
+          "changesTargetState": false,
+          "maxBytes": 512
+        },
+        {
+          "id": "hardware_breakpoint_set",
+          "changesTargetState": true,
+          "packetShape": "Z1,<validatedAddress>,4",
+          "maxTracked": 8
+        },
+        {
+          "id": "hardware_breakpoint_remove",
+          "changesTargetState": true,
+          "packetShape": "z1,<trackedAddress>,4"
+        },
+        {
+          "id": "auto_steppable_anchor",
+          "changesTargetState": true,
+          "strategy": "prefer-main-thread-current-pc-one-shot-hardware-breakpoint"
+        },
+        {
+          "id": "automatic_code_context",
+          "changesTargetState": false,
+          "maxInstructionBytes": 36,
+          "sources": [
+            "qRegisterInfo/p",
+            "bounded m",
+            "/proc/<pid>/maps"
+          ]
+        },
+        {
+          "id": "bounded_call_stack",
+          "changesTargetState": false,
+          "maxFrames": 16,
+          "strategy": "aarch64-x29-frame-record-chain-with-lr-fallback",
+          "sources": [
+            "qRegisterInfo/p",
+            "bounded m",
+            "/proc/<pid>/maps"
+          ]
+        },
+        {
+          "id": "breakpoint_hit_accounting",
+          "changesTargetState": false,
+          "scope": "tracked-manual-hardware-execution-breakpoints",
+          "requiresPcMatch": true
+        },
+        {
+          "id": "live_auto_observation",
+          "changesTargetState": true,
+          "strategy": "one-shot-anchor-capture-auto-resume-manual-pause",
+          "timelineEntries": 64,
+          "stoppedSignalPolicy": "thread-scoped-exact-target-signal-before-heavy-context-capture"
+        },
+        {
+          "id": "continue",
+          "changesTargetState": true
+        },
+        {
+          "id": "step",
+          "changesTargetState": true
+        },
+        {
+          "id": "interrupt",
+          "changesTargetState": true
+        }
       ],
       "output": "HostDebuggerControlSnapshot",
-      "artifacts": ["runtime/audit/dynamic-debugger-control.jsonl"],
+      "artifacts": [
+        "runtime/audit/dynamic-debugger-control.jsonl"
+      ],
       "guarantees": [
         "construct client endpoint from literal IPv4 loopback bytes rather than localhost resolution",
         "require a verified helper-owned LISTEN socket before CONTROL can connect",
@@ -170,7 +331,19 @@
         "no arbitrary raw gdb-remote packet adapter",
         "no register write adapter",
         "no memory write adapter",
-        "no breakpoint insertion or removal adapter",
+        "breakpoints are limited to typed AArch64 hardware execution Z1/z1 packets at positive 4-byte-aligned addresses",
+        "software breakpoint Z0/z0 packets are not exposed",
+        "automatic stepping anchor prefers the process main TID, reads only its PC, inserts one typed Z1 hardware execution breakpoint at that validated PC, then removes the one-shot anchor after the next continue stop",
+        "the thread from each continue stop reply is automatically selected as the next register/step context",
+        "after a trusted stop, code context is captured read-only from PC/LR/SP, at most 36 nearby instruction bytes, and /proc/<pid>/maps; no target mutation is used for context",
+        "after a trusted stop, bounded call-stack evidence starts at PC and follows at most 16 AArch64 x29 frame records using only bounded memory reads; invalid, cyclic, unmapped, non-monotonic or oversized frame-pointer transitions terminate the unwind as partial evidence",
+        "if a usable x29 frame pointer is unavailable, call-stack evidence falls back only to the current PC and mapped LR instead of scanning arbitrary stack memory for guessed return addresses",
+        "manual hardware-breakpoint hit counts increment only when a trusted SIGTRAP debugger stop has a matching PC and a breakpoint-compatible reason; step trace and target-signal stops never increment the counter",
+        "the automatic one-shot anchor captures its stop context and automatically resumes the target unless the user explicitly requested pause, preventing the target app from remaining frozen after the anchor hit",
+        "a bounded 64-entry chronological control timeline preserves attach/continue/anchor/step/recovery/pause transitions with thread and code-location summaries",
+        "while live auto-observation is running, a target signal stop is resumed only on the exact thread named by the immediately preceding trusted stop reply using vCont;Cxx:<stopped-thread>;c; the signal is never applied as a process-wide default action",
+        "SIGTRAP is auto-passed only when the trusted stop reply explicitly classifies it as reason:signal; hardware-breakpoint and single-step trap stops remain debugger stops",
+        "live signal pass-through is decided before qRegisterInfo/maps/code-window capture so runtime-managed signals do not incur repeated heavy observation pauses",
         "memory reads are bounded to 512 bytes in the UI bridge",
         "execution control requires exact CONTROL package/PID authorization",
         "interrupt is a gdb-remote protocol byte, not kill(targetPid)"
@@ -181,14 +354,23 @@
       "id": "host.debugger.orphan_recovery",
       "title": "Safely detach an orphaned AutoCrack LLDB helper after controller restart",
       "runtime": "typed_root_host_bridge",
-      "requiresCapabilities": ["ROOT_SHELL", "PROCESS_INSPECTION", "DEBUGGER_ATTACH"],
-      "requiresToolpack": {"id": "android-lldb-server", "version": "ndk-r27d-clang-r522817d_autocrack-1.0.0"},
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION",
+        "DEBUGGER_ATTACH"
+      ],
+      "requiresToolpack": {
+        "id": "android-lldb-server",
+        "version": "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
+      },
       "changesState": true,
       "changesTargetState": true,
       "confirmation": "exact_target_and_tracer_phrase",
       "authorizationTemplate": "RECOVER <packageName> <pid> <tracerPid>",
       "output": "HostDebuggerRecoverySnapshot",
-      "artifacts": ["runtime/audit/dynamic-debugger-recovery.jsonl"],
+      "artifacts": [
+        "runtime/audit/dynamic-debugger-recovery.jsonl"
+      ],
       "guarantees": [
         "never terminate a tracer from PID alone",
         "revalidate target package identity and current TracerPid immediately before recovery",
@@ -200,6 +382,129 @@
         "require final target TracerPid=0 for detachVerified=true"
       ],
       "implementation": "HostDebuggerRecoveryBridge"
+    },
+    {
+      "id": "host.frida.server_session",
+      "title": "Start a trusted loopback Frida server bound to one explicitly authorized target",
+      "runtime": "typed_root_host_session",
+      "requiresCapabilities": [
+        "ROOT_SHELL",
+        "PROCESS_INSPECTION",
+        "FRIDA_INSTRUMENTATION"
+      ],
+      "requiresToolpack": {
+        "id": "android-frida",
+        "version": "frida-17.17.0-autocrack-1.0.3"
+      },
+      "changesState": true,
+      "changesTargetState": false,
+      "confirmation": "exact_target_phrase",
+      "authorizationTemplate": "FRIDA <packageName> <pid>",
+      "inputs": {
+        "packageName": "validated Android package name",
+        "pid": "positive integer; AutoCrack controller PID is rejected"
+      },
+      "networkScope": "literal IPv4 loopback 127.0.0.1 on an AutoCrack-internal managed port only",
+      "networkAddressFamily": "IPv4",
+      "output": "HostFridaSessionSnapshot",
+      "artifacts": [
+        "runtime/audit/dynamic-frida.jsonl"
+      ],
+      "guarantees": [
+        "the server is the pinned official Frida 17.17.0 Android arm64 binary from the trusted android-frida toolpack",
+        "revalidate package/PID identity and require TracerPid=0 before starting the helper",
+        "listen only on literal IPv4 loopback 127.0.0.1; the managed port is selected internally and is never model-controlled",
+        "verify helper argv0, exact command line and listener socket ownership before exposing serverReadyForClient=true",
+        "the user-authorized package/PID is bound to the session and cannot be changed by the Agent",
+        "helper teardown sends TERM only to the reverified Frida helper and never directly signals the target PID"
+      ],
+      "implementation": "HostFridaSessionManager"
+    },
+    {
+      "id": "host.frida.bounded_client",
+      "title": "Bounded fixed-agent Frida observation for one already-authorized Android process",
+      "runtime": "typed_debian_frida_client",
+      "requiresCapabilities": [
+        "FRIDA_INSTRUMENTATION",
+        "PROCESS_INSPECTION"
+      ],
+      "requiresActiveTool": "host.frida.server_session",
+      "changesState": true,
+      "changesTargetState": true,
+      "confirmation": "inherited_exact_target_phrase",
+      "operations": [
+        {
+          "id": "ping",
+          "changesTargetState": true,
+          "lifecycle": "attach-load-fixed-agent-unload-detach"
+        },
+        {
+          "id": "modules",
+          "changesTargetState": true,
+          "maxCount": 512
+        },
+        {
+          "id": "exports",
+          "changesTargetState": true,
+          "maxCount": 512
+        },
+        {
+          "id": "java_classes",
+          "changesTargetState": true,
+          "maxCount": 512
+        },
+        {
+          "id": "java_methods",
+          "changesTargetState": true,
+          "maxCount": 512
+        },
+        {
+          "id": "native_trace",
+          "changesTargetState": true,
+          "strategy": "Interceptor.attach only",
+          "maxDurationMs": 5000,
+          "maxEvents": 128
+        },
+        {
+          "id": "net_detect_stack",
+          "changesTargetState": true,
+          "maxCount": 128,
+          "strategy": "fixed loaded-class stack detection"
+        },
+        {
+          "id": "tls_trace",
+          "changesTargetState": true,
+          "strategy": "fixed Conscrypt SSL_read/SSL_write observation only",
+          "maxDurationMs": 5000,
+          "maxEvents": 128,
+          "maxBytesPerEvent": 1024
+        },
+        {
+          "id": "network_hints",
+          "changesTargetState": true,
+          "maxCount": 128,
+          "strategy": "fixed network stack and pinning-related class hints only"
+        }
+      ],
+      "output": "HostFridaOperationResult",
+      "artifacts": [
+        "runtime/audit/dynamic-frida.jsonl"
+      ],
+      "guarantees": [
+        "every operation revalidates the bound package/PID immediately before attaching",
+        "only the compiled AutoCrack RPC agent bundled in the trusted toolpack may be loaded",
+        "no arbitrary JavaScript or Frida REPL is exposed to the Agent",
+        "no Memory.write API is exposed",
+        "no Interceptor.replace or return-value replacement API is exposed",
+        "no arbitrary process spawn or target switching is exposed",
+        "native trace accepts only a loaded module basename plus a bounded module-relative hexadecimal offset",
+        "native trace rejects targets that do not resolve to an executable memory range",
+        "the client unloads the fixed script and detaches after each operation",
+        "each operation requires target TracerPid to return to 0 before success is reported",
+        "network hints only report bounded loaded-class evidence and never bypass certificate pinning",
+        "TLS trace uses fixed Conscrypt read/write observation with bounded duration, event count and plaintext preview bytes"
+      ],
+      "implementation": "HostFridaSessionManager + AgentFridaToolExecutor"
     }
   ]
 }

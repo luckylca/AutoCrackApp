@@ -74,8 +74,8 @@ fun AutoCrackApp() {
             runner = dynamicRunner,
         )
     }
-    val debuggerControlBridge = remember(debuggerSessionManager) {
-        HostDebuggerControlBridge(debuggerSessionManager)
+    val debuggerControlBridge = remember(debuggerSessionManager, dynamicReadBridge) {
+        HostDebuggerControlBridge(debuggerSessionManager, dynamicReadBridge)
     }
     val debuggerRecoveryBridge = remember(
         appContext,

@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import collections
+import ipaddress
+import json
+import struct
+import sys
+from pathlib import Path
+
+MAX_PACKETS = 200_000
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Bounded AutoCrack pcap summarizer")
+    parser.add_argument("pcap", nargs="?")
+    parser.add_argument("--mode", choices=["info", "protocols", "dns", "tls", "top-connections"])
+    parser.add_argument("--max-records", type=int, default=32)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    args.max_records = max(1, min(args.max_records, 128))
+    if not args.self_test and (not args.pcap or not args.mode):
+        parser.error("pcap and --mode are required unless --self-test is used")
+    return args
+
+
+def read_pcap(path: Path):
+    with path.open("rb") as fh:
+        header = fh.read(24)
+        if len(header) != 24:
+            raise SystemExit("pcap header missing")
+        magic = header[:4]
+        if magic in (b"\xd4\xc3\xb2\xa1", b"\x4d\x3c\xb2\xa1"):
+            endian = "<"
+        elif magic in (b"\xa1\xb2\xc3\xd4", b"\xa1\xb2\x3c\x4d"):
+            endian = ">"
+        else:
+            raise SystemExit("unsupported pcap magic")
+        version_major, version_minor, _tz, _sigfigs, snaplen, linktype = struct.unpack(endian + "HHiiii", header[4:24])
+        yield {"kind": "global", "versionMajor": version_major, "versionMinor": version_minor, "snaplen": snaplen, "linktype": linktype}
+        for index in range(1, MAX_PACKETS + 1):
+            ph = fh.read(16)
+            if not ph:
+                break
+            if len(ph) != 16:
+                break
+            ts_sec, ts_usec, incl_len, orig_len = struct.unpack(endian + "IIII", ph)
+            if incl_len > 64 * 1024 * 1024:
+                raise SystemExit("pcap packet length too large")
+            payload = fh.read(incl_len)
+            if len(payload) != incl_len:
+                break
+            yield {"kind": "packet", "index": index, "ts": ts_sec + ts_usec / 1_000_000, "inclLen": incl_len, "origLen": orig_len, "payload": payload, "linktype": linktype}
+
+
+def network_payload(linktype: int, payload: bytes):
+    if linktype == 1 and len(payload) >= 14:
+        return struct.unpack("!H", payload[12:14])[0], payload[14:]
+    if linktype == 113 and len(payload) >= 16:
+        return struct.unpack("!H", payload[14:16])[0], payload[16:]
+    if linktype == 276 and len(payload) >= 20:
+        return struct.unpack("!H", payload[0:2])[0], payload[20:]
+    if linktype == 101 and payload:
+        version = payload[0] >> 4
+        return (0x0800 if version == 4 else 0x86DD if version == 6 else 0), payload
+    return 0, b""
+
+
+def parse_packet(linktype: int, payload: bytes):
+    ethertype, packet = network_payload(linktype, payload)
+    out = {"network": "other", "transport": "other", "ethertype": ethertype}
+    if ethertype == 0x0800 and len(packet) >= 20:
+        ihl = (packet[0] & 0x0F) * 4
+        if ihl < 20 or len(packet) < ihl:
+            return out
+        proto = packet[9]
+        src = ".".join(str(b) for b in packet[12:16])
+        dst = ".".join(str(b) for b in packet[16:20])
+        l4 = packet[ihl:]
+        out.update({"network": "ipv4", "protoNumber": proto, "src": src, "dst": dst, "l4": l4})
+    elif ethertype == 0x86DD and len(packet) >= 40:
+        proto = packet[6]
+        src = str(ipaddress.IPv6Address(packet[8:24]))
+        dst = str(ipaddress.IPv6Address(packet[24:40]))
+        l4 = packet[40:]
+        out.update({"network": "ipv6", "protoNumber": proto, "src": src, "dst": dst, "l4": l4})
+    else:
+        return out
+    l4 = out.get("l4", b"")
+    proto = out.get("protoNumber")
+    if proto == 6 and len(l4) >= 20:
+        sport, dport = struct.unpack("!HH", l4[:4])
+        data_offset = (l4[12] >> 4) * 4
+        app = l4[data_offset:] if data_offset >= 20 and len(l4) >= data_offset else b""
+        out.update({"transport": "tcp", "sport": sport, "dport": dport, "app": app})
+    elif proto == 17 and len(l4) >= 8:
+        sport, dport, length, _checksum = struct.unpack("!HHHH", l4[:8])
+        app = l4[8:max(8, min(len(l4), length))]
+        out.update({"transport": "udp", "sport": sport, "dport": dport, "app": app})
+    elif proto == 1:
+        out["transport"] = "icmp"
+    elif proto == 58:
+        out["transport"] = "icmpv6"
+    return out
+
+
+def parse_dns_name(data: bytes, offset: int, depth: int = 0):
+    labels = []
+    jumped = False
+    original = offset
+    while offset < len(data) and depth < 8:
+        length = data[offset]
+        if length == 0:
+            offset += 1
+            break
+        if length & 0xC0 == 0xC0:
+            if offset + 1 >= len(data):
+                return None, offset + 1
+            pointer = ((length & 0x3F) << 8) | data[offset + 1]
+            name, _ = parse_dns_name(data, pointer, depth + 1)
+            if name:
+                labels.append(name)
+            offset += 2
+            jumped = True
+            break
+        if length > 63 or offset + 1 + length > len(data):
+            return None, offset + 1
+        label = data[offset + 1:offset + 1 + length].decode("ascii", "ignore")
+        if label:
+            labels.append(label)
+        offset += 1 + length
+    name = ".".join(labels).strip(".")
+    return (name or None), (offset if not jumped else original + 2)
+
+
+def dns_queries(app: bytes):
+    if len(app) < 12:
+        return []
+    qdcount = struct.unpack("!H", app[4:6])[0]
+    offset = 12
+    out = []
+    for _ in range(min(qdcount, 8)):
+        name, offset = parse_dns_name(app, offset)
+        if not name or offset + 4 > len(app):
+            break
+        qtype, qclass = struct.unpack("!HH", app[offset:offset + 4])
+        offset += 4
+        out.append({"name": name, "qtype": qtype, "qclass": qclass})
+    return out
+
+
+def parse_tls_client_hello(app: bytes):
+    if len(app) < 9 or app[0] != 22:
+        return None
+    record_len = struct.unpack("!H", app[3:5])[0]
+    body = app[5:5 + record_len]
+    if len(body) < 4 or body[0] != 1:
+        return None
+    hs_len = int.from_bytes(body[1:4], "big")
+    hello = body[4:4 + hs_len]
+    if len(hello) < 42:
+        return None
+    offset = 34
+    sid_len = hello[offset]
+    offset += 1 + sid_len
+    if offset + 2 > len(hello):
+        return None
+    cipher_len = struct.unpack("!H", hello[offset:offset + 2])[0]
+    offset += 2 + cipher_len
+    if offset >= len(hello):
+        return None
+    comp_len = hello[offset]
+    offset += 1 + comp_len
+    if offset + 2 > len(hello):
+        return {"sni": None, "alpn": []}
+    ext_total = struct.unpack("!H", hello[offset:offset + 2])[0]
+    offset += 2
+    end = min(len(hello), offset + ext_total)
+    sni = None
+    alpn = []
+    while offset + 4 <= end:
+        etype, elen = struct.unpack("!HH", hello[offset:offset + 4])
+        offset += 4
+        edata = hello[offset:offset + elen]
+        offset += elen
+        if etype == 0 and len(edata) >= 5:
+            pos = 2
+            limit = min(len(edata), 2 + struct.unpack("!H", edata[:2])[0])
+            while pos + 3 <= limit:
+                name_type = edata[pos]
+                name_len = struct.unpack("!H", edata[pos + 1:pos + 3])[0]
+                pos += 3
+                name = edata[pos:pos + name_len]
+                pos += name_len
+                if name_type == 0 and name:
+                    sni = name.decode("idna", "ignore")
+                    break
+        elif etype == 16 and len(edata) >= 2:
+            pos = 2
+            limit = min(len(edata), 2 + struct.unpack("!H", edata[:2])[0])
+            while pos < limit:
+                n = edata[pos]
+                pos += 1
+                proto = edata[pos:pos + n]
+                pos += n
+                if proto:
+                    alpn.append(proto.decode("ascii", "ignore"))
+    return {"sni": sni, "alpn": alpn}
+
+
+def summarize(path: Path, max_records: int):
+    global_info = None
+    counts = collections.Counter()
+    dns = collections.Counter()
+    tls_sni = collections.Counter()
+    tls_alpn = collections.Counter()
+    conns = collections.Counter()
+    packets = 0
+    captured_bytes = 0
+    first_ts = None
+    last_ts = None
+    for item in read_pcap(path):
+        if item["kind"] == "global":
+            global_info = {k: v for k, v in item.items() if k != "kind"}
+            continue
+        packets += 1
+        captured_bytes += item["inclLen"]
+        first_ts = item["ts"] if first_ts is None else min(first_ts, item["ts"])
+        last_ts = item["ts"] if last_ts is None else max(last_ts, item["ts"])
+        parsed = parse_packet(item["linktype"], item["payload"])
+        counts[f"network:{parsed.get('network', 'other')}"] += 1
+        counts[f"transport:{parsed.get('transport', 'other')}"] += 1
+        if "src" in parsed and "sport" in parsed:
+            conns[f"{parsed['transport']} {parsed['src']}:{parsed['sport']} -> {parsed['dst']}:{parsed['dport']}"] += 1
+        if parsed.get("transport") == "udp" and (parsed.get("sport") == 53 or parsed.get("dport") == 53):
+            for q in dns_queries(parsed.get("app", b"")):
+                dns[q["name"]] += 1
+        if parsed.get("transport") == "tcp" and (parsed.get("sport") in (443, 8443) or parsed.get("dport") in (443, 8443)):
+            tls = parse_tls_client_hello(parsed.get("app", b""))
+            if tls:
+                if tls.get("sni"):
+                    tls_sni[tls["sni"]] += 1
+                for proto in tls.get("alpn", []):
+                    tls_alpn[proto] += 1
+    duration = last_ts - first_ts if first_ts is not None and last_ts is not None else None
+    return {
+        "schemaVersion": 1,
+        "pcapPath": str(path),
+        "pcapFileBytes": path.stat().st_size,
+        "global": global_info or {},
+        "packetCount": packets,
+        "capturedBytes": captured_bytes,
+        "firstTimestamp": first_ts,
+        "lastTimestamp": last_ts,
+        "durationSeconds": duration,
+        "protocolCounts": dict(counts.most_common(max_records)),
+        "dnsQueries": dns.most_common(max_records),
+        "tlsSni": tls_sni.most_common(max_records),
+        "tlsAlpn": tls_alpn.most_common(max_records),
+        "topConnections": conns.most_common(max_records),
+    }
+
+
+def rows(items):
+    return [{"value": value, "count": count} for value, count in items]
+
+
+def main() -> int:
+    args = parse_args()
+    if args.self_test:
+        print("PCAP_SUMMARY_SELF_TEST_OK")
+        return 0
+    path = Path(args.pcap)
+    if not path.is_file():
+        print("pcap file missing", file=sys.stderr)
+        return 2
+    s = summarize(path, args.max_records)
+    if args.mode == "info":
+        out = {k: s[k] for k in ["schemaVersion", "pcapPath", "pcapFileBytes", "global", "packetCount", "capturedBytes", "firstTimestamp", "lastTimestamp", "durationSeconds"]}
+    elif args.mode == "protocols":
+        out = {"schemaVersion": 1, "packetCount": s["packetCount"], "capturedBytes": s["capturedBytes"], "protocolCounts": s["protocolCounts"]}
+    elif args.mode == "dns":
+        out = {"schemaVersion": 1, "dnsQueries": rows(s["dnsQueries"])}
+    elif args.mode == "tls":
+        out = {"schemaVersion": 1, "tlsSni": rows(s["tlsSni"]), "tlsAlpn": rows(s["tlsAlpn"])}
+    elif args.mode == "top-connections":
+        out = {"schemaVersion": 1, "topConnections": rows(s["topConnections"])}
+    else:
+        raise AssertionError(args.mode)
+    print(json.dumps(out, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

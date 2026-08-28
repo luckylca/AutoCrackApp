@@ -4,6 +4,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class DynamicHostProcessCommandFactoryTest {
@@ -34,6 +35,7 @@ class DynamicHostProcessCommandFactoryTest {
 
     @Test
     fun filteredProcfsDiscoveryFindsFullArgvName() {
+        assumeTrue("Host /proc is required for this procfs integration test", File("/proc").isDirectory)
         val marker = "com.luckylca.autocrack.testproc"
         val target = ProcessBuilder(
             "/bin/bash",
@@ -66,6 +68,7 @@ class DynamicHostProcessCommandFactoryTest {
 
     @Test
     fun filteredDiscoveryKeepsMatchingParentProcess() {
+        assumeTrue("Host /proc is required for this procfs integration test", File("/proc").isDirectory)
         val marker = "com.luckylca.autocrack.parentproc"
         val shell = DynamicHostProcessCommandFactory.build(
             suPath = "/bin/sh",

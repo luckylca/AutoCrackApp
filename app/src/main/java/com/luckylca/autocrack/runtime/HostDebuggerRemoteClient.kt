@@ -140,6 +140,63 @@ class HostDebuggerRemoteClient(
         return GdbRemoteRegisterValue(index = index, rawHex = response.lowercase())
     }
 
+    fun queryThreads(maxCount: Int = DEFAULT_THREAD_LIMIT): List<GdbRemoteThreadInfo> {
+        require(maxCount in 1..MAX_THREAD_LIMIT) {
+            "Thread observation limit must be 1..$MAX_THREAD_LIMIT"
+        }
+        val ids = LinkedHashSet<String>()
+        var response = request("qfThreadInfo")
+        while (true) {
+            if (response == "l") break
+            val batch = GdbRemoteThreadInfoParser.parseThreadBatch(response)
+            for (threadId in batch) {
+                ids += threadId
+                if (ids.size >= maxCount) break
+            }
+            if (ids.size >= maxCount) break
+            response = request("qsThreadInfo")
+        }
+        return ids.map { threadId ->
+            val extra = request("qThreadExtraInfo,$threadId")
+            GdbRemoteThreadInfo(
+                id = threadId,
+                name = GdbRemoteThreadInfoParser.parseExtraInfo(extra),
+            )
+        }
+    }
+
+    fun selectGeneralThread(threadId: String) {
+        val normalized = GdbRemoteThreadIdValidator.normalize(threadId)
+        val response = request("Hg$normalized")
+        require(response == "OK") {
+            "LLDB rejected selected general thread $normalized: $response"
+        }
+    }
+
+    /** Insert only a typed AArch64 hardware execution breakpoint (gdb-remote Z1). */
+    fun setHardwareExecutionBreakpoint(address: Long): GdbRemoteBreakpoint {
+        val normalized = GdbRemoteHardwareBreakpointValidator.normalizeAddress(address)
+        val payload = GdbRemoteBreakpointPacketFactory.insertHardwareExecution(normalized)
+        val response = request(payload)
+        require(response == "OK") {
+            "LLDB rejected hardware execution breakpoint at 0x${normalized.toString(16)}: $response"
+        }
+        return GdbRemoteBreakpoint(
+            address = normalized,
+            kindBytes = GdbRemoteHardwareBreakpointValidator.AARCH64_INSTRUCTION_BYTES,
+        )
+    }
+
+    /** Remove only a typed AArch64 hardware execution breakpoint previously tracked by the bridge. */
+    fun removeHardwareExecutionBreakpoint(address: Long) {
+        val normalized = GdbRemoteHardwareBreakpointValidator.normalizeAddress(address)
+        val payload = GdbRemoteBreakpointPacketFactory.removeHardwareExecution(normalized)
+        val response = request(payload)
+        require(response == "OK") {
+            "LLDB rejected hardware breakpoint removal at 0x${normalized.toString(16)}: $response"
+        }
+    }
+
     fun readMemory(address: Long, length: Int): GdbRemoteMemoryRead {
         require(address >= 0L) { "Memory address must be non-negative" }
         require(length in 1..MAX_MEMORY_READ_BYTES) {
@@ -161,12 +218,24 @@ class HostDebuggerRemoteClient(
         return response
     }
 
-    /** Single-step only the thread identified by the most recent LLDB stop reply. */
-    fun step(): String {
+    /**
+     * Resume while delivering only the exact non-SIGTRAP signal from the immediately preceding
+     * trusted stop reply. No caller can supply a signal number or arbitrary packet payload.
+     */
+    fun continuePassingLastStoppedSignal(): String {
         val stopReply = requireNotNull(lastStopReply) {
-            "Cannot single-step before LLDB has reported a stopped thread"
+            "Cannot pass through a target signal before LLDB has reported a stopped signal"
         }
-        val payload = GdbRemoteExecutionPacketFactory.stepFromStopReply(stopReply)
+        val payload = GdbRemoteStoppedSignalPassthrough.packetFromStopReply(stopReply)
+        val response = requestWithTimeout(payload, timeoutMillis = 0)
+        GdbRemoteRunReplyValidator.requireStopOrExit("stopped-signal passthrough", response)
+        rememberStopReply(response)
+        return response
+    }
+
+    /** Single-step only the thread identified by the most recent LLDB stop reply. */
+    fun step(threadId: String): String {
+        val payload = GdbRemoteExecutionPacketFactory.stepThread(threadId)
         val response = requestRunUntilStop(
             payload = payload,
             totalTimeoutMillis = STEP_WAIT_TIMEOUT_MILLIS,
@@ -175,6 +244,14 @@ class HostDebuggerRemoteClient(
         GdbRemoteRunReplyValidator.requireStopOrExit(payload, response)
         rememberStopReply(response)
         return response
+    }
+
+    /** Backward-compatible stop-thread step; UI/control bridge uses [step] with an explicit TID. */
+    fun step(): String {
+        val stopReply = requireNotNull(lastStopReply) {
+            "Cannot single-step before LLDB has reported a stopped thread"
+        }
+        return step(GdbRemoteStopReplyParser.requireThreadId(stopReply))
     }
 
     /** Send only the fixed gdb-remote interrupt byte; this is not a raw-packet adapter. */
@@ -473,6 +550,8 @@ class HostDebuggerRemoteClient(
         const val MAX_MEMORY_READ_BYTES = 4096
         const val MAX_REGISTER_LIMIT = 512
         const val DEFAULT_REGISTER_LIMIT = 128
+        const val MAX_THREAD_LIMIT = 256
+        const val DEFAULT_THREAD_LIMIT = 64
         internal const val ATTACH_WAIT_TIMEOUT_MILLIS = 90_000
         internal const val RUN_REPLY_POLL_TIMEOUT_MILLIS = 5_000
         internal const val INTERRUPT_RECOVERY_WAIT_TIMEOUT_MILLIS = 30_000
@@ -489,7 +568,7 @@ class HostDebuggerRemoteClient(
         private const val DEFAULT_OBSERVATION_TIMEOUT_MILLIS = 5_000
         private const val HANDSHAKE_TIMEOUT_MILLIS = 6_000
         private const val ATTACH_PREPARE_TIMEOUT_MILLIS = 10_000
-        private const val STEP_WAIT_TIMEOUT_MILLIS = 30_000
+        internal const val STEP_WAIT_TIMEOUT_MILLIS = 2_000
         private const val MAX_PACKET_PAYLOAD_CHARS = 8_192
         private const val MAX_PACKET_RESPONSE_BYTES = 1_048_576
         private const val MAX_ACK_RETRIES = 3
@@ -520,9 +599,58 @@ data class GdbRemoteRegisterInfo(
 
 data class GdbRemoteRegisterValue(val index: Int, val rawHex: String)
 
+data class GdbRemoteThreadInfo(
+    val id: String,
+    val name: String?,
+)
+
+data class GdbRemoteBreakpoint(
+    val address: Long,
+    val kindBytes: Int,
+)
+
 data class GdbRemoteMemoryRead(val address: Long, val bytes: ByteArray) {
     val hex: String
         get() = bytes.joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+}
+
+/**
+ * Typed exact stopped-signal pass-through.
+ *
+ * The signal number and thread ID are both taken from the same trusted stop reply. Callers cannot
+ * choose either value. The signal action is scoped to only that stopped thread, while all other
+ * threads receive a plain continue action. This avoids accidentally delivering one thread's signal
+ * to every thread in an all-stop Android process.
+ */
+object GdbRemoteStoppedSignalPassthrough {
+    const val SIGTRAP = 5
+
+    fun signalNumber(stopReply: String): Int? {
+        if (stopReply.length < 3) return null
+        if (stopReply[0] != 'T' && stopReply[0] != 'S') return null
+        return stopReply.substring(1, 3).toIntOrNull(16)
+    }
+
+    fun hasExplicitSignalReason(stopReply: String): Boolean =
+        stopReply.contains(";reason:signal;") || stopReply.endsWith(";reason:signal")
+
+    fun isAutoPassableTargetSignal(stopReply: String): Boolean {
+        val signal = signalNumber(stopReply) ?: return false
+        if (signal !in 1..0xff) return false
+        return signal != SIGTRAP || hasExplicitSignalReason(stopReply)
+    }
+
+    fun packetFromStopReply(stopReply: String): String {
+        val signal = requireNotNull(signalNumber(stopReply)) {
+            "Stop reply does not contain a resumable target signal"
+        }
+        require(signal in 1..0xff) { "Stopped signal must fit one byte" }
+        require(isAutoPassableTargetSignal(stopReply)) {
+            "SIGTRAP without explicit reason:signal is reserved for debugger stops"
+        }
+        val stoppedThreadId = GdbRemoteStopReplyParser.requireThreadId(stopReply)
+        return "vCont;C${signal.toString(16).padStart(2, '0')}:$stoppedThreadId;c"
+    }
 }
 
 /** Validate only protocol-defined continue-class stop/exit replies. */
@@ -566,10 +694,108 @@ object GdbRemoteStopReplyParser {
     private val THREAD_ID_PATTERN = Regex("^(?:p[0-9a-f]+\\.)?[0-9a-f]+$")
 }
 
+object GdbRemoteHardwareBreakpointHitPolicy {
+    fun isTrustedHit(stopReply: String, stopPc: Long, breakpointAddress: Long): Boolean {
+        if (stopPc != breakpointAddress) return false
+        if (GdbRemoteStoppedSignalPassthrough.signalNumber(stopReply) != GdbRemoteStoppedSignalPassthrough.SIGTRAP) {
+            return false
+        }
+        val reason = stopReply.substringAfter(";reason:", missingDelimiterValue = "")
+            .substringBefore(';')
+            .takeIf(String::isNotBlank)
+        return reason == null || reason == "breakpoint"
+    }
+}
+
+object GdbRemoteThreadIdValidator {
+    fun normalize(value: String): String {
+        val normalized = value.trim().lowercase()
+        require(THREAD_ID_PATTERN.matches(normalized)) { "Invalid GDB remote thread id" }
+        val tidPart = normalized.substringAfterLast('.')
+        val tid = tidPart.toULongOrNull(16)
+        require(tid != null && tid > 0uL) { "GDB remote thread id must be positive" }
+        return normalized
+    }
+
+    fun matchesTid(value: String, tid: Int): Boolean {
+        require(tid > 0) { "TID must be positive" }
+        val normalized = runCatching { normalize(value) }.getOrNull() ?: return false
+        return normalized.substringAfterLast('.').toULongOrNull(16) == tid.toLong().toULong()
+    }
+
+    private val THREAD_ID_PATTERN = Regex("^(?:p[0-9a-f]+\\.)?[0-9a-f]+$")
+}
+
+object GdbRemoteThreadInfoParser {
+    fun parseThreadBatch(payload: String): List<String> {
+        if (payload == "l") return emptyList()
+        require(payload.startsWith('m')) { "Unexpected LLDB thread-list response: $payload" }
+        val body = payload.drop(1)
+        if (body.isBlank()) return emptyList()
+        return body.split(',')
+            .filter(String::isNotBlank)
+            .map(GdbRemoteThreadIdValidator::normalize)
+    }
+
+    fun parseExtraInfo(payload: String): String? {
+        if (payload.isBlank() || payload.startsWith('E')) return null
+        val bytes = runCatching { GdbRemotePacketCodec.decodeHex(payload) }.getOrNull() ?: return null
+        return bytes.toString(StandardCharsets.UTF_8)
+            .trimEnd(Char(0))
+            .take(MAX_THREAD_NAME_CHARS)
+            .takeIf(String::isNotBlank)
+    }
+
+    private const val MAX_THREAD_NAME_CHARS = 128
+}
+
+object GdbRemoteHardwareBreakpointValidator {
+    const val AARCH64_INSTRUCTION_BYTES = 4
+
+    fun normalizeAddress(address: Long): Long {
+        require(address > 0L) { "Hardware breakpoint address must be positive" }
+        require(address % AARCH64_INSTRUCTION_BYTES == 0L) {
+            "AArch64 execution breakpoint address must be 4-byte aligned"
+        }
+        return address
+    }
+}
+
+/** Fixed Z1/z1 packet shapes; callers cannot select software/watchpoint/raw packet kinds. */
+object GdbRemoteBreakpointPacketFactory {
+    fun insertHardwareExecution(address: Long): String {
+        val normalized = GdbRemoteHardwareBreakpointValidator.normalizeAddress(address)
+        return "Z1,${normalized.toString(16)},${GdbRemoteHardwareBreakpointValidator.AARCH64_INSTRUCTION_BYTES}"
+    }
+
+    fun removeHardwareExecution(address: Long): String {
+        val normalized = GdbRemoteHardwareBreakpointValidator.normalizeAddress(address)
+        return "z1,${normalized.toString(16)},${GdbRemoteHardwareBreakpointValidator.AARCH64_INSTRUCTION_BYTES}"
+    }
+}
+
+object GdbRemoteRegisterValueDecoder {
+    fun unsignedLittleEndianLong(rawHex: String): Long {
+        val bytes = GdbRemotePacketCodec.decodeHex(rawHex)
+        require(bytes.isNotEmpty() && bytes.size <= Long.SIZE_BYTES) {
+            "Register value must contain 1..8 bytes"
+        }
+        var value = 0L
+        bytes.forEachIndexed { index, byte ->
+            value = value or ((byte.toLong() and 0xffL) shl (index * 8))
+        }
+        require(value > 0L) { "Register value is not a positive user-space address" }
+        return value
+    }
+}
+
 /** Fixed execution-control packet shapes; no caller can provide an arbitrary packet string. */
 object GdbRemoteExecutionPacketFactory {
+    fun stepThread(threadId: String): String =
+        "vCont;s:${GdbRemoteThreadIdValidator.normalize(threadId)}"
+
     fun stepFromStopReply(stopReply: String): String =
-        "vCont;s:${GdbRemoteStopReplyParser.requireThreadId(stopReply)}"
+        stepThread(GdbRemoteStopReplyParser.requireThreadId(stopReply))
 }
 
 object GdbRemoteRegisterInfoParser {
