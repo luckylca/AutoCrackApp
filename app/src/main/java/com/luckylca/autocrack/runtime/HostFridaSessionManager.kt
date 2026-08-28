@@ -248,6 +248,41 @@ object HostFridaCommandFactory {
         return listOf(suPath, "-c", shell)
     }
 
+    fun buildRecoverLegacyTmpHelper(
+        suPath: String,
+        expectedBinarySha256: String,
+    ): List<String> {
+        requireSuPath(suPath)
+        require(expectedBinarySha256.matches(Regex("^[0-9a-f]{64}$"))) { "Frida binary SHA-256 must be lowercase hex" }
+        val legacyBinary = RootToolCommandFactory.shellQuote("/data/local/tmp/frida-server-android")
+        val expectedSha256 = RootToolCommandFactory.shellQuote(expectedBinarySha256)
+        val shell = """
+            binary=$legacyBinary
+            expected_sha256=$expectedSha256
+            [ -f "${'$'}binary" ] || exit 64
+            [ ! -L "${'$'}binary" ] || exit 65
+            actual_sha256=${'$'}(sha256sum "${'$'}binary" 2>/dev/null | awk '{ print ${'$'}1 }')
+            [ "${'$'}actual_sha256" = "${'$'}expected_sha256" ] || exit 67
+            port_hex=$(printf '%04X' ${HostFridaSessionManager.DEFAULT_PORT})
+            listen_inode=${'$'}(awk -v endpoint="0100007F:${'$'}port_hex" '${'$'}2 == endpoint && ${'$'}4 == "0A" { print ${'$'}10; exit }' /proc/net/tcp 2>/dev/null)
+            [ -n "${'$'}listen_inode" ] || exit 64
+            for proc in /proc/[0-9]*; do
+              pid=${'$'}{proc##*/}
+              argv0=${'$'}(tr '\000' '\n' < "${'$'}proc/cmdline" 2>/dev/null | head -n 1)
+              [ "${'$'}argv0" = "${'$'}binary" ] || continue
+              cmdline=${'$'}(tr '\000' ' ' < "${'$'}proc/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//')
+              [ "${'$'}cmdline" = "${'$'}binary" ] || continue
+              if ls -l "${'$'}proc"/fd 2>/dev/null | grep -F "socket:[${'$'}listen_inode]" >/dev/null; then
+                kill -TERM "${'$'}pid"
+                printf 'LEGACY_FRIDA_HELPER_STOPPED pid=%s\n' "${'$'}pid"
+                exit 0
+              fi
+            done
+            exit 64
+        """.trimIndent()
+        return listOf(suPath, "-c", shell)
+    }
+
     fun buildClientCommand(
         pid: Int,
         operation: HostFridaClientOperation,
@@ -587,6 +622,21 @@ class HostFridaSessionManager(
             file.delete()
         }
         if (stoppedAny) delay(STALE_HELPER_STOP_DELAY_MILLIS)
+        val legacy = runner.run(
+            command = HostFridaCommandFactory.buildRecoverLegacyTmpHelper(
+                suPath = suPath,
+                expectedBinarySha256 = SERVER_BINARY_SHA256,
+            ),
+            label = "Recover legacy /data/local/tmp AutoCrack Frida helper",
+            timeoutMillis = 3_000L,
+        )
+        when {
+            legacy.succeeded -> delay(STALE_HELPER_STOP_DELAY_MILLIS)
+            legacy.exitCode in setOf(64, 65, 67) -> Unit
+            else -> throw IllegalStateException(
+                legacy.failure ?: legacy.stderr.ifBlank { "无法检查旧 Frida helper" },
+            )
+        }
     }
 
     private fun allocateLoopbackPort(): Int = ServerSocket().use { socket ->

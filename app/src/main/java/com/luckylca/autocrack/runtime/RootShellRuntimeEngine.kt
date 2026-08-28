@@ -125,6 +125,11 @@ class RootShellRuntimeEngine(
                     )
                     when (finished) {
                         HostWaitOutcome.FINISHED -> onStage("host_wait_finished")
+                        HostWaitOutcome.PROCESS_EXITED_WITHOUT_STATUS -> {
+                            onStage("host_wait_process_exited_without_status")
+                            failure = "Root shell process exited before writing authoritative exit-status file"
+                            stopProcess(runningProcess)
+                        }
                         HostWaitOutcome.EXIT_STATUS_READY -> {
                             onStage("host_wait_status_file_ready")
                             exitCode = readExitStatus(exitStatusFile)
@@ -292,6 +297,10 @@ class RootShellRuntimeEngine(
                     return HostWaitOutcome.EXIT_STATUS_READY
                 }
             }
+            if (isZombieProcess(process)) {
+                onStage("host_wait_process_zombie_without_status:${exitStatusFile.name}")
+                return HostWaitOutcome.PROCESS_EXITED_WITHOUT_STATUS
+            }
             if (System.currentTimeMillis() >= deadline) {
                 return HostWaitOutcome.TIMEOUT
             }
@@ -304,6 +313,23 @@ class RootShellRuntimeEngine(
             ?.readText(Charsets.UTF_8)
             ?.trim()
             ?.toIntOrNull()
+    }.getOrNull()
+
+    private fun isZombieProcess(process: Process): Boolean {
+        val pid = readAndroidProcessPid(process) ?: return false
+        return readLinuxProcessState(pid) == 'Z'
+    }
+
+    private fun readAndroidProcessPid(process: Process): Long? = runCatching {
+        val field = process.javaClass.getDeclaredField("pid")
+        field.isAccessible = true
+        (field.get(process) as? Number)?.toLong()
+    }.getOrNull()
+
+    private fun readLinuxProcessState(pid: Long): Char? = runCatching {
+        val stat = File("/proc/$pid/stat").readText(Charsets.UTF_8)
+        stat.substringAfterLast(") ")
+            .firstOrNull { it != ' ' }
     }.getOrNull()
 
     private fun stopProcess(process: Process) {
@@ -368,6 +394,7 @@ class RootShellRuntimeEngine(
 
     private enum class HostWaitOutcome {
         FINISHED,
+        PROCESS_EXITED_WITHOUT_STATUS,
         EXIT_STATUS_READY,
         TIMEOUT,
     }
