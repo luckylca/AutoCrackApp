@@ -22,6 +22,27 @@ class ToolpackPackageManifestTest {
     }
 
     @Test
+    fun optionalDescriptionsRemainBackwardCompatibleAndRoundTrip() {
+        val described = validManifest()
+            .replace(
+                "\"title\": \"APK and DEX static analysis\",",
+                "\"title\": \"APK and DEX static analysis\",\n  \"description\": \"Static Android inspection tools\",",
+            )
+            .replace(
+                "{\"name\": \"jadx\", \"relativePath\": \"bin/jadx\"}",
+                "{\"name\": \"jadx\", \"relativePath\": \"bin/jadx\", \"description\": \"DEX to Java decompiler\"}",
+            )
+        val manifest = ToolpackPackageManifest.parse(described)
+
+        assertEquals("Static Android inspection tools", manifest.description)
+        assertEquals("DEX to Java decompiler", manifest.commands.first().description)
+        val roundTrip = ToolpackPackageManifest.parse(manifest.toJson().toString())
+        assertEquals(manifest.description, roundTrip.description)
+        assertEquals(manifest.commands.first().description, roundTrip.commands.first().description)
+        assertEquals("", ToolpackPackageManifest.parse(validManifest()).description)
+    }
+
+    @Test
     fun rejectsTraversalInRequiredPath() {
         val invalid = validManifest().replace(
             "\"requiredPaths\": [\"bin/jadx\", \"bin/apktool\"]",

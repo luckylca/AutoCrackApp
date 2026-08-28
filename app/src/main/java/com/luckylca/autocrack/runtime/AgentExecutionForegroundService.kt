@@ -61,7 +61,7 @@ class AgentExecutionForegroundService : Service() {
             "AutoCrackApp Agent 任务",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "保持长时间 Agent、rootfs、Frida 与调试工具任务运行"
+            description = "保持长时间 Mobile Agent 与 rootfs 工具任务运行"
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
@@ -96,11 +96,11 @@ class AgentExecutionForegroundService : Service() {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val targetText = packageName?.takeIf { it != "unknown" }?.let { "目标 $it · " }.orEmpty()
+        val taskText = packageName?.takeIf { it != "unknown" }?.let { "$it · " }.orEmpty()
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("AutoCrackApp Agent 运行中")
-            .setContentText("${targetText}活跃任务 $leaseCount")
+            .setContentTitle("Mobile Agent 运行中")
+            .setContentText("${taskText}活跃任务 $leaseCount")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

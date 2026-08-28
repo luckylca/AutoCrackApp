@@ -20,6 +20,7 @@ import com.luckylca.autocrack.runtime.HostProcessSummary
 import com.luckylca.autocrack.runtime.RootShellRuntimeEngine
 import com.luckylca.autocrack.runtime.RuntimeLayout
 import com.luckylca.autocrack.runtime.ToolpackPackageInstaller
+import com.luckylca.autocrack.runtime.WorkspaceFileService
 import java.io.File
 
 /** Builds one bounded Agent tool set permanently scoped to the user's selected APK workspace. */
@@ -171,6 +172,64 @@ class AgentToolSessionFactory(
 
         onStage("factory_return:${executors.sumOf { it.tools.size }}")
         return AgentToolSession(executors)
+    }
+
+    suspend fun createMobileAgent(
+        sessionId: String,
+        knownRootStatus: RootStatus? = null,
+        onStage: (String) -> Unit = {},
+    ): MobileAgentRuntimeSession {
+        val layout = RuntimeLayout(appContext).initialize()
+        require(layout.readRootfsState() == com.luckylca.autocrack.runtime.RuntimeRootfsState.INSTALLED) { "Debian rootfs 尚未安装完成" }
+        val root = knownRootStatus ?: rootDetector.inspect()
+        require(root.isRootGranted) { root.diagnostic ?: "Mobile Agent 需要 Root" }
+        val suPath = requireNotNull(root.suPath) { "Root granted without a usable su path" }
+        val host = RootShellRuntimeEngine(layout = layout, suPath = suPath, onStage = { onStage("mobile_root_$it") })
+        val chroot = ChrootRuntimeEngine(layout, host) { onStage("mobile_chroot_$it") }
+        val installed = ToolpackPackageInstaller(appContext, layout).listInstalled()
+        val commands = installed.flatMap { it.manifest.commands }.map { it.name }.distinct().sorted()
+        val workspace = WorkspaceFileService(layout.createAgentWorkspace(sessionId))
+        val executor = RawBashAgentToolExecutor(chroot = chroot, host = host, workspaceFiles = workspace, availableToolCommands = commands)
+        onStage("mobile_ready:${commands.joinToString(",")}")
+        return MobileAgentRuntimeSession(
+            tools = AgentToolSession(listOf(executor)),
+            installedToolpacks = installed,
+            workspacePath = workspace.rootPath(),
+            cancelAllCommands = host::cancelAll,
+        )
+    }
+
+    suspend fun createRawBash(
+        extraction: ExtractionReport,
+        knownRootStatus: RootStatus? = null,
+        dynamicToolsAllowed: Boolean = false,
+        onStage: (String) -> Unit = {},
+    ): AgentToolSession {
+        PackageOutputParser.requireValidPackageName(extraction.packageName)
+        onStage("raw_factory_package_validated")
+        val layout = RuntimeLayout(appContext).initialize()
+        onStage("raw_factory_layout_ready")
+        val root = knownRootStatus ?: rootDetector.inspect()
+        require(root.isRootGranted) { root.diagnostic ?: "Raw Bash Agent tools require Root" }
+        val suPath = requireNotNull(root.suPath) { "Root granted without a usable su path" }
+        onStage("raw_factory_root_ready")
+        val host = RootShellRuntimeEngine(
+            layout = layout,
+            suPath = suPath,
+            onStage = { stage -> onStage("raw_root_$stage") },
+        )
+        val chroot = ChrootRuntimeEngine(layout, host) { stage -> onStage("raw_chroot_$stage") }
+        val workspace = WorkspaceFileService(layout.createRuntimeWorkspace())
+        onStage("raw_factory_workspace_ready")
+        val executor = RawBashAgentToolExecutor(
+            packageName = extraction.packageName,
+            chroot = chroot,
+            host = host,
+            workspaceFiles = workspace,
+            dynamicToolsAllowed = dynamicToolsAllowed,
+        )
+        onStage("raw_factory_return:${executor.tools.size}")
+        return AgentToolSession(listOf(executor))
     }
 
     companion object {

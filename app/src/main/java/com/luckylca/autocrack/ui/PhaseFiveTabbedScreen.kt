@@ -76,11 +76,8 @@ import com.luckylca.autocrack.runtime.AgentExecutionForegroundService
 import kotlinx.coroutines.launch
 
 private enum class PhaseFiveTab(val title: String) {
-    APPS("应用"),
-    WORKSPACE("工作区"),
-    ANALYSIS("分析"),
-    MODEL("模型"),
-    DIAGNOSTICS("诊断"),
+    SESSION("会话"),
+    SETTINGS("设置"),
 }
 
 private sealed interface TabbedAppListState {
@@ -127,15 +124,17 @@ fun PhaseFiveTabbedScreen() {
     val configStore = remember(appContext) { SecureLlmConfigStore(appContext) }
     val scope = rememberCoroutineScope()
 
-    var selectedTab by remember { mutableStateOf(PhaseFiveTab.APPS) }
+    var selectedTab by remember { mutableStateOf(PhaseFiveTab.SESSION) }
     var refreshKey by remember { mutableIntStateOf(0) }
     var rootStatus by remember { mutableStateOf<RootStatus?>(null) }
     var appListState by remember { mutableStateOf<TabbedAppListState>(TabbedAppListState.Loading) }
     var workspaceState by remember { mutableStateOf<TabbedWorkspaceState>(TabbedWorkspaceState.Idle) }
     var queryState by remember { mutableStateOf<TabbedQueryState>(TabbedQueryState.Idle) }
     var selectedPackageName by remember { mutableStateOf<String?>(null) }
+    var targetPackageInput by remember { mutableStateOf("") }
     var appSearch by remember { mutableStateOf("") }
     var agentQuestion by remember { mutableStateOf("") }
+    var autoRunAfterWorkspaceReady by remember { mutableStateOf(false) }
     var lastLocalResult by remember { mutableStateOf<LocalAgentResult?>(null) }
     var lastLlmAnswer by remember { mutableStateOf<LlmAgentAnswer?>(null) }
     var allowDynamicTools by remember { mutableStateOf(false) }
@@ -166,6 +165,7 @@ fun PhaseFiveTabbedScreen() {
         workspaceState = TabbedWorkspaceState.Idle
         queryState = TabbedQueryState.Idle
         selectedPackageName = null
+        targetPackageInput = ""
         lastLocalResult = null
         lastLlmAnswer = null
         recordEvent("初始化", "开始检测 Root 并读取应用列表")
@@ -210,37 +210,22 @@ fun PhaseFiveTabbedScreen() {
             return@LaunchedEffect
         }
 
-        try {
-            val apps = repository.listInstalledApps(status)
-            appListState = TabbedAppListState.Ready(apps)
-            recordEvent("应用列表", "成功读取 ${apps.size} 个应用")
-        } catch (exception: Exception) {
-            val message = exception.message ?: "读取应用列表时发生未知错误"
-            appListState = TabbedAppListState.Error(message)
-            recordEvent("应用列表", message, PhaseFiveDiagnosticSeverity.ERROR, exception)
-        }
+        appListState = TabbedAppListState.Ready(emptyList())
+        recordEvent("会话", "已进入 Pi 式会话模式：不预读应用列表，直接输入包名创建会话")
     }
 
-    val allApps = (appListState as? TabbedAppListState.Ready)?.apps.orEmpty()
-    val filteredApps = remember(allApps, appSearch) {
-        val query = appSearch.trim()
-        if (query.isBlank()) {
-            allApps
-        } else {
-            allApps.filter { app ->
-                app.packageName.contains(query, ignoreCase = true) ||
-                    app.primaryApkPath.orEmpty().contains(query, ignoreCase = true)
-            }
-        }
-    }
     val workspaceRunning = workspaceState is TabbedWorkspaceState.Running
     val queryRunning = queryState is TabbedQueryState.Running
     val readyWorkspace = (workspaceState as? TabbedWorkspaceState.Ready)?.workspace
 
-    fun buildWorkspace(app: InstalledApp) {
+    fun buildWorkspace(packageName: String, autoRun: Boolean) {
         val status = rootStatus ?: return
-        selectedPackageName = app.packageName
-        selectedTab = PhaseFiveTab.WORKSPACE
+        val normalizedPackageName = packageName.trim()
+        if (normalizedPackageName.isBlank()) return
+        selectedPackageName = normalizedPackageName
+        targetPackageInput = normalizedPackageName
+        selectedTab = PhaseFiveTab.SESSION
+        autoRunAfterWorkspaceReady = autoRun
         lastLocalResult = null
         lastLlmAnswer = null
         allowDynamicTools = false
@@ -248,14 +233,14 @@ fun PhaseFiveTabbedScreen() {
 
         scope.launch {
             var stage = "APK 提取"
-            workspaceState = TabbedWorkspaceState.Running(app.packageName, stage)
-            recordEvent(stage, "开始提取 ${app.packageName} 的 Base / Split APK")
+            workspaceState = TabbedWorkspaceState.Running(normalizedPackageName, stage)
+            recordEvent(stage, "开始提取 ${normalizedPackageName} 的 Base / Split APK")
             try {
-                val extraction = repository.extractPackage(status, app.packageName)
+                val extraction = repository.extractPackage(status, normalizedPackageName)
                 recordEvent(stage, "提取完成，APK 数量 ${extraction.artifacts.size}")
 
                 stage = "静态分析"
-                workspaceState = TabbedWorkspaceState.Running(app.packageName, stage)
+                workspaceState = TabbedWorkspaceState.Running(normalizedPackageName, stage)
                 recordEvent(stage, "开始解析 Manifest、签名、DEX、资源与 SO")
                 val staticReport = staticAnalyzer.analyze(extraction)
                 recordEvent(
@@ -264,7 +249,7 @@ fun PhaseFiveTabbedScreen() {
                 )
 
                 stage = "DEX 索引"
-                workspaceState = TabbedWorkspaceState.Running(app.packageName, stage)
+                workspaceState = TabbedWorkspaceState.Running(normalizedPackageName, stage)
                 recordEvent(stage, "开始建立类、方法、字段和字符串索引")
                 val dexIndex = dexIndexBuilder.build(extraction)
                 val workspace = TabbedAgentWorkspace(extraction, staticReport, dexIndex)
@@ -277,10 +262,10 @@ fun PhaseFiveTabbedScreen() {
                 if (agentQuestion.isBlank()) {
                     agentQuestion = "分析这个应用的登录、Token 保存和加密相关实现"
                 }
-                selectedTab = PhaseFiveTab.ANALYSIS
+                selectedTab = PhaseFiveTab.SESSION
             } catch (exception: Exception) {
                 val message = exception.message ?: "建立 Agent 工作区失败"
-                workspaceState = TabbedWorkspaceState.Error(app.packageName, stage, message)
+                workspaceState = TabbedWorkspaceState.Error(normalizedPackageName, stage, message)
                 recordEvent(stage, message, PhaseFiveDiagnosticSeverity.ERROR, exception)
             }
         }
@@ -344,10 +329,10 @@ fun PhaseFiveTabbedScreen() {
                     workspace.extraction.packageName,
                 )
                 toolSession = runCatching {
-                    toolSessionFactory.create(
+                    toolSessionFactory.createRawBash(
                         extraction = workspace.extraction,
-                        allowDynamicTools = allowDynamicTools,
                         knownRootStatus = rootStatus,
+                        dynamicToolsAllowed = allowDynamicTools,
                     )
                 }.onFailure { exception ->
                     recordEvent(
@@ -364,18 +349,21 @@ fun PhaseFiveTabbedScreen() {
                 val answer = if (session != null && session.tools.isNotEmpty()) {
                     recordEvent(
                         stage,
-                        "向 ${config.model} 注册 ${session.tools.size} 个受控工具；动态工具=" +
-                            if (allowDynamicTools) "已由用户授权" else "关闭",
+                        "向 ${config.model} 注册 Raw Bash Agent Runtime：${session.tools.joinToString { it.name }}",
                     )
                     val toolAnswer = toolLlmClient.completeWithTools(
                         config = config,
                         systemPrompt = LlmPromptBuilder.SYSTEM_PROMPT +
-                            "\n你可以调用 AutoCrack 注册的受控工具补充证据。所有工具已绑定到用户当前选择的应用；" +
-                            "不要猜测路径、PID 或未返回的数据。" +
+                            "\n你现在使用 AutoCrack Raw Bash Agent Runtime。" +
+                            "工具只有 exec_bash、read_file、write_file、kill_process。" +
+                            "优先通过 exec_bash 在 /workspace 下直接调用原生命令；" +
+                            "可以自己写 Bash/Python 脚本迭代分析 jadx、apktool、rizin、readelf、strings、grep、find、frida、lldb、perfetto、tcpdump 等环境中可用工具。" +
+                            "最小边界是 workspace、timeout、输出上限、审计日志和 kill_process。" +
+                            "目标包名已通过 AUTOC_TARGET_PACKAGE 环境变量提供。" +
                             if (allowDynamicTools) {
-                                " 用户已明确允许本次 Agent 使用动态调试工具；LLDB 与 Frida 不得并发使用。"
+                                " 用户已允许本轮偏动态/侵入式研究；仍需控制时长并及时清理。"
                             } else {
-                                " 本次没有授权动态调试；不要尝试启动或附加动态调试后端。"
+                                " 默认先做静态和只读动态观测；确需附加/Hook 时先说明证据理由。"
                             },
                         userPrompt = prompt,
                         tools = session.tools,
@@ -393,7 +381,7 @@ fun PhaseFiveTabbedScreen() {
                         completedAtEpochMillis = toolAnswer.completedAtEpochMillis,
                     )
                 } else {
-                    recordEvent(stage, "当前没有可注册的 toolpack，使用证据-only 模型请求")
+                    recordEvent(stage, "Raw Bash 工具会话不可用，使用证据-only 模型请求")
                     llmClient.complete(
                         config = config,
                         prompt = prompt,
@@ -416,6 +404,57 @@ fun PhaseFiveTabbedScreen() {
         }
     }
 
+    LaunchedEffect(workspaceState, autoRunAfterWorkspaceReady, savedConfig, agentQuestion) {
+        val ready = (workspaceState as? TabbedWorkspaceState.Ready)?.workspace
+        if (autoRunAfterWorkspaceReady && ready != null) {
+            autoRunAfterWorkspaceReady = false
+            if (savedConfig != null && agentQuestion.trim().length >= MIN_QUESTION_LENGTH) {
+                runModelAnalysis(ready)
+            }
+        }
+    }
+
+    fun saveModelConfig() {
+        runCatching {
+            val key = apiKeyInput.ifBlank {
+                savedConfig?.apiKey ?: error("首次配置必须输入 API Key")
+            }
+            val config = LlmProviderConfig(
+                baseUrl = baseUrlInput,
+                model = modelInput,
+                apiKey = key,
+            ).validated()
+            configStore.save(config)
+            savedConfig = config
+            baseUrlInput = config.baseUrl
+            modelInput = config.model
+            apiKeyInput = ""
+            configMessage = "配置已保存"
+            recordEvent("模型配置", "成功保存 ${config.model} / ${config.baseUrl}")
+        }.onFailure { exception ->
+            val message = exception.message ?: "保存模型配置失败"
+            configMessage = message
+            recordEvent("模型配置", message, PhaseFiveDiagnosticSeverity.ERROR, exception)
+        }
+    }
+
+    fun clearModelConfig() {
+        runCatching { configStore.clear() }
+            .onSuccess {
+                savedConfig = null
+                baseUrlInput = ""
+                modelInput = ""
+                apiKeyInput = ""
+                configMessage = "已清除外部模型配置"
+                recordEvent("模型配置", "已清除外部模型配置")
+            }
+            .onFailure { exception ->
+                val message = exception.message ?: "清除模型配置失败"
+                configMessage = message
+                recordEvent("模型配置", message, PhaseFiveDiagnosticSeverity.ERROR, exception)
+            }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -428,7 +467,7 @@ fun PhaseFiveTabbedScreen() {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = selectedPackageName ?: "Phase 5.2 · Bottom Navigation DEX Agent",
+                text = selectedPackageName ?: "Phase 6 · Raw Bash Agent",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 maxLines = 1,
@@ -442,42 +481,35 @@ fun PhaseFiveTabbedScreen() {
                 .fillMaxWidth(),
         ) {
             when (selectedTab) {
-                PhaseFiveTab.APPS -> AppsTab(
+                PhaseFiveTab.SESSION -> SessionTab(
                     rootStatus = rootStatus,
-                    appListState = appListState,
-                    filteredApps = filteredApps,
-                    searchQuery = appSearch,
-                    onSearchChange = { appSearch = it },
-                    busy = workspaceRunning || queryRunning,
-                    onRefresh = { refreshKey += 1 },
-                    onBuildWorkspace = ::buildWorkspace,
-                )
-
-                PhaseFiveTab.WORKSPACE -> WorkspaceTab(
-                    state = workspaceState,
-                    onOpenApps = { selectedTab = PhaseFiveTab.APPS },
-                    onOpenAnalysis = { selectedTab = PhaseFiveTab.ANALYSIS },
-                    onOpenDiagnostics = { selectedTab = PhaseFiveTab.DIAGNOSTICS },
-                )
-
-                PhaseFiveTab.ANALYSIS -> AnalysisTab(
-                    workspace = readyWorkspace,
+                    packageName = targetPackageInput,
+                    onPackageNameChange = { targetPackageInput = it },
                     question = agentQuestion,
                     onQuestionChange = { agentQuestion = it },
+                    workspaceState = workspaceState,
                     queryState = queryState,
+                    workspace = readyWorkspace,
                     localResult = lastLocalResult,
                     llmAnswer = lastLlmAnswer,
                     hasModelConfig = savedConfig != null,
-                    allowDynamicTools = allowDynamicTools,
-                    onDynamicToolsChange = { allowDynamicTools = it },
+                    debugMode = allowDynamicTools,
+                    busy = workspaceRunning || queryRunning,
+                    onNewSession = {
+                        lastLocalResult = null
+                        lastLlmAnswer = null
+                        queryState = TabbedQueryState.Idle
+                        buildWorkspace(
+                            targetPackageInput,
+                            autoRun = savedConfig != null && agentQuestion.trim().length >= MIN_QUESTION_LENGTH,
+                        )
+                    },
+                    onRunAgent = { readyWorkspace?.let(::runModelAnalysis) },
                     onLocalAnalyze = { readyWorkspace?.let(::runLocalAnalysis) },
-                    onModelAnalyze = { readyWorkspace?.let(::runModelAnalysis) },
-                    onOpenApps = { selectedTab = PhaseFiveTab.APPS },
-                    onOpenModel = { selectedTab = PhaseFiveTab.MODEL },
-                    onOpenDiagnostics = { selectedTab = PhaseFiveTab.DIAGNOSTICS },
+                    onOpenSettings = { selectedTab = PhaseFiveTab.SETTINGS },
                 )
 
-                PhaseFiveTab.MODEL -> ModelTab(
+                PhaseFiveTab.SETTINGS -> SettingsTab(
                     savedConfig = savedConfig,
                     baseUrl = baseUrlInput,
                     onBaseUrlChange = { baseUrlInput = it },
@@ -486,75 +518,20 @@ fun PhaseFiveTabbedScreen() {
                     apiKey = apiKeyInput,
                     onApiKeyChange = { apiKeyInput = it },
                     message = configMessage,
-                    onSave = {
-                        runCatching {
-                            val key = apiKeyInput.ifBlank {
-                                savedConfig?.apiKey ?: error("首次配置必须输入 API Key")
-                            }
-                            val config = LlmProviderConfig(
-                                baseUrl = baseUrlInput,
-                                model = modelInput,
-                                apiKey = key,
-                            ).validated()
-                            configStore.save(config)
-                            savedConfig = config
-                            baseUrlInput = config.baseUrl
-                            modelInput = config.model
-                            apiKeyInput = ""
-                            configMessage = "配置已使用 Android Keystore 加密保存"
-                            recordEvent("模型配置", "成功保存 ${config.model} / ${config.baseUrl}")
-                        }.onFailure { exception ->
-                            val message = exception.message ?: "保存模型配置失败"
-                            configMessage = message
-                            recordEvent(
-                                "模型配置",
-                                message,
-                                PhaseFiveDiagnosticSeverity.ERROR,
-                                exception,
-                            )
-                        }
-                    },
-                    onClear = {
-                        runCatching { configStore.clear() }
-                            .onSuccess {
-                                savedConfig = null
-                                baseUrlInput = ""
-                                modelInput = ""
-                                apiKeyInput = ""
-                                configMessage = "已清除外部模型配置"
-                                recordEvent("模型配置", "已清除外部模型配置")
-                            }
-                            .onFailure { exception ->
-                                val message = exception.message ?: "清除模型配置失败"
-                                configMessage = message
-                                recordEvent(
-                                    "模型配置",
-                                    message,
-                                    PhaseFiveDiagnosticSeverity.ERROR,
-                                    exception,
-                                )
-                            }
-                    },
-                )
-
-                PhaseFiveTab.DIAGNOSTICS -> DiagnosticsTab(
+                    debugMode = allowDynamicTools,
+                    onToggleDebugMode = { allowDynamicTools = !allowDynamicTools },
                     selectedPackageName = selectedPackageName,
                     rootStatus = rootStatus,
-                    appListState = appListState,
                     workspaceState = workspaceState,
                     queryState = queryState,
-                    workspace = readyWorkspace,
-                    localResult = lastLocalResult,
-                    llmAnswer = lastLlmAnswer,
                     events = diagnosticEvents,
-                    note = diagnosticNote,
-                    onNoteChange = { diagnosticNote = it },
-                    onCopy = {
+                    onSave = ::saveModelConfig,
+                    onClear = ::clearModelConfig,
+                    onCopyDiagnostics = {
                         val snapshot = PhaseFiveDiagnosticSnapshot(
                             versionName = BuildConfig.VERSION_NAME,
                             device = "${Build.MANUFACTURER} ${Build.MODEL}",
-                            androidVersion =
-                                "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                            androidVersion = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
                             abi = Build.SUPPORTED_ABIS.joinToString(),
                             selectedPackageName = selectedPackageName,
                             rootStatus = rootStatus.toDiagnosticText(),
@@ -572,18 +549,12 @@ fun PhaseFiveTabbedScreen() {
                         val report = PhaseFiveDiagnosticReportFormatter.format(snapshot)
                         val clipboard = uiContext.getSystemService(ClipboardManager::class.java)
                         clipboard.setPrimaryClip(
-                            ClipData.newPlainText("AutoCrackApp Phase 5 诊断报告", report),
+                            ClipData.newPlainText("AutoCrackApp 诊断报告", report),
                         )
-                        Toast.makeText(
-                            uiContext,
-                            "完整诊断报告已复制",
-                            Toast.LENGTH_SHORT,
-                        ).show()
+                        Toast.makeText(uiContext, "诊断报告已复制", Toast.LENGTH_SHORT).show()
                     },
-                    onClear = {
-                        diagnosticEvents = listOf(
-                            phaseFiveDiagnosticEvent("诊断", "用户清空了旧诊断事件"),
-                        )
+                    onClearEvents = {
+                        diagnosticEvents = listOf(phaseFiveDiagnosticEvent("诊断", "用户清空了旧诊断事件"))
                     },
                 )
             }
@@ -611,6 +582,270 @@ fun PhaseFiveTabbedScreen() {
                 )
             }
         }
+    }
+}
+
+
+@Composable
+private fun SessionTab(
+    rootStatus: RootStatus?,
+    packageName: String,
+    onPackageNameChange: (String) -> Unit,
+    question: String,
+    onQuestionChange: (String) -> Unit,
+    workspaceState: TabbedWorkspaceState,
+    queryState: TabbedQueryState,
+    workspace: TabbedAgentWorkspace?,
+    localResult: LocalAgentResult?,
+    llmAnswer: LlmAgentAnswer?,
+    hasModelConfig: Boolean,
+    debugMode: Boolean,
+    busy: Boolean,
+    onNewSession: () -> Unit,
+    onRunAgent: () -> Unit,
+    onLocalAnalyze: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+        item {
+            TabbedInfoCard("新会话") {
+                Text(
+                    "像聊天一样告诉 Agent 要分析哪个 APK。这里直接输入包名，不再从应用列表里选。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = packageName,
+                    onValueChange = onPackageNameChange,
+                    label = { Text("目标包名") },
+                    supportingText = { Text("例如 com.example.app") },
+                    singleLine = true,
+                    enabled = !busy,
+                )
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = question,
+                    onValueChange = onQuestionChange,
+                    label = { Text("你要 Agent 做什么") },
+                    supportingText = { Text("例如：分析登录校验、定位 native 校验、找网络签名逻辑。") },
+                    minLines = 4,
+                    maxLines = 8,
+                    enabled = !busy,
+                )
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy && packageName.trim().isNotBlank(),
+                    onClick = onNewSession,
+                ) {
+                    Text(if (hasModelConfig && question.trim().length >= MIN_QUESTION_LENGTH) "新建会话并运行" else "新建会话")
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy && workspace != null && hasModelConfig && question.trim().length >= MIN_QUESTION_LENGTH,
+                    onClick = onRunAgent,
+                ) {
+                    Text("继续当前会话")
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !busy && workspace != null && question.trim().length >= MIN_QUESTION_LENGTH,
+                    onClick = onLocalAnalyze,
+                ) {
+                    Text("只看本地证据")
+                }
+                if (!hasModelConfig) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onOpenSettings,
+                    ) {
+                        Text("去设置 API")
+                    }
+                }
+            }
+        }
+
+        item {
+            CompactSessionStatusCard(
+                rootStatus = rootStatus,
+                workspaceState = workspaceState,
+                queryState = queryState,
+                workspace = workspace,
+                hasModelConfig = hasModelConfig,
+                debugMode = debugMode,
+            )
+        }
+
+        if (workspace != null && queryState !is TabbedQueryState.Running) {
+            item {
+                RawBashQuickTaskCard(
+                    busy = busy,
+                    onSelect = onQuestionChange,
+                )
+            }
+        }
+
+        when (queryState) {
+            TabbedQueryState.Idle -> Unit
+            is TabbedQueryState.Running -> item { TabbedProgressCard(queryState.stage) }
+            is TabbedQueryState.Success -> item {
+                TabbedInfoCard("完成") {
+                    TabbedInfoRow("模式", queryState.mode)
+                }
+            }
+            is TabbedQueryState.Error -> item {
+                TabbedInfoCard("会话失败") {
+                    TabbedInfoRow("阶段", queryState.stage)
+                    Text(queryState.message, color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onOpenSettings) {
+                        Text("去设置 / 调试")
+                    }
+                }
+            }
+        }
+
+        localResult?.let { result -> item { LocalEvidenceCard(result) } }
+        llmAnswer?.let { answer -> item { ModelAnswerCard(answer) } }
+        item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
+private fun CompactSessionStatusCard(
+    rootStatus: RootStatus?,
+    workspaceState: TabbedWorkspaceState,
+    queryState: TabbedQueryState,
+    workspace: TabbedAgentWorkspace?,
+    hasModelConfig: Boolean,
+    debugMode: Boolean,
+) {
+    TabbedInfoCard("状态") {
+        TabbedInfoRow("Root", rootStatus.toDiagnosticText())
+        TabbedInfoRow("API", if (hasModelConfig) "已配置" else "未配置")
+        TabbedInfoRow("调试模式", if (debugMode) "开" else "关")
+        TabbedInfoRow("工作区", workspaceState.toDiagnosticText())
+        TabbedInfoRow("Agent", queryState.toDiagnosticText())
+        workspace?.let { ready ->
+            TabbedInfoRow("APK", ready.extraction.packageName)
+            TabbedInfoRow(
+                "索引",
+                "类 ${ready.dexIndex.classCount} / 方法 ${ready.dexIndex.methodCount} / 字符串 ${ready.dexIndex.stringCount}",
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsTab(
+    savedConfig: LlmProviderConfig?,
+    baseUrl: String,
+    onBaseUrlChange: (String) -> Unit,
+    model: String,
+    onModelChange: (String) -> Unit,
+    apiKey: String,
+    onApiKeyChange: (String) -> Unit,
+    message: String?,
+    debugMode: Boolean,
+    onToggleDebugMode: () -> Unit,
+    selectedPackageName: String?,
+    rootStatus: RootStatus?,
+    workspaceState: TabbedWorkspaceState,
+    queryState: TabbedQueryState,
+    events: List<PhaseFiveDiagnosticEvent>,
+    onSave: () -> Unit,
+    onClear: () -> Unit,
+    onCopyDiagnostics: () -> Unit,
+    onClearEvents: () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { Spacer(Modifier.height(4.dp)) }
+        item {
+            TabbedInfoCard("API 设置") {
+                TabbedInfoRow("状态", if (savedConfig == null) "未配置" else "已保存")
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = baseUrl,
+                    onValueChange = onBaseUrlChange,
+                    label = { Text("Base URL") },
+                    supportingText = { Text("OpenAI-compatible HTTPS endpoint，例如 https://example.com/v1") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = model,
+                    onValueChange = onModelChange,
+                    label = { Text("模型") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = apiKey,
+                    onValueChange = onApiKeyChange,
+                    label = { Text(if (savedConfig == null) "API Key" else "API Key（留空保留原值）") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                )
+                Button(modifier = Modifier.fillMaxWidth(), onClick = onSave) {
+                    Text("保存 API")
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = savedConfig != null,
+                    onClick = onClear,
+                ) {
+                    Text("清除 API")
+                }
+                message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+            }
+        }
+
+        item {
+            TabbedInfoCard("调试模式") {
+                Text(
+                    "关闭时，Agent 优先静态/只读分析；打开后，会把动态探索开关传给会话，允许它尝试 Frida、LLDB、tcpdump、perfetto 等命令。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(modifier = Modifier.fillMaxWidth(), onClick = onToggleDebugMode) {
+                    Text(if (debugMode) "调试模式：开" else "调试模式：关")
+                }
+            }
+        }
+
+        item {
+            TabbedInfoCard("运行状态") {
+                TabbedInfoRow("目标", selectedPackageName ?: "未选择")
+                TabbedInfoRow("Root", rootStatus.toDiagnosticText())
+                TabbedInfoRow("工作区", workspaceState.toDiagnosticText())
+                TabbedInfoRow("Agent", queryState.toDiagnosticText())
+                TabbedInfoRow("事件", events.size.toString())
+                Button(modifier = Modifier.fillMaxWidth(), onClick = onCopyDiagnostics) {
+                    Text("复制诊断报告")
+                }
+                OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = onClearEvents) {
+                    Text("清空诊断事件")
+                }
+                if (debugMode) {
+                    events.takeLast(MAX_VISIBLE_EVENTS).asReversed().forEach { event ->
+                        HorizontalDivider()
+                        Text("[${event.severity}] ${event.stage}", fontWeight = FontWeight.SemiBold)
+                        Text(event.message, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(16.dp)) }
     }
 }
 
@@ -747,7 +982,7 @@ private fun WorkspaceTab(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = onOpenAnalysis,
                     ) {
-                        Text("进入一句话分析")
+                        Text("进入 Raw Bash Agent")
                     }
                 }
             }
@@ -791,54 +1026,57 @@ private fun AnalysisTab(
             }
         } else {
             item {
-                TabbedInfoCard("一句话分析") {
-                    TabbedInfoRow("目标包名", workspace.extraction.packageName)
+                RawBashRuntimeCard(
+                    packageName = workspace.extraction.packageName,
+                    hasModelConfig = hasModelConfig,
+                    allowDynamicTools = allowDynamicTools,
+                    busy = queryState is TabbedQueryState.Running,
+                    onToggleDynamicMode = { onDynamicToolsChange(!allowDynamicTools) },
+                )
+            }
+
+            item {
+                RawBashQuickTaskCard(
+                    busy = queryState is TabbedQueryState.Running,
+                    onSelect = onQuestionChange,
+                )
+            }
+
+            item {
+                TabbedInfoCard("Agent 任务") {
                     OutlinedTextField(
                         modifier = Modifier.fillMaxWidth(),
                         value = question,
                         onValueChange = onQuestionChange,
-                        label = { Text("输入要分析的问题") },
-                        minLines = 3,
-                        maxLines = 7,
-                    )
-                    OutlinedButton(
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = queryState !is TabbedQueryState.Running,
-                        onClick = { onDynamicToolsChange(!allowDynamicTools) },
-                    ) {
-                        Text(if (allowDynamicTools) "本次已允许动态调试工具" else "本次不允许动态调试工具")
-                    }
-                    Text(
-                        if (allowDynamicTools) {
-                            "仅当前选中应用、当前唯一主进程 PID 可被 Frida/LLDB 使用；两个动态后端互斥，任务结束自动清理。"
-                        } else {
-                            "默认仅提供 JADX/Apktool/Perfetto 等受控工具。需要 Frida/LLDB 时请主动开启。"
+                        label = { Text("要让 Agent 完成什么") },
+                        supportingText = {
+                            Text("写成一个可执行目标，例如：定位登录校验、找 native 入口、分析网络请求。")
                         },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        minLines = 4,
+                        maxLines = 8,
                     )
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = onLocalAnalyze,
-                        enabled = queryState !is TabbedQueryState.Running &&
-                            question.trim().length >= MIN_QUESTION_LENGTH,
-                    ) {
-                        Text("仅使用本地证据分析")
-                    }
                     Button(
                         modifier = Modifier.fillMaxWidth(),
                         onClick = onModelAnalyze,
                         enabled = queryState !is TabbedQueryState.Running &&
                             hasModelConfig && question.trim().length >= MIN_QUESTION_LENGTH,
                     ) {
-                        Text("本地检索后调用外部模型")
+                        Text("运行 Agent")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = onLocalAnalyze,
+                        enabled = queryState !is TabbedQueryState.Running &&
+                            question.trim().length >= MIN_QUESTION_LENGTH,
+                    ) {
+                        Text("只看本地证据")
                     }
                     if (!hasModelConfig) {
                         OutlinedButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = onOpenModel,
                         ) {
-                            Text("配置外部模型")
+                            Text("先配置模型")
                         }
                     }
                 }
@@ -870,6 +1108,156 @@ private fun AnalysisTab(
             llmAnswer?.let { answer -> item { ModelAnswerCard(answer) } }
         }
         item { Spacer(Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
+private fun RawBashRuntimeCard(
+    packageName: String,
+    hasModelConfig: Boolean,
+    allowDynamicTools: Boolean,
+    busy: Boolean,
+    onToggleDynamicMode: () -> Unit,
+) {
+    TabbedInfoCard("Raw Bash Agent") {
+        Text(
+            "目标：$packageName",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            "模型只拿到四个动作原语；jadx、apktool、rizin、python3、grep、frida、lldb 等都通过 Bash 原样调用。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        RawBashToolGrid()
+        TabbedInfoRow("默认目录", "/workspace")
+        TabbedInfoRow("模型状态", if (hasModelConfig) "已配置，可以运行 Agent" else "未配置，只能先看本地证据")
+        TabbedInfoRow("边界", "timeout / 输出上限 / 审计日志 / kill_process")
+        OutlinedButton(
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !busy,
+            onClick = onToggleDynamicMode,
+        ) {
+            Text(if (allowDynamicTools) "动态探索：开" else "动态探索：关")
+        }
+        Text(
+            if (allowDynamicTools) {
+                "允许本轮 Bash 任务尝试 Frida、LLDB、tcpdump、perfetto 等动态命令。"
+            } else {
+                "默认让 Agent 先用静态/只读命令完成分析；需要附加、Hook 或抓包时再打开。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun RawBashToolGrid() {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RawBashToolPill("exec_bash", "跑命令", Modifier.weight(1f))
+            RawBashToolPill("read_file", "读证据", Modifier.weight(1f))
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RawBashToolPill("write_file", "写脚本", Modifier.weight(1f))
+            RawBashToolPill("kill_process", "停任务", Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun RawBashToolPill(
+    name: String,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                name,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun RawBashQuickTaskCard(
+    busy: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    TabbedInfoCard("快速任务") {
+        Text(
+            "点一个模板会填入任务描述，你可以再手动改。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        RawBashPromptButton(
+            title = "全量初筛",
+            detail = "先生成目录、入口、JNI、字符串和网络线索摘要",
+            prompt = "请在 /workspace 内对当前目标做一轮全量初筛：列出 APK/DEX/SO 结构，定位 System.loadLibrary、native 方法、关键字符串、网络/加密相关代码和可疑入口；必要时写 Python 脚本辅助分析，最后给出确认事实、推断、未知和下一步。",
+            enabled = !busy,
+            onSelect = onSelect,
+        )
+        RawBashPromptButton(
+            title = "定位 native 校验",
+            detail = "从 Java 调用链追到 SO/JNI 入口",
+            prompt = "请定位当前目标里的 native 校验链路：搜索 System.loadLibrary 和 native 方法，找出对应 SO、JNI 符号、可疑字符串和调用路径；用 jadx、apktool、rizin、readelf、strings、grep 或 Python 脚本完成，不要只做表面搜索。",
+            enabled = !busy,
+            onSelect = onSelect,
+        )
+        RawBashPromptButton(
+            title = "分析网络请求",
+            detail = "找域名、HTTP 客户端、TLS/pinning 和加密参数",
+            prompt = "请分析当前目标的网络请求链路：搜索域名、URL、HTTP/WebSocket 客户端、证书校验、TLS pinning、请求签名、加密/编码函数和 native 参与点；输出证据路径和下一步动态验证方案。",
+            enabled = !busy,
+            onSelect = onSelect,
+        )
+    }
+}
+
+@Composable
+private fun RawBashPromptButton(
+    title: String,
+    detail: String,
+    prompt: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    OutlinedButton(
+        modifier = Modifier.fillMaxWidth(),
+        enabled = enabled,
+        onClick = { onSelect(prompt) },
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(
+                detail,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

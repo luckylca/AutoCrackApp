@@ -15,8 +15,8 @@ android {
         applicationId = "com.luckylca.autocrack"
         minSdk = 26
         targetSdk = 36
-        versionCode = 57
-        versionName = "0.5.15.6-phase5.15-bounded-call-stack-hit-accounting"
+        versionCode = 58
+        versionName = "0.6.0-phase6-mobile-pi-agent"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
