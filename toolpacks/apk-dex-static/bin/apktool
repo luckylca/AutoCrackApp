@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -eu
+TOOLPACK_ROOT=${AUTOC_TOOLPACK_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
+JAVA_BIN=${JAVA_BIN:-java}
+exec "$JAVA_BIN" -jar "$TOOLPACK_ROOT/lib/apktool.jar" "$@"

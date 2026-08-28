@@ -72,12 +72,38 @@ internal object BuiltInToolpackTrustPolicy {
     }
 
     private val TRUSTED_TOOLPACKS = mapOf(
+        "rootfs-pcap-analysis" to TrustedToolpack(
+            title = "Rootfs pcap metadata analysis",
+            version = "pcap-summary-1.0.0",
+            architecture = "all",
+            payloadSha256 = "cfa34e98e43c6665143acacbedd9b249cdfb0f81c76cccf516b17fd4cffaebe9",
+            payloadSizeBytes = 11_703L,
+            requiredPaths = setOf("bin/pcap-summary"),
+            commands = mapOf(
+                "pcap-summary" to "bin/pcap-summary",
+            ),
+            selfTests = mapOf(
+                "pcap-summary-self-test" to TrustedSelfTest(
+                    title = "Pure Python pcap summary helper",
+                    command = "pcap-summary --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("PCAP_SUMMARY_SELF_TEST_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "pcap-summary" to TrustedSource(
+                    version = "1.0.0",
+                    url = "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/pcap-analysis",
+                    sha256 = "5a182f44c7f8f9944e894f2869e5ec3d5312ff4db098a155fdd90f30dec78ad1",
+                ),
+            ),
+        ),
         "apk-dex-static" to TrustedToolpack(
             title = "APK and DEX static analysis",
-            version = "jadx-1.5.5_apktool-3.0.2",
+            version = "jadx-1.5.6_apktool-3.0.3",
             architecture = "all",
-            payloadSha256 = "6c3e1f03f5c653ef63aa137189dcafeb82e4dd40579b3fbb6a5a2a1eb5f2d484",
-            payloadSizeBytes = 79_209_842L,
+            payloadSha256 = "7235f0ab51a59a2232551df2427517a8a6096ba8efb325658ae04a6bf66d0df8",
+            payloadSizeBytes = 93_753_109L,
             requiredPaths = setOf(
                 "bin/jadx",
                 "bin/apktool",
@@ -99,25 +125,25 @@ internal object BuiltInToolpackTrustPolicy {
                     title = "JADX CLI",
                     command = "jadx --version",
                     expectedExitCodes = setOf(0),
-                    outputContains = listOf("1.5.5"),
+                    outputContains = listOf("1.5.6"),
                 ),
                 "apktool-version" to TrustedSelfTest(
                     title = "Apktool",
                     command = "apktool --version",
                     expectedExitCodes = setOf(0),
-                    outputContains = listOf("3.0.2"),
+                    outputContains = listOf("3.0.3"),
                 ),
             ),
             sources = mapOf(
                 "jadx" to TrustedSource(
-                    version = "1.5.5",
-                    url = "https://github.com/skylot/jadx/releases/download/v1.5.5/jadx-1.5.5.zip",
-                    sha256 = "38a5766d3c8170c41566b4b13ea0ede2430e3008421af4927235c2880234d51a",
+                    version = "1.5.6",
+                    url = "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+                    sha256 = "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974",
                 ),
                 "apktool" to TrustedSource(
-                    version = "3.0.2",
-                    url = "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar",
-                    sha256 = "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd",
+                    version = "3.0.3",
+                    url = "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+                    sha256 = "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423",
                 ),
             ),
         ),
@@ -218,29 +244,109 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "perfetto-analysis" to TrustedToolpack(
+            title = "Perfetto trace analysis",
+            version = "perfetto-58.2-autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "087425724070bd58fd41e35aa568ec3874ff8779420196efd2a273c91dfd3ef1",
+            payloadSizeBytes = 14_086_296L,
+            requiredPaths = setOf("bin/trace_processor"),
+            commands = mapOf(
+                "trace_processor" to "bin/trace_processor",
+            ),
+            selfTests = mapOf(
+                "trace-processor-help" to TrustedSelfTest(
+                    title = "Perfetto trace_processor ARM64 CLI",
+                    command = "trace_processor --help >/dev/null",
+                    expectedExitCodes = setOf(0),
+                    outputContains = emptyList(),
+                ),
+            ),
+            sources = mapOf(
+                "perfetto-linux-arm64" to TrustedSource(
+                    version = "58.2",
+                    url = "https://github.com/google/perfetto/releases/download/v58.2/linux-arm64.zip",
+                    sha256 = "a82bf4111a340a7ea8577bcfd62e014e8e81b9e6a35a3190f5415fb800051ab0",
+                ),
+            ),
+        ),
+        "android-frida" to TrustedToolpack(
+            title = "Android Frida bounded dynamic instrumentation",
+            version = "frida-17.17.0-autocrack-1.0.3",
+            architecture = "arm64",
+            payloadSha256 = "67664cbef3a5b4b77f75b2e85102c53589ea9c475b520bda4c64c08949a0468d",
+            payloadSizeBytes = 124_957_234L,
+            requiredPaths = setOf(
+                "bin/frida-server-android",
+                "bin/frida-autocrack-client",
+                "libexec/autocrack-frida-agent.js",
+                "libexec/frida_autocrack_client.py",
+            ),
+            commands = mapOf(
+                "frida-server-android" to "bin/frida-server-android",
+                "frida-autocrack-client" to "bin/frida-autocrack-client",
+            ),
+            selfTests = mapOf(
+                "frida-server-android-binary" to TrustedSelfTest(
+                    title = "Official Android ARM64 Frida server payload",
+                    command = "test -x /opt/autocrack/toolpacks/packs/android-frida/frida-17.17.0-autocrack-1.0.3/bin/frida-server-android && printf \"AUTOCRACK_FRIDA_SERVER_BINARY_OK\\n\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_FRIDA_SERVER_BINARY_OK"),
+                ),
+                "frida-python-import" to TrustedSelfTest(
+                    title = "ARM64 Frida Python binding import",
+                    command = "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/autocrack/toolpacks/packs/android-frida/frida-17.17.0-autocrack-1.0.3/python python3 -B -c \"import frida; print(frida.__version__)\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("17.17.0"),
+                ),
+                "frida-bounded-client-help" to TrustedSelfTest(
+                    title = "Bounded AutoCrack Frida client",
+                    command = "/opt/autocrack/toolpacks/packs/android-frida/frida-17.17.0-autocrack-1.0.3/bin/frida-autocrack-client --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("native-trace", "tls-trace"),
+                ),
+            ),
+            sources = mapOf(
+                "frida-server-android-arm64" to TrustedSource(
+                    version = "17.17.0",
+                    url = "https://github.com/frida/frida/releases/download/17.17.0/frida-server-17.17.0-android-arm64.xz",
+                    sha256 = "09d1fad867b27d69562a79289f4c412e85867f5d38ab72877036ed35e4223021",
+                ),
+                "frida-python-aarch64" to TrustedSource(
+                    version = "17.17.0",
+                    url = "https://pypi.org/project/frida/17.17.0/",
+                    sha256 = "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8",
+                ),
+                "frida-java-bridge" to TrustedSource(
+                    version = "7.0.13",
+                    url = "https://registry.npmjs.org/frida-java-bridge/-/frida-java-bridge-7.0.13.tgz",
+                    sha256 = "0ae4e5393b5bf237ba7cfe23666248a7e6884cc9321ac0a77f073bcb30d951c0",
+                ),
+            ),
+        ),
         "android-lldb-server" to TrustedToolpack(
             title = "Android LLDB server",
-            version = "ndk-r27d-clang-r522817d_autocrack-1.0.0",
+            version = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop",
             architecture = "arm64",
-            payloadSha256 = "2cc969ff785e8c0c3d4473649edaaf18f64faae4c7e016941dd0c0944944a14a",
-            payloadSizeBytes = 27_698_528L,
+            payloadSha256 = "f2d3b3925ffc49419508dd97cd657d4a8a2e0b0b313f473105173b96ce31b899",
+            payloadSizeBytes = 28_396_656L,
             requiredPaths = setOf("bin/lldb-server-android"),
             commands = mapOf(
                 "lldb-server-android" to "bin/lldb-server-android",
             ),
             selfTests = mapOf(
-                "lldb-server-version" to TrustedSelfTest(
-                    title = "Android LLDB server",
-                    command = "lldb-server-android v",
+                "lldb-server-android-binary" to TrustedSelfTest(
+                    title = "Android LLDB server payload",
+                    command = "test -x /opt/autocrack/toolpacks/packs/android-lldb-server/android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop/bin/lldb-server-android && printf \"AUTOCRACK_LLDB_ANDROID_BINARY_OK\\n\"",
                     expectedExitCodes = setOf(0),
-                    outputContains = listOf("lldb"),
+                    outputContains = listOf("AUTOCRACK_LLDB_ANDROID_BINARY_OK"),
                 ),
             ),
             sources = mapOf(
                 "lldb-server" to TrustedSource(
-                    version = "ndk-r27d-clang-r522817d",
-                    url = "https://github.com/android/ndk/releases/tag/r27d",
-                    sha256 = "ff96d83baa872b2226bb1f4f38cd38aa2622416722fb76543cc536edfeea3018",
+                    version = "android-llvm-r522817-autocrack-seize-runtime-stop",
+                    url = "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262",
+                    sha256 = "71d9ed6a90776d7dbdbcb315ea2171a763c071e5a370ec1b8b0c28157af41b20",
                 ),
             ),
         ),

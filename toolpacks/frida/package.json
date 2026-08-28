@@ -1,0 +1,14 @@
+{
+  "name": "autocrack-frida-agent",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build": "frida-compile agent.ts -o dist/autocrack-frida-agent.js -c"
+  },
+  "dependencies": {
+    "frida-java-bridge": "7.0.13"
+  },
+  "devDependencies": {
+    "frida-compile": "19.0.5"
+  }
+}

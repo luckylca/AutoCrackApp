@@ -24,6 +24,35 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Verify phase 5.15.6 source markers
+        run: |
+          set -euxo pipefail
+          grep -F 'versionCode = 57' app/build.gradle.kts
+          grep -F 'versionName = "0.5.15.6-phase5.15-bounded-call-stack-hit-accounting"' app/build.gradle.kts
+          grep -F '"catalogVersion": "0.5.15.6"' app/src/main/assets/runtime/dynamic-host-tool-catalog-v1.json
+          grep -F '"runtimeTarget": "android_rootfs_only"' app/src/main/assets/runtime/tool-catalog-v1.json
+          grep -F 'fun stepFromStopReply(stopReply: String)' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'fun awaitStopAfterInterrupt()' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'class GdbRemoteRunTimeoutException' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+          grep -F 'step_timeout_target_state_unresolved' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
+          grep -F 'interrupt_stop_recovered' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
+          grep -F 'HostDebuggerBreakpointHitAccounting' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
+          grep -F 'frida_tls_trace' \
+            app/src/main/java/com/luckylca/autocrack/agent/AgentFridaToolExecutor.kt
+          grep -F 'android_pcap_start' \
+            app/src/main/java/com/luckylca/autocrack/agent/AgentAndroidNetworkToolExecutor.kt
+          ! grep -F 'payload = "vCont;s",' \
+            app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
+
+      - name: Verify Android/rootfs-only runtime policy
+        run: bash scripts/check_android_rootfs_only.sh
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -48,7 +77,7 @@ jobs:
             "cmake;3.22.1"
 
       - name: Lint, unit test, and assemble debug APK
-        run: gradle --no-daemon --stacktrace clean lintDebug testDebugUnitTest assembleDebug
+        run: ./gradlew --no-daemon --max-workers=1 --stacktrace clean lintDebug testDebugUnitTest assembleDebug
 
       - name: Verify native PTY library is packaged
         run: |
@@ -59,34 +88,71 @@ jobs:
           unzip -p app/build/outputs/apk/debug/app-debug.apk \
             assets/runtime/dynamic-host-tool-catalog-v1.json \
             | jq -e '
-                .catalogVersion == "0.5.13" and
+                .catalogVersion == "0.5.14.13" and
                 .safetyBoundary.defaultOperationMode == "read_only" and
-                .safetyBoundary.readOnly == false and
                 .safetyBoundary.attachAllowed == true and
                 .safetyBoundary.attachRequiresExplicitAuthorization == true and
+                .safetyBoundary.debuggerExecutionControlAllowed == true and
+                .safetyBoundary.debuggerExecutionControlRequiresExplicitAuthorization == true and
+                .safetyBoundary.registerReadAllowed == true and
+                .safetyBoundary.registerWriteAllowed == false and
+                .safetyBoundary.memoryReadAllowed == true and
+                .safetyBoundary.memoryWriteAllowed == false and
+                .safetyBoundary.breakpointAllowed == false and
+                .safetyBoundary.rawDebuggerPacketAllowed == false and
                 .safetyBoundary.signalsAllowed == false and
                 .safetyBoundary.injectionAllowed == false and
-                .safetyBoundary.memoryWriteAllowed == false and
-                .safetyBoundary.debuggerAttachDetachAllowed == true and
-                ([.tools[].id] | index("host.logcat.session") != null) and
+                .safetyBoundary.orphanDebuggerRecoveryAllowed == true and
+                .safetyBoundary.orphanDebuggerRecoveryRequiresExactAuthorization == true and
                 ([.tools[].id] | index("host.debugger.lldb_server_session") != null) and
+                ([.tools[].id] | index("host.debugger.client_control") != null) and
+                ([.tools[].id] | index("host.debugger.orphan_recovery") != null) and
                 (.tools[] | select(.id == "host.debugger.lldb_server_session") |
+                  .networkScope == "127.0.0.1 only" and
+                  .networkAddressFamily == "IPv4" and
+                  .changesTargetState == false and
+                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" and
+                  ([.guarantees[]] | index("start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach") != null) and
+                  ([.guarantees[]] | index("verify the 127.0.0.1 listener socket inode is owned by the verified helper PID") != null) and
+                  ([.guarantees[]] | index("create the helper PID file under controller ownership before the root helper writes its PID") != null)) and
+                (.tools[] | select(.id == "host.debugger.client_control") |
                   .confirmation == "exact_target_phrase" and
-                  .networkScope == "127.0.0.1 only")
+                  .authorizationTemplate == "CONTROL <packageName> <pid>" and
+                  .networkScope == "127.0.0.1 only" and
+                  .networkAddressFamily == "IPv4" and
+                  ([.operations[].id] | index("typed_attach") != null) and
+                  (.operations[] | select(.id == "typed_attach") | .packetShape == "vAttach;<hexPid>") and
+                  ([.guarantees[]] | index("require a verified helper-owned LISTEN socket before CONTROL can connect") != null) and
+                  ([.guarantees[]] | index("after the TCP transport is accepted do not require the single-client LISTEN socket to remain present") != null) and
+                  ([.guarantees[]] | index("post-accept revalidate the same live verified helper, same package/PID and TracerPid=0 immediately before typed vAttach") != null) and
+                  ([.guarantees[]] | index("encode only the already authorized session PID into the fixed typed vAttach packet") != null) and
+                  ([.guarantees[]] | index("no arbitrary raw gdb-remote packet adapter") != null) and
+                  ([.operations[].id] | index("register_read") != null) and
+                  ([.operations[].id] | index("memory_read") != null) and
+                  ([.operations[].id] | index("continue") != null) and
+                  ([.operations[].id] | index("step") != null) and
+                  ([.operations[].id] | index("interrupt") != null)) and
+                (.tools[] | select(.id == "host.debugger.orphan_recovery") |
+                  .confirmation == "exact_target_and_tracer_phrase" and
+                  .authorizationTemplate == "RECOVER <packageName> <pid> <tracerPid>" and
+                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" and
+                  ([.guarantees[]] | index("accept only a trusted IPv4 loopback gdbserver command from either legacy --attach or typed client-driven attach sessions") != null) and
+                  ([.guarantees[]] | index("send TERM only to the verified LLDB helper and never to the target PID") != null) and
+                  ([.guarantees[]] | index("never escalate recovery to SIGKILL") != null))
               ' >/dev/null
 
       - name: Prepare distributable APK
         run: |
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.13-controlled-lldb-server-debug.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/AutoCrackApp-0.5.14.13-seize-runtime-stop-debug.apk
           cd dist
-          sha256sum AutoCrackApp-0.5.13-controlled-lldb-server-debug.apk \
-            > AutoCrackApp-0.5.13-controlled-lldb-server-debug.apk.sha256
+          sha256sum AutoCrackApp-0.5.14.13-seize-runtime-stop-debug.apk \
+            > AutoCrackApp-0.5.14.13-seize-runtime-stop-debug.apk.sha256
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.13-controlled-lldb-server-debug
+          name: AutoCrackApp-0.5.14.13-seize-runtime-stop-debug
           path: dist/
           if-no-files-found: error
           retention-days: 14
@@ -95,7 +161,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-0.5.13-controlled-lldb-server-reports
+          name: AutoCrackApp-0.5.14.13-seize-runtime-stop-reports
           path: |
             app/build/reports/lint-results-debug.html
             app/build/reports/lint-results-debug.xml

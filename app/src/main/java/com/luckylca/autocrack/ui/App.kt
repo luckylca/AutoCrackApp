@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.runtime.DynamicHostReadBridge
+import com.luckylca.autocrack.runtime.HostDebuggerControlBridge
+import com.luckylca.autocrack.runtime.HostDebuggerRecoveryBridge
 import com.luckylca.autocrack.runtime.HostDebuggerSessionManager
 import com.luckylca.autocrack.runtime.HostLogcatSessionManager
 import com.luckylca.autocrack.runtime.RuntimeLayout
@@ -40,6 +42,7 @@ private enum class AppScreen {
     TERMINAL,
     DYNAMIC,
     DEBUGGER,
+    DEBUGGER_RECOVERY,
 }
 
 @Composable
@@ -71,6 +74,22 @@ fun AutoCrackApp() {
             runner = dynamicRunner,
         )
     }
+    val debuggerControlBridge = remember(debuggerSessionManager, dynamicReadBridge) {
+        HostDebuggerControlBridge(debuggerSessionManager, dynamicReadBridge)
+    }
+    val debuggerRecoveryBridge = remember(
+        appContext,
+        dynamicLayout,
+        dynamicRootDetector,
+        dynamicRunner,
+    ) {
+        HostDebuggerRecoveryBridge(
+            context = appContext,
+            layout = dynamicLayout,
+            rootDetector = dynamicRootDetector,
+            runner = dynamicRunner,
+        )
+    }
 
     MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -89,6 +108,11 @@ fun AutoCrackApp() {
                     AppScreen.DEBUGGER -> DebuggerSessionScreen(
                         bridge = dynamicReadBridge,
                         manager = debuggerSessionManager,
+                        controlBridge = debuggerControlBridge,
+                    )
+                    AppScreen.DEBUGGER_RECOVERY -> DebuggerRecoveryScreen(
+                        bridge = dynamicReadBridge,
+                        recoveryBridge = debuggerRecoveryBridge,
                     )
                 }
 
@@ -101,30 +125,15 @@ fun AutoCrackApp() {
                         .padding(top = 8.dp, start = 8.dp, end = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    FilledTonalButton(onClick = { screen = AppScreen.MAIN }) {
-                        Text("首页")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.TOOLS }) {
-                        Text("工具")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.RUNTIME }) {
-                        Text("Root")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.LINUX }) {
-                        Text("Linux")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.TOOLPACKS }) {
-                        Text("工具包")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.TERMINAL }) {
-                        Text("终端")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.DYNAMIC }) {
-                        Text("动态")
-                    }
-                    FilledTonalButton(onClick = { screen = AppScreen.DEBUGGER }) {
-                        Text("调试")
-                    }
+                    FilledTonalButton(onClick = { screen = AppScreen.MAIN }) { Text("首页") }
+                    FilledTonalButton(onClick = { screen = AppScreen.TOOLS }) { Text("工具") }
+                    FilledTonalButton(onClick = { screen = AppScreen.RUNTIME }) { Text("Root") }
+                    FilledTonalButton(onClick = { screen = AppScreen.LINUX }) { Text("Linux") }
+                    FilledTonalButton(onClick = { screen = AppScreen.TOOLPACKS }) { Text("工具包") }
+                    FilledTonalButton(onClick = { screen = AppScreen.TERMINAL }) { Text("终端") }
+                    FilledTonalButton(onClick = { screen = AppScreen.DYNAMIC }) { Text("动态") }
+                    FilledTonalButton(onClick = { screen = AppScreen.DEBUGGER }) { Text("调试") }
+                    FilledTonalButton(onClick = { screen = AppScreen.DEBUGGER_RECOVERY }) { Text("调试恢复") }
                 }
             }
         }

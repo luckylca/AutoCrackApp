@@ -5,8 +5,18 @@ import org.junit.Test
 
 class BuiltInToolpackTrustPolicyTest {
     @Test
+    fun acceptsThePinnedPcapAnalysisToolpack() {
+        BuiltInToolpackTrustPolicy.requireTrusted(trustedPcapAnalysisManifest())
+    }
+
+    @Test
     fun acceptsThePinnedApkDexToolpack() {
         BuiltInToolpackTrustPolicy.requireTrusted(trustedApkDexManifest())
+    }
+
+    @Test
+    fun acceptsThePinnedPerfettoToolpack() {
+        BuiltInToolpackTrustPolicy.requireTrusted(trustedPerfettoManifest())
     }
 
     @Test
@@ -137,15 +147,45 @@ class BuiltInToolpackTrustPolicyTest {
         }
     }
 
+    private fun trustedPcapAnalysisManifest(): ToolpackPackageManifest = ToolpackPackageManifest(
+        schemaVersion = 1,
+        id = "rootfs-pcap-analysis",
+        title = "Rootfs pcap metadata analysis",
+        version = "pcap-summary-1.0.0",
+        architecture = "all",
+        payloadEntry = "payload.zip",
+        payloadSha256 = "cfa34e98e43c6665143acacbedd9b249cdfb0f81c76cccf516b17fd4cffaebe9",
+        payloadSizeBytes = 11_703L,
+        requiredPaths = listOf("bin/pcap-summary"),
+        commands = listOf(ToolpackCommand("pcap-summary", "bin/pcap-summary")),
+        selfTests = listOf(
+            ToolpackSelfTest(
+                id = "pcap-summary-self-test",
+                title = "Pure Python pcap summary helper",
+                command = "pcap-summary --self-test",
+                expectedExitCodes = setOf(0),
+                outputContains = listOf("PCAP_SUMMARY_SELF_TEST_OK"),
+            ),
+        ),
+        sources = listOf(
+            ToolpackSourceArtifact(
+                name = "pcap-summary",
+                version = "1.0.0",
+                url = "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/pcap-analysis",
+                sha256 = "5a182f44c7f8f9944e894f2869e5ec3d5312ff4db098a155fdd90f30dec78ad1",
+            ),
+        ),
+    )
+
     private fun trustedApkDexManifest(): ToolpackPackageManifest = ToolpackPackageManifest(
         schemaVersion = 1,
         id = "apk-dex-static",
         title = "APK and DEX static analysis",
-        version = "jadx-1.5.5_apktool-3.0.2",
+        version = "jadx-1.5.6_apktool-3.0.3",
         architecture = "all",
         payloadEntry = "payload.zip",
-        payloadSha256 = "6c3e1f03f5c653ef63aa137189dcafeb82e4dd40579b3fbb6a5a2a1eb5f2d484",
-        payloadSizeBytes = 79_209_842L,
+        payloadSha256 = "7235f0ab51a59a2232551df2427517a8a6096ba8efb325658ae04a6bf66d0df8",
+        payloadSizeBytes = 93_753_109L,
         requiredPaths = listOf(
             "bin/jadx",
             "bin/apktool",
@@ -169,28 +209,58 @@ class BuiltInToolpackTrustPolicyTest {
                 title = "JADX CLI",
                 command = "jadx --version",
                 expectedExitCodes = setOf(0),
-                outputContains = listOf("1.5.5"),
+                outputContains = listOf("1.5.6"),
             ),
             ToolpackSelfTest(
                 id = "apktool-version",
                 title = "Apktool",
                 command = "apktool --version",
                 expectedExitCodes = setOf(0),
-                outputContains = listOf("3.0.2"),
+                outputContains = listOf("3.0.3"),
             ),
         ),
         sources = listOf(
             ToolpackSourceArtifact(
                 name = "jadx",
-                version = "1.5.5",
-                url = "https://github.com/skylot/jadx/releases/download/v1.5.5/jadx-1.5.5.zip",
-                sha256 = "38a5766d3c8170c41566b4b13ea0ede2430e3008421af4927235c2880234d51a",
+                version = "1.5.6",
+                url = "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+                sha256 = "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974",
             ),
             ToolpackSourceArtifact(
                 name = "apktool",
-                version = "3.0.2",
-                url = "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.2/apktool_3.0.2.jar",
-                sha256 = "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd",
+                version = "3.0.3",
+                url = "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+                sha256 = "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423",
+            ),
+        ),
+    )
+
+    private fun trustedPerfettoManifest(): ToolpackPackageManifest = ToolpackPackageManifest(
+        schemaVersion = 1,
+        id = "perfetto-analysis",
+        title = "Perfetto trace analysis",
+        version = "perfetto-58.2-autocrack-1.0.0",
+        architecture = "arm64",
+        payloadEntry = "payload.zip",
+        payloadSha256 = "087425724070bd58fd41e35aa568ec3874ff8779420196efd2a273c91dfd3ef1",
+        payloadSizeBytes = 14_086_296L,
+        requiredPaths = listOf("bin/trace_processor"),
+        commands = listOf(ToolpackCommand("trace_processor", "bin/trace_processor")),
+        selfTests = listOf(
+            ToolpackSelfTest(
+                id = "trace-processor-help",
+                title = "Perfetto trace_processor ARM64 CLI",
+                command = "trace_processor --help >/dev/null",
+                expectedExitCodes = setOf(0),
+                outputContains = emptyList(),
+            ),
+        ),
+        sources = listOf(
+            ToolpackSourceArtifact(
+                name = "perfetto-linux-arm64",
+                version = "58.2",
+                url = "https://github.com/google/perfetto/releases/download/v58.2/linux-arm64.zip",
+                sha256 = "a82bf4111a340a7ea8577bcfd62e014e8e81b9e6a35a3190f5415fb800051ab0",
             ),
         ),
     )

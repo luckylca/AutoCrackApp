@@ -174,12 +174,14 @@ Root 权限提供能力，但不应等同于允许 Agent 执行任意 Shell。�
 
 ### 7.4 网络观测
 
-- `/proc/net` 与连接目标；
-- Root tcpdump 捕获；
-- DNS、TCP、TLS 元数据；
-- 可选 VPNService 抓包模式；
+- `/proc/net`、`ss`、路由表与连接目标；
+- Root tcpdump 捕获，pcap 只写入当前工作区；
+- DNS、TCP、TLS、SNI、ALPN、QUIC/HTTP3 元数据；
+- 不以 VPNService 作为默认或目标抓包模式；
+- 优先集成设备上已有的 Surfing / box 透明代理环境，先只读识别状态、配置摘要、目标包过滤策略与日志；
 - HTTP 明文与证书链分析；
-- TLS 解密仅作为明确启用的受控工具，不默认绕过证书校验。
+- HTTPS 内容优先通过固定 Frida 网络观测模板获取运行时证据；
+- TLS 解密、CA 安装、透明 MITM 或 Surfing 配置修改仅作为明确启用、可恢复、受控工具，不默认绕过证书校验。
 
 ---
 

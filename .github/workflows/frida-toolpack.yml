@@ -1,0 +1,175 @@
+name: Build Android Frida toolpack
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/phase-5.15.6-continuation
+    paths:
+      - .github/workflows/frida-toolpack.yml
+      - toolpacks/frida/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frida-toolpack-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-frida-toolpack:
+    name: Package trusted Frida 17.17.0 Android ARM64 toolpack
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FRIDA_VERSION: "17.17.0"
+      FRIDA_SERVER_SHA256: "09d1fad867b27d69562a79289f4c412e85867f5d38ab72877036ed35e4223021"
+      FRIDA_PYTHON_WHEEL_SHA256: "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8"
+      FRIDA_JAVA_BRIDGE_VERSION: "7.0.13"
+      FRIDA_COMPILE_VERSION: "19.0.5"
+      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.0.3
+
+    steps:
+      - name: Check out AutoCrackApp
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js for deterministic agent bootstrap
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: toolpacks/frida/package-lock.json
+
+      - name: Prepare directories and packages
+        id: prepare
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            sudo apt-get update
+            sudo apt-get install -y xz-utils unzip file jq
+            mkdir -p dist/download dist/payload/bin dist/payload/libexec dist/payload/python dist/source
+          } 2>&1 | tee /tmp/frida-prepare.log
+
+      - name: Fetch pinned official Android ARM64 frida-server
+        id: server
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            SERVER_XZ="dist/download/frida-server-${FRIDA_VERSION}-android-arm64.xz"
+            SERVER_URL="https://github.com/frida/frida/releases/download/${FRIDA_VERSION}/frida-server-${FRIDA_VERSION}-android-arm64.xz"
+            curl --fail --location --retry 4 --retry-all-errors -o "${SERVER_XZ}" "${SERVER_URL}"
+            printf '%s  %s\n' "${FRIDA_SERVER_SHA256}" "${SERVER_XZ}" | sha256sum -c -
+            xz -dc "${SERVER_XZ}" > dist/payload/bin/frida-server-android
+            chmod 0755 dist/payload/bin/frida-server-android
+            file dist/payload/bin/frida-server-android | tee dist/source/frida-server.file.txt
+            file dist/payload/bin/frida-server-android | grep -F 'ARM aarch64'
+            printf '%s\n' "${SERVER_URL}" > dist/source/frida-server.source-url.txt
+            sha256sum "${SERVER_XZ}" > dist/source/frida-server.asset.sha256
+            sha256sum dist/payload/bin/frida-server-android > dist/source/frida-server.binary.sha256
+          } 2>&1 | tee /tmp/frida-server.log
+
+      - name: Fetch pinned official ARM64 Frida Python binding
+        id: python
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all: \
+              --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi abi3 \
+              "frida==${FRIDA_VERSION}" --dest dist/download
+            WHEEL="$(find dist/download -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
+            test -n "${WHEEL}"
+            printf '%s  %s\n' "${FRIDA_PYTHON_WHEEL_SHA256}" "${WHEEL}" | sha256sum -c -
+            unzip -q "${WHEEL}" -d dist/payload/python
+            sha256sum "${WHEEL}" > dist/source/frida-python.wheel.sha256
+          } 2>&1 | tee /tmp/frida-python.log
+
+      - name: Compile fixed bounded Frida RPC agent
+        id: agent
+        working-directory: toolpacks/frida
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            node --version
+            npm --version
+            npm ci --no-audit --no-fund
+            JAVA_BRIDGE_ACTUAL=$(node -p "require('./node_modules/frida-java-bridge/package.json').version")
+            COMPILE_ACTUAL=$(node -p "require('./node_modules/frida-compile/package.json').version")
+            test "${JAVA_BRIDGE_ACTUAL}" = "${FRIDA_JAVA_BRIDGE_VERSION}"
+            test "${COMPILE_ACTUAL}" = "${FRIDA_COMPILE_VERSION}"
+            cp package-lock.json ../../dist/source/frida-agent.package-lock.json
+            mkdir -p dist
+            npx --no-install frida-compile agent.ts -o dist/autocrack-frida-agent.js -c
+            test -s dist/autocrack-frida-agent.js
+            sha256sum dist/autocrack-frida-agent.js > ../../dist/source/autocrack-frida-agent.sha256
+            npm view "frida-java-bridge@${FRIDA_JAVA_BRIDGE_VERSION}" dist.tarball > ../../dist/source/frida-java-bridge.source-url.txt
+            curl --fail --location --retry 4 --retry-all-errors \
+              -o ../../dist/download/frida-java-bridge.tgz "$(cat ../../dist/source/frida-java-bridge.source-url.txt)"
+            sha256sum ../../dist/download/frida-java-bridge.tgz > ../../dist/source/frida-java-bridge.tgz.sha256
+          } 2>&1 | tee /tmp/frida-agent.log
+
+      - name: Assemble bounded client payload
+        id: assemble
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            cp toolpacks/frida/dist/autocrack-frida-agent.js dist/payload/libexec/autocrack-frida-agent.js
+            cp toolpacks/frida/frida_autocrack_client.py dist/payload/libexec/frida_autocrack_client.py
+            cp toolpacks/frida/frida-autocrack-client dist/payload/bin/frida-autocrack-client
+            chmod 0755 dist/payload/bin/frida-autocrack-client dist/payload/libexec/frida_autocrack_client.py
+            python3 -m py_compile toolpacks/frida/frida_autocrack_client.py
+            grep -F 'Interceptor.attach' toolpacks/frida/agent.ts
+            grep -F 'SSL_write' toolpacks/frida/agent.ts
+            grep -F 'SSL_read' toolpacks/frida/agent.ts
+            ! grep -Eq 'Interceptor\.replace|Memory\.write|rpc\.exports\..*eval' toolpacks/frida/agent.ts
+          } 2>&1 | tee /tmp/frida-assemble.log
+
+      - name: Build and validate deterministic toolpack
+        id: package
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            python3 toolpacks/frida/build_toolpack.py | tee dist/build-summary.txt
+            unzip -t dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
+            jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
+            jq -e '.version == "frida-17.17.0-autocrack-1.0.3"' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida-server-android")) != null' dist/manifest.json >/dev/null
+            jq -e '.commands | length == 2' dist/manifest.json >/dev/null
+            jq -e '([.selfTests[] | select(.id == "frida-bounded-client-help") | .outputContains[]] | index("tls-trace")) != null' dist/manifest.json >/dev/null
+          } 2>&1 | tee /tmp/frida-package.log
+
+      - name: Upload Frida provenance metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-frida-17.17.0-provenance
+          path: |
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/build-summary.txt
+            dist/source/frida-agent.package-lock.json
+            dist/source/*.sha256
+            dist/source/*.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Frida toolpack artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-frida-17.17.0-toolpack
+          path: |
+            dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
+            dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip.sha256
+            dist/manifest.json
+            dist/payload.sha256
+            dist/payload.size
+            dist/build-summary.txt
+            dist/source/
+          if-no-files-found: error
+          retention-days: 14

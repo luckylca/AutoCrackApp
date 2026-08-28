@@ -2,6 +2,12 @@
 
 AutoCrackApp is an Android-first APK reverse-analysis agent for authorized security research and software interoperability work.
 
+## Final runtime target
+
+The production Agent runtime target is `android_rootfs_only`: every Agent-callable tool must run inside the installed Android app, Android root shell, Android loopback, or the Debian ARM64 rootfs. Mac, Windows, desktop Linux daemons, ADB, and developer workstation paths are allowed for development and GitHub Actions toolpack builds only; they are not allowed as final Agent runtime dependencies.
+
+See [Final runtime target](docs/FINAL_RUNTIME_TARGET.md) and [Android/rootfs network capture plan](docs/ANDROID_ROOTFS_NETWORK_CAPTURE.md).
+
 ## Current milestone
 
 Phase 5 provides an end-to-end static-analysis Agent MVP:
@@ -27,6 +33,8 @@ The CI workflow installs Gradle 8.13 and runs:
 ```bash
 gradle --no-daemon --stacktrace clean lintDebug testDebugUnitTest assembleDebug
 ```
+
+Local validation should use the same Gradle line as CI. Gradle 9.6.x is not a supported local runner for this AGP 8.x project; use Gradle 8.13 or the CI workflow when checking Android unit tests and APK assembly.
 
 The resulting artifact contains:
 

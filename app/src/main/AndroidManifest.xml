@@ -31,6 +31,15 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Interactive Debian PTY, debugger, and reverse-engineering sessions" />
         </service>
+
+        <service
+            android:name=".runtime.AgentExecutionForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Long-running reverse-engineering Agent, rootfs, Frida, and debugger execution" />
+        </service>
     </application>
 
 </manifest>

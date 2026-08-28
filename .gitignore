@@ -8,6 +8,9 @@ local.properties
 /captures/
 .externalNativeBuild/
 .cxx/
+.local-cache/
+__pycache__/
+*.pyc
 *.jks
 *.keystore
 keystore.properties

@@ -1,13 +1,18 @@
 package com.luckylca.autocrack.runtime
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.luckylca.autocrack.MainActivity
 
@@ -43,8 +48,18 @@ class PtySessionForegroundService : Service() {
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
-        startForeground(NOTIFICATION_ID, notification)
+        startForegroundWithDeclaredType(notification)
         return START_NOT_STICKY
+    }
+
+    @SuppressLint("ForegroundServiceType")
+    private fun startForegroundWithDeclaredType(notification: Notification) {
+        val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceType)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

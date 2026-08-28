@@ -46,6 +46,16 @@ class DynamicHostReadBridge(
         )
     }
 
+    suspend fun readProcessMaps(pid: Int): CommandResult {
+        require(pid > 0) { "PID 必须是正整数" }
+        val session = requireRootSession()
+        return executeAudited(
+            session.executor,
+            RootToolCommand.ReadProcessMaps(pid),
+            pid,
+        )
+    }
+
     suspend fun inspectProcess(pid: Int): HostProcessInspectionReport {
         require(pid > 0) { "PID 必须是正整数" }
         val session = requireRootSession()
