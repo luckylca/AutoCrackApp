@@ -30,15 +30,18 @@ data class ToolpackSourceArtifact(
 data class ToolpackCommand(
     val name: String,
     val relativePath: String,
+    val description: String = "",
 ) {
     init {
         require(name.matches(TOOLPACK_COMMAND_NAME_REGEX)) { "非法工具命令名：$name" }
         ToolpackPathPolicy.validateRelativePath(relativePath)
+        require(description.length <= TOOLPACK_MAX_DESCRIPTION_CHARS) { "工具命令描述过长：$name" }
     }
 
     fun toJson(): JSONObject = JSONObject()
         .put("name", name)
         .put("relativePath", relativePath)
+        .put("description", description)
 }
 
 data class ToolpackSelfTest(
@@ -88,6 +91,7 @@ data class ToolpackPackageManifest(
     val commands: List<ToolpackCommand>,
     val selfTests: List<ToolpackSelfTest>,
     val sources: List<ToolpackSourceArtifact>,
+    val description: String = "",
 ) {
     init {
         require(schemaVersion == SUPPORTED_SCHEMA_VERSION) {
@@ -97,6 +101,7 @@ data class ToolpackPackageManifest(
         require(title.isNotBlank() && title.length <= TOOLPACK_MAX_TITLE_CHARS) {
             "toolpack 标题非法"
         }
+        require(description.length <= TOOLPACK_MAX_DESCRIPTION_CHARS) { "toolpack 描述过长" }
         require(version.matches(TOOLPACK_SAFE_VERSION_REGEX)) {
             "非法 toolpack 版本：$version"
         }
@@ -132,6 +137,7 @@ data class ToolpackPackageManifest(
         .put("id", id)
         .put("title", title)
         .put("version", version)
+        .put("description", description)
         .put("architecture", architecture)
         .put("payloadEntry", payloadEntry)
         .put("payloadSha256", payloadSha256)
@@ -154,6 +160,7 @@ data class ToolpackPackageManifest(
                 id = json.getString("id"),
                 title = json.getString("title"),
                 version = json.getString("version"),
+                description = json.optString("description"),
                 architecture = json.getString("architecture").lowercase(Locale.US),
                 payloadEntry = json.getString("payloadEntry"),
                 payloadSha256 = json.getString("payloadSha256").lowercase(Locale.US),
@@ -163,6 +170,7 @@ data class ToolpackPackageManifest(
                     ToolpackCommand(
                         name = item.getString("name"),
                         relativePath = item.getString("relativePath"),
+                        description = item.optString("description"),
                     )
                 },
                 selfTests = json.getJSONArray("selfTests").toObjectList { item ->
@@ -254,6 +262,7 @@ private val TOOLPACK_COMMAND_NAME_REGEX = Regex("[A-Za-z0-9._+-]{1,64}")
 private val TOOLPACK_SHA256_REGEX = Regex("[a-fA-F0-9]{64}")
 private const val TOOLPACK_MAX_VERSION_CHARS = 160
 private const val TOOLPACK_MAX_TITLE_CHARS = 200
+private const val TOOLPACK_MAX_DESCRIPTION_CHARS = 2_000
 private const val TOOLPACK_MAX_SELF_TEST_COMMAND_CHARS = 4_096
 private const val TOOLPACK_MAX_EXPECTED_OUTPUT_CHARS = 512
 private const val TOOLPACK_MAX_RELATIVE_PATH_CHARS = 512

@@ -53,6 +53,18 @@ class RuntimeLayout(context: Context) {
         return directory
     }
 
+    fun createAgentWorkspace(sessionId: String): File {
+        require(sessionId.matches(Regex("^[A-Za-z0-9._-]{1,96}$"))) { "非法 Agent session id" }
+        initialize()
+        val agentRoot = File(workspacesRoot, "agent").canonicalFile
+        ensureInside(workspacesRoot, agentRoot)
+        ensureDirectory(agentRoot)
+        val directory = File(agentRoot, sessionId).canonicalFile
+        ensureInside(agentRoot, directory)
+        ensureDirectory(directory)
+        return directory
+    }
+
     fun readRootfsState(): RuntimeRootfsState {
         initialize()
         return runCatching {
