@@ -17,18 +17,34 @@ import androidx.core.content.ContextCompat
 import com.luckylca.autocrack.MainActivity
 import java.util.UUID
 
+internal data class AgentExecutionLease(
+    val label: String,
+    val stage: String,
+)
+
 internal data class AgentExecutionLeaseSnapshot(
     val count: Int,
-    val latestPackageName: String?,
+    val latestLabel: String?,
+    val latestStage: String?,
 )
 
 internal class AgentExecutionLeaseState {
-    private val activeLeases = linkedMapOf<String, String>()
+    private val activeLeases = linkedMapOf<String, AgentExecutionLease>()
 
     @Synchronized
-    fun acquire(leaseId: String, packageName: String): AgentExecutionLeaseSnapshot {
+    fun acquire(leaseId: String, label: String, stage: String): AgentExecutionLeaseSnapshot {
         require(leaseId.isNotBlank()) { "Agent execution lease ID must not be blank" }
-        activeLeases[leaseId] = packageName.ifBlank { "unknown" }
+        activeLeases[leaseId] = AgentExecutionLease(
+            label = label.ifBlank { "Mobile Agent" },
+            stage = stage.ifBlank { "Agent 正在工作" },
+        )
+        return snapshotLocked()
+    }
+
+    @Synchronized
+    fun update(leaseId: String, stage: String): AgentExecutionLeaseSnapshot {
+        val current = activeLeases[leaseId]
+        if (current != null) activeLeases[leaseId] = current.copy(stage = stage.ifBlank { current.stage })
         return snapshotLocked()
     }
 
@@ -41,10 +57,14 @@ internal class AgentExecutionLeaseState {
     @Synchronized
     fun snapshot(): AgentExecutionLeaseSnapshot = snapshotLocked()
 
-    private fun snapshotLocked(): AgentExecutionLeaseSnapshot = AgentExecutionLeaseSnapshot(
-        count = activeLeases.size,
-        latestPackageName = activeLeases.values.lastOrNull(),
-    )
+    private fun snapshotLocked(): AgentExecutionLeaseSnapshot {
+        val latest = activeLeases.values.lastOrNull()
+        return AgentExecutionLeaseSnapshot(
+            count = activeLeases.size,
+            latestLabel = latest?.label,
+            latestStage = latest?.stage,
+        )
+    }
 }
 
 /**
@@ -56,6 +76,7 @@ internal class AgentExecutionLeaseState {
 class AgentExecutionForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
+        INSTANCE = this
         val channel = NotificationChannel(
             CHANNEL_ID,
             "AutoCrackApp Agent 任务",
@@ -71,24 +92,24 @@ class AgentExecutionForegroundService : Service() {
         if (intent?.action != ACTION_ACQUIRE || leaseId == null) {
             // Every startForegroundService() request must transition promptly even if a stale start
             // intent arrives after its in-process lease was already released.
-            startForegroundWithDeclaredType(buildNotification(null, 1))
+            startForegroundWithDeclaredType(buildNotification(null, null, 1))
             stopForegroundAndSelf(startId)
             return START_NOT_STICKY
         }
 
         val snapshot = LEASE_STATE.snapshot()
         if (snapshot.count == 0) {
-            startForegroundWithDeclaredType(buildNotification(null, 1))
+            startForegroundWithDeclaredType(buildNotification(null, null, 1))
             stopForegroundAndSelf(startId)
             return START_NOT_STICKY
         }
         startForegroundWithDeclaredType(
-            buildNotification(snapshot.latestPackageName, snapshot.count),
+            buildNotification(snapshot.latestLabel, snapshot.latestStage, snapshot.count),
         )
         return START_NOT_STICKY
     }
 
-    private fun buildNotification(packageName: String?, leaseCount: Int): Notification {
+    private fun buildNotification(label: String?, stage: String?, leaseCount: Int): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -96,11 +117,13 @@ class AgentExecutionForegroundService : Service() {
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val taskText = packageName?.takeIf { it != "unknown" }?.let { "$it · " }.orEmpty()
+        val title = label?.takeIf(String::isNotBlank) ?: "Mobile Agent"
+        val taskText = stage?.takeIf(String::isNotBlank) ?: "Agent 正在工作"
+        val summary = if (leaseCount > 1) "$taskText · $leaseCount 个任务" else taskText
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
-            .setContentTitle("Mobile Agent 运行中")
-            .setContentText("${taskText}活跃任务 $leaseCount")
+            .setContentTitle(title)
+            .setContentText(summary)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -123,6 +146,18 @@ class AgentExecutionForegroundService : Service() {
         stopSelfResult(startId)
     }
 
+    private fun refreshNotification(snapshot: AgentExecutionLeaseSnapshot) {
+        if (snapshot.count <= 0) return
+        startForegroundWithDeclaredType(
+            buildNotification(snapshot.latestLabel, snapshot.latestStage, snapshot.count),
+        )
+    }
+
+    override fun onDestroy() {
+        if (INSTANCE === this) INSTANCE = null
+        super.onDestroy()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
@@ -131,10 +166,15 @@ class AgentExecutionForegroundService : Service() {
         private const val ACTION_ACQUIRE = "com.luckylca.autocrack.action.AGENT_EXECUTION_ACQUIRE"
         private const val EXTRA_LEASE_ID = "lease_id"
         private val LEASE_STATE = AgentExecutionLeaseState()
+        @Volatile private var INSTANCE: AgentExecutionForegroundService? = null
 
-        fun acquire(context: Context, packageName: String): String {
+        fun acquire(
+            context: Context,
+            label: String,
+            stage: String = "Agent 正在启动",
+        ): String {
             val leaseId = UUID.randomUUID().toString()
-            LEASE_STATE.acquire(leaseId, packageName)
+            LEASE_STATE.acquire(leaseId, label, stage)
             val intent = Intent(context, AgentExecutionForegroundService::class.java)
                 .setAction(ACTION_ACQUIRE)
                 .putExtra(EXTRA_LEASE_ID, leaseId)
@@ -147,6 +187,12 @@ class AgentExecutionForegroundService : Service() {
             return leaseId
         }
 
+        fun update(leaseId: String, stage: String) {
+            if (leaseId.isBlank()) return
+            val snapshot = LEASE_STATE.update(leaseId, stage)
+            INSTANCE?.refreshNotification(snapshot)
+        }
+
         fun release(context: Context, leaseId: String) {
             if (leaseId.isBlank()) return
             val snapshot = LEASE_STATE.release(leaseId)
@@ -154,6 +200,8 @@ class AgentExecutionForegroundService : Service() {
                 // release() may run while the selected target is foreground. stopService() is safe
                 // from that background state and avoids a second Android 12+ FGS-start decision.
                 context.stopService(Intent(context, AgentExecutionForegroundService::class.java))
+            } else {
+                INSTANCE?.refreshNotification(snapshot)
             }
         }
     }

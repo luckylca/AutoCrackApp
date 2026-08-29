@@ -9,31 +9,39 @@ class AgentExecutionLeaseStateTest {
     fun overlappingLeasesRemainActiveUntilFinalRelease() {
         val state = AgentExecutionLeaseState()
 
-        val first = state.acquire("lease-a", "com.example.first")
+        val first = state.acquire("lease-a", "会话一", "正在思考")
         assertEquals(1, first.count)
-        assertEquals("com.example.first", first.latestPackageName)
+        assertEquals("会话一", first.latestLabel)
+        assertEquals("正在思考", first.latestStage)
 
-        val second = state.acquire("lease-b", "com.example.second")
+        val second = state.acquire("lease-b", "会话二", "正在运行 bash")
         assertEquals(2, second.count)
-        assertEquals("com.example.second", second.latestPackageName)
+        assertEquals("会话二", second.latestLabel)
+        assertEquals("正在运行 bash", second.latestStage)
+
+        val updated = state.update("lease-b", "Agent 正在回复")
+        assertEquals("会话二", updated.latestLabel)
+        assertEquals("Agent 正在回复", updated.latestStage)
 
         val afterFirstRelease = state.release("lease-a")
         assertEquals(1, afterFirstRelease.count)
-        assertEquals("com.example.second", afterFirstRelease.latestPackageName)
+        assertEquals("会话二", afterFirstRelease.latestLabel)
 
         val afterFinalRelease = state.release("lease-b")
         assertEquals(0, afterFinalRelease.count)
-        assertNull(afterFinalRelease.latestPackageName)
+        assertNull(afterFinalRelease.latestLabel)
+        assertNull(afterFinalRelease.latestStage)
     }
 
     @Test
     fun unknownReleaseDoesNotAffectActiveLease() {
         val state = AgentExecutionLeaseState()
-        state.acquire("lease-a", "com.example.target")
+        state.acquire("lease-a", "目标会话", "正在工作")
 
         val snapshot = state.release("not-present")
 
         assertEquals(1, snapshot.count)
-        assertEquals("com.example.target", snapshot.latestPackageName)
+        assertEquals("目标会话", snapshot.latestLabel)
+        assertEquals("正在工作", snapshot.latestStage)
     }
 }

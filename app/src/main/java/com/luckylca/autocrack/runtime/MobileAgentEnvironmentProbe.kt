@@ -1,5 +1,10 @@
 package com.luckylca.autocrack.runtime
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+
 import android.content.Context
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
@@ -41,6 +46,15 @@ class MobileAgentEnvironmentProbe(context: Context) {
             label = "su",
             healthy = root.suPath?.isNotBlank() == true,
             detail = root.suPath ?: "未找到 su",
+        )
+        val notificationGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        checks += EnvironmentCheckItem(
+            id = "notifications",
+            label = "通知",
+            healthy = notificationGranted,
+            detail = if (notificationGranted) "Agent 前台保活通知可见" else "未授权通知；Agent 仍可运行，但通知栏可能不显示",
+            safelyRepairable = !notificationGranted,
         )
 
         val rootfsInstalled = layout.readRootfsState() == RuntimeRootfsState.INSTALLED && layout.rootfsRoot.isDirectory

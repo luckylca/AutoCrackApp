@@ -241,7 +241,7 @@ private fun SettingsHome(
         SettingsGroupTitle("环境")
         SettingsRow("Root", if (rootGranted) "✓ 正常" else "! 异常") { onPageChange(AgentSettingsPage.ENVIRONMENT) }
         SettingsRow("Debian RootFS", "${rootfsInfo.state.name} · ${rootfsInfo.version ?: "未安装"}") { onPageChange(AgentSettingsPage.ROOTFS) }
-        SettingsRow("权限检查", "Root、挂载、Storage、Network、Debian") { onPageChange(AgentSettingsPage.PERMISSION_CHECK) }
+        SettingsRow("权限检查", "Root、通知、挂载、Storage、Network、Debian") { onPageChange(AgentSettingsPage.PERMISSION_CHECK) }
         SettingsGroupTitle("工具包")
         SettingsRow("工具包管理", "已安装 $toolpackCount 个") { onPageChange(AgentSettingsPage.TOOLPACKS) }
         SettingsGroupTitle("权限")
@@ -329,7 +329,7 @@ private fun EnvironmentSettings(
     SettingsList(title = "环境", onBack = onBack) {
         SettingsRow("Root", if (rootGranted) "✓ $rootProvider" else "! 未授权") { onPageChange(AgentSettingsPage.PERMISSION_CHECK) }
         SettingsRow("Debian RootFS", "${rootfsInfo.state.name} · ${rootfsInfo.version ?: "无版本"}") { onPageChange(AgentSettingsPage.ROOTFS) }
-        SettingsRow("权限检查", "检查 su、chroot、mount、/proc、/sys、/dev、网络和基础命令") { onPageChange(AgentSettingsPage.PERMISSION_CHECK) }
+        SettingsRow("权限检查", "检查通知、su、chroot、mount、/proc、/sys、/dev、网络和基础命令") { onPageChange(AgentSettingsPage.PERMISSION_CHECK) }
     }
 }
 
@@ -346,7 +346,7 @@ private fun PermissionCheckSettings(
         Button(modifier = Modifier.fillMaxWidth(), onClick = onRefresh, enabled = !loading) { Text(if (loading) "检查中…" else "重新检查") }
         if (loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        checks.filter { it.label in setOf("Root", "su", "chroot", "mount", "/proc", "/sys", "/dev", "/dev/pts", "Storage", "Network", "Debian RootFS", "bash", "Python") }.forEach { check ->
+        checks.filter { it.label in setOf("Root", "su", "通知", "chroot", "mount", "/proc", "/sys", "/dev", "/dev/pts", "Storage", "Network", "Debian RootFS", "bash", "Python") }.forEach { check ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (check.healthy) "✓" else "!", color = if (check.healthy) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                 Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {

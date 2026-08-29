@@ -1,5 +1,10 @@
 package com.luckylca.autocrack.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -112,6 +117,7 @@ fun MobilePiAgentScreen() {
     var renameTarget by remember { mutableStateOf<MobileAgentConversation?>(null) }
     var renameInput by remember { mutableStateOf("") }
     var uiStatus by remember { mutableStateOf<String?>(null) }
+    var notificationPermissionPrompted by remember { mutableStateOf(false) }
 
     var savedConfig by remember { mutableStateOf(configStore.load()) }
     var baseUrlInput by remember { mutableStateOf(savedConfig?.baseUrl.orEmpty()) }
@@ -178,6 +184,23 @@ fun MobilePiAgentScreen() {
         }
     }
 
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notificationPermissionPrompted = true
+        environmentStatus = if (granted) "Agent 保活通知已授权" else "通知权限未授权；Agent 仍会使用前台服务保活"
+        scope.launch { refreshRootAndRootfs(refreshEnvironment = true) }
+    }
+
+    fun requestAgentNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+            !notificationPermissionPrompted
+        ) {
+            notificationPermissionPrompted = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     suspend fun refreshLogs() {
         agentLog = withContext(Dispatchers.IO) { tailText(File(layout.auditRoot, "mobile-agent-events.jsonl"), 90_000) }
         toolLog = withContext(Dispatchers.IO) { tailText(layout.chrootAuditFile, 120_000) }
@@ -225,6 +248,7 @@ fun MobilePiAgentScreen() {
         }
         val message = input.trim()
         if (message.isBlank() && pendingAttachments.isEmpty()) return
+        requestAgentNotificationPermissionIfNeeded()
         scope.launch {
             val conversation = activeConversation ?: conversationStore.create().also {
                 activeConversation = it
@@ -470,7 +494,10 @@ fun MobilePiAgentScreen() {
                     environmentStatus = environmentStatus,
                     onRefreshEnvironment = { scope.launch { refreshRootAndRootfs(refreshEnvironment = true) } },
                     onRepairEnvironment = { check ->
-                        if (check.id == "rootfs") settingsPage = AgentSettingsPage.ROOTFS
+                        when (check.id) {
+                            "rootfs" -> settingsPage = AgentSettingsPage.ROOTFS
+                            "notifications" -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                     },
                     rootfsStatus = rootfsStatus,
                     onRootfsStart = {

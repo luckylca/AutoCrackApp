@@ -53,6 +53,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     private val jobs = ConcurrentHashMap<String, Job>()
     private val clients = ConcurrentHashMap<String, MobileAgentToolClient>()
     private val runtimes = ConcurrentHashMap<String, MobileAgentRuntimeSession>()
+    private val foregroundLeases = ConcurrentHashMap<String, String>()
     private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<DangerousOperationDecision>>()
     private val mutableApprovals = MutableStateFlow<Map<String, DangerousOperationRequest>>(emptyMap())
     private val mutableTasks = MutableStateFlow(loadAndRecoverTasks())
@@ -114,7 +115,13 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         val preferences = preferencesStore.load()
         clients[conversationId] = client
         try {
-            leaseId = AgentExecutionForegroundService.acquire(appContext, "Mobile Agent")
+            val initialConversation = requireNotNull(conversationStore.get(conversationId)) { "会话不存在：$conversationId" }
+            leaseId = AgentExecutionForegroundService.acquire(
+                appContext,
+                initialConversation.title.ifBlank { "Mobile Agent" },
+                "检查运行环境",
+            )
+            foregroundLeases[conversationId] = leaseId
             updateRunning(conversationId, "检查运行环境")
             runtime = toolFactory.createMobileAgent(
                 sessionId = conversationId,
@@ -125,7 +132,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                 },
             )
             runtimes[conversationId] = runtime
-            var conversation = requireNotNull(conversationStore.get(conversationId)) { "会话不存在：$conversationId" }
+            var conversation = initialConversation
             if (preferences.contextCompressionEnabled) {
                 conversation = compactIfNeeded(conversationId, config, client, conversation)
             }
@@ -138,6 +145,9 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                 maxToolRounds = preferences.maxToolIterations,
                 onTextSnapshot = { text ->
                     mutableTasks.value[conversationId]?.let { current ->
+                        if (current.stage != "Agent 正在回复") {
+                            foregroundLeases[conversationId]?.let { AgentExecutionForegroundService.update(it, "Agent 正在回复") }
+                        }
                         updateTask(
                             current.copy(
                                 stage = "Agent 正在回复",
@@ -177,6 +187,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
             runtimes.remove(conversationId)?.cancelAllCommands?.invoke()
             runtime?.tools?.closeSafely()
             clients.remove(conversationId)?.cancelCurrent()
+            foregroundLeases.remove(conversationId)
             leaseId?.let { AgentExecutionForegroundService.release(appContext, it) }
             jobs.remove(conversationId)
         }
@@ -268,6 +279,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     private fun updateRunning(conversationId: String, stage: String) {
         val current = mutableTasks.value[conversationId] ?: return
         if (current.status != MobileAgentTaskStatus.RUNNING) return
+        foregroundLeases[conversationId]?.let { AgentExecutionForegroundService.update(it, stage) }
         updateTask(
             current.copy(stage = stage, updatedAtEpochMillis = System.currentTimeMillis()),
             persist = true,
