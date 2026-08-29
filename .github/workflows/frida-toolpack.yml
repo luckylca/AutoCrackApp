@@ -156,6 +156,7 @@ jobs:
             dist/payload.sha256
             dist/payload.size
             dist/build-summary.txt
+            toolpacks/frida/dist/autocrack-frida-agent.js
             dist/source/frida-agent.package-lock.json
             dist/source/*.sha256
             dist/source/*.txt
