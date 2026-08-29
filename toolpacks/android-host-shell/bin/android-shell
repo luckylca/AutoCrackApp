@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import socket
+import sys
+
+HOST_ENV = "AUTOC_ANDROID_HOST_ADDR"
+PORT_ENV = "AUTOC_ANDROID_HOST_PORT"
+TOKEN_ENV = "AUTOC_ANDROID_HOST_TOKEN"
+WORKSPACE_ENV = "AUTOC_ANDROID_HOST_WORKSPACE"
+DEFAULT_TIMEOUT_MS = 30000
+MAX_RESPONSE_BYTES = 1200000
+
+
+def usage() -> None:
+    print(
+        """android-shell - execute an Android host command as root from the Debian Agent rootfs
+
+Usage:
+  android-shell PROGRAM [ARG ...]
+  android-shell sh -c 'COMMAND | PIPELINE'
+  android-shell --timeout-ms MS [--reason TEXT] PROGRAM [ARG ...]
+
+Examples:
+  android-shell id
+  android-shell getprop ro.product.model
+  android-shell pm list packages
+  android-shell pm path com.ss.android.ugc.aweme
+  android-shell dumpsys package com.ss.android.ugc.aweme
+  android-shell sh -c 'pm list packages | grep aweme'
+
+The Android host working directory is the host-visible mirror of Debian /workspace.
+Relative files created by android-shell therefore appear in /workspace.
+"""
+    )
+
+
+def parse(argv):
+    if not argv or argv[0] in ("-h", "--help"):
+        usage()
+        raise SystemExit(0)
+    if argv[0] == "--self-test":
+        print("ANDROID_HOST_SHELL_CLIENT_OK")
+        raise SystemExit(0)
+
+    timeout_ms = DEFAULT_TIMEOUT_MS
+    reason = None
+    index = 0
+    while index < len(argv):
+        value = argv[index]
+        if value == "--timeout-ms":
+            index += 1
+            if index >= len(argv):
+                raise SystemExit("android-shell: --timeout-ms requires a value")
+            timeout_ms = int(argv[index])
+            index += 1
+            continue
+        if value == "--reason":
+            index += 1
+            if index >= len(argv):
+                raise SystemExit("android-shell: --reason requires a value")
+            reason = argv[index]
+            index += 1
+            continue
+        if value == "--":
+            index += 1
+        break
+
+    command = argv[index:]
+    if not command:
+        raise SystemExit("android-shell: missing Android host command")
+    return timeout_ms, reason, command
+
+
+def map_workspace_argument(value: str, host_workspace: str) -> str:
+    """Map the Agent's /workspace path to the Android-host backing directory."""
+    if not host_workspace:
+        return value
+    host_workspace = host_workspace.rstrip("/")
+    return re.sub(r"/workspace(?=/|$|[\\s;&|)>'\"`])", host_workspace, value)
+
+
+def read_response(sock):
+    data = bytearray()
+    while True:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > MAX_RESPONSE_BYTES:
+            raise RuntimeError("bridge response is too large")
+        if b"\n" in chunk:
+            break
+    line = bytes(data).split(b"\n", 1)[0]
+    if not line:
+        raise RuntimeError("empty bridge response")
+    return json.loads(line.decode("utf-8"))
+
+
+def main() -> int:
+    timeout_ms, reason, command = parse(sys.argv[1:])
+    host = os.environ.get(HOST_ENV, "")
+    port_text = os.environ.get(PORT_ENV, "")
+    token = os.environ.get(TOKEN_ENV, "")
+    if not host or not port_text or not token:
+        print(
+            "android-shell: Android host bridge is unavailable. "
+            "Run inside a Mobile Agent session with the android-host-shell toolpack installed.",
+            file=sys.stderr,
+        )
+        return 125
+
+    host_workspace = os.environ.get(WORKSPACE_ENV, "")
+    if not host_workspace:
+        print("android-shell: Android host workspace mapping is unavailable.", file=sys.stderr)
+        return 125
+    command = [map_workspace_argument(value, host_workspace) for value in command]
+
+    request = {
+        "token": token,
+        "argv": command,
+        "timeout_ms": timeout_ms,
+    }
+    if reason:
+        request["reason"] = reason
+    if not sys.stdin.isatty():
+        stdin = sys.stdin.read()
+        if stdin:
+            request["stdin"] = stdin
+
+    with socket.create_connection((host, int(port_text)), timeout=5.0) as sock:
+        sock.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8"))
+        response = read_response(sock)
+
+    stdout = response.get("stdout") or ""
+    stderr = response.get("stderr") or ""
+    failure = response.get("failure")
+    if stdout:
+        sys.stdout.write(stdout)
+        if not stdout.endswith("\n"):
+            sys.stdout.write("\n")
+    if stderr:
+        sys.stderr.write(stderr)
+        if not stderr.endswith("\n"):
+            sys.stderr.write("\n")
+    if failure:
+        print(f"android-shell: {failure}", file=sys.stderr)
+
+    if response.get("timedOut"):
+        return 124
+    if response.get("cancelled"):
+        return 130
+    exit_code = response.get("exitCode")
+    return int(exit_code) if isinstance(exit_code, int) else (0 if response.get("ok") else 125)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

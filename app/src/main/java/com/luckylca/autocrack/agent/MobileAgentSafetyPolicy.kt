@@ -8,6 +8,7 @@ enum class DangerousOperationCategory(val label: String) {
     BLOCK_DEVICE_WRITE("块设备写入"),
     MOUNT_CONTROL("挂载控制"),
     DEVICE_CONTROL("设备级控制"),
+    PACKAGE_DATA_CHANGE("应用安装卸载或数据/权限状态变更"),
 }
 
 data class DangerousOperationRequest(
@@ -31,6 +32,8 @@ object MobileAgentDangerousCommandClassifier {
     private val blockWrite = Regex("(?is)(dd\\s+[^\\n;&|]*\\bof=/dev/(?:block|sd|mmc|nvme)|mkfs(?:\\.|\\s)|mkswap\\s+|wipefs\\s+)")
     private val mountControl = Regex("(?im)(^|[;&|]\\s*)(mount|umount)\\b")
     private val deviceControl = Regex("(?im)(^|[;&|]\\s*)(reboot|poweroff|halt)\\b")
+    private val packageDataChange = Regex("(?im)(^|[;&|]\\s*)((?:pm|cmd\\s+package)\\s+(?:install(?:-existing)?|uninstall|clear|enable|disable(?:-user)?|grant|revoke|suspend|unsuspend|hide|unhide)\\b)")
+    private val settingsWrite = Regex("(?im)(^|[;&|]\\s*)(settings\\s+(?:put|delete)\\b|setprop\\s+)")
 
     fun classify(script: String): DangerousOperationCategory? = when {
         destructiveDelete.containsMatchIn(script) -> DangerousOperationCategory.DESTRUCTIVE_DELETE
@@ -38,6 +41,8 @@ object MobileAgentDangerousCommandClassifier {
         systemWrite.containsMatchIn(script) -> DangerousOperationCategory.SYSTEM_WRITE
         mountControl.containsMatchIn(script) -> DangerousOperationCategory.MOUNT_CONTROL
         deviceControl.containsMatchIn(script) -> DangerousOperationCategory.DEVICE_CONTROL
+        packageDataChange.containsMatchIn(script) -> DangerousOperationCategory.PACKAGE_DATA_CHANGE
+        settingsWrite.containsMatchIn(script) -> DangerousOperationCategory.SYSTEM_WRITE
         else -> null
     }
 }

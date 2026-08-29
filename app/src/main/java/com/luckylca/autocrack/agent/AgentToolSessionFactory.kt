@@ -190,6 +190,19 @@ class AgentToolSessionFactory(
         val installed = ToolpackPackageInstaller(appContext, layout).listInstalled()
         val commands = installed.flatMap { it.manifest.commands }.map { it.name }.distinct().sorted()
         val workspace = WorkspaceFileService(layout.createAgentWorkspace(sessionId))
+        val hostWorkspace = layout.createRuntimeWorkspace()
+        val hostShellBridge = installed.firstOrNull { toolpack ->
+            toolpack.manifest.id == AndroidHostShellBridge.TOOLPACK_ID &&
+                toolpack.manifest.version == AndroidHostShellBridge.TOOLPACK_VERSION
+        }?.let { toolpack ->
+            com.luckylca.autocrack.runtime.BuiltInToolpackTrustPolicy.requireTrusted(toolpack.manifest)
+            AndroidHostShellBridge(
+                host = host,
+                sessionId = sessionId,
+                hostWorkspacePath = hostWorkspace.path,
+                dangerousOperationGate = dangerousOperationGate,
+            ).start()
+        }
         val executor = RawBashAgentToolExecutor(
             chroot = chroot,
             host = host,
@@ -197,13 +210,17 @@ class AgentToolSessionFactory(
             availableToolCommands = commands,
             sessionId = sessionId,
             dangerousOperationGate = dangerousOperationGate,
+            extraEnvironment = hostShellBridge?.environment().orEmpty(),
         )
         onStage("mobile_ready:${commands.joinToString(",")}")
         return MobileAgentRuntimeSession(
             tools = AgentToolSession(listOf(executor)),
             installedToolpacks = installed,
             workspacePath = workspace.rootPath(),
-            cancelAllCommands = host::cancelAll,
+            cancelAllCommands = {
+                hostShellBridge?.close()
+                host.cancelAll()
+            },
         )
     }
 

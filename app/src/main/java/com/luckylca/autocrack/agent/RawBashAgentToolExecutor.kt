@@ -23,6 +23,7 @@ class RawBashAgentToolExecutor(
     private val availableToolCommands: List<String> = emptyList(),
     private val sessionId: String? = null,
     private val dangerousOperationGate: (suspend (DangerousOperationRequest) -> DangerousOperationDecision)? = null,
+    private val extraEnvironment: Map<String, String> = emptyMap(),
 ) : AgentToolExecutor {
     override val tools: List<AgentToolDefinition> = buildDefinitions()
 
@@ -71,6 +72,7 @@ class RawBashAgentToolExecutor(
                     put("AUTOC_AGENT_MODE", "raw_bash")
                     put("AUTOC_TOOLPACK_COMMANDS", availableToolCommands.distinct().sorted().joinToString(","))
                     packageName?.takeIf(String::isNotBlank)?.let { put("AUTOC_TARGET_PACKAGE", it) }
+                    putAll(extraEnvironment)
                 },
                 stdin = stdin,
                 timeoutMillis = timeoutMillis,

@@ -45,6 +45,9 @@
         <activity
             android:name="com.luckylca.autocrack.debug.DebugElfNativeToolpackValidationActivity"
             android:exported="true" />
+        <activity
+            android:name="com.luckylca.autocrack.debug.DebugAndroidHostShellToolpackValidationActivity"
+            android:exported="true" />
     </application>
     <instrumentation
         android:name="com.luckylca.autocrack.debug.DebugUiInstrumentation"

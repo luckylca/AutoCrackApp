@@ -324,6 +324,35 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "android-host-shell" to TrustedToolpack(
+            title = "Android host root shell bridge",
+            version = "android-host-shell-1.0.1",
+            architecture = "all",
+            payloadSha256 = "6d6c88e096465af92abc38e595b854f6a6e1e714e433c58f3b4f96d238ef315b",
+            payloadSizeBytes = 6_523L,
+            requiredPaths = setOf(
+                "bin/android-shell",
+                "SKILL.md",
+            ),
+            commands = mapOf(
+                "android-shell" to "bin/android-shell",
+            ),
+            selfTests = mapOf(
+                "android-host-shell-client-self-test" to TrustedSelfTest(
+                    title = "Android host shell bridge client",
+                    command = "/opt/autocrack/toolpacks/packs/android-host-shell/android-host-shell-1.0.1/bin/android-shell --self-test",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("ANDROID_HOST_SHELL_CLIENT_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "android-host-shell-client" to TrustedSource(
+                    version = "1.0.0",
+                    url = "https://github.com/luckylca/AutoCrackApp/blob/main/toolpacks/android-host-shell/bin/android-shell",
+                    sha256 = "9ea6458c7134c2d60e4a282c726ad969ef604138066aeafd7a79555b42e72995",
+                ),
+            ),
+        ),
         "android-lldb-server" to TrustedToolpack(
             title = "Android LLDB server",
             version = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop",
