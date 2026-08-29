@@ -31,12 +31,18 @@ data class LlmAgentAnswer(
 }
 
 object LlmEndpointNormalizer {
+    private val CLEARTEXT_PROVIDER_HOSTS = setOf("128.241.229.70")
+
     fun normalize(input: String): String {
         val trimmed = input.trim().trimEnd('/')
         require(trimmed.isNotBlank()) { "API 地址不能为空" }
         val uri = URI(trimmed)
-        require(uri.scheme.equals("https", ignoreCase = true)) { "外部模型地址必须使用 HTTPS" }
+        val scheme = uri.scheme?.lowercase()
+        require(scheme == "https" || scheme == "http") { "外部模型地址只支持 HTTP 或 HTTPS" }
         require(!uri.host.isNullOrBlank()) { "API 地址缺少有效主机名" }
+        if (scheme == "http") {
+            require(uri.host in CLEARTEXT_PROVIDER_HOSTS) { "该 HTTP 模型地址未被允许；请使用 HTTPS" }
+        }
         require(uri.userInfo == null) { "API 地址不能包含用户名或密码" }
         require(uri.fragment == null) { "API 地址不能包含 URL Fragment" }
         return when {

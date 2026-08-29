@@ -4,10 +4,10 @@ import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStream
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.UUID
-import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -19,7 +19,7 @@ import org.json.JSONObject
 /** OpenAI-compatible streaming tool loop used by the generic mobile Agent. */
 class MobileAgentToolClient {
     @Volatile
-    private var activeConnection: HttpsURLConnection? = null
+    private var activeConnection: HttpURLConnection? = null
 
     @Volatile
     private var cancelled = false
@@ -317,9 +317,9 @@ class MobileAgentToolClient {
         }
     }
 
-    private fun openConnection(config: LlmProviderConfig): HttpsURLConnection =
-        (URL(config.baseUrl).openConnection() as? HttpsURLConnection
-            ?: throw IOException("外部模型地址不是 HTTPS 连接")).apply {
+    private fun openConnection(config: LlmProviderConfig): HttpURLConnection =
+        (URL(config.baseUrl).openConnection() as? HttpURLConnection
+            ?: throw IOException("外部模型地址不是 HTTP(S) 连接")).apply {
             requestMethod = "POST"
             connectTimeout = CONNECT_TIMEOUT_MILLIS
             readTimeout = READ_TIMEOUT_MILLIS
@@ -329,7 +329,7 @@ class MobileAgentToolClient {
             setRequestProperty("Accept", "text/event-stream, application/json")
         }
 
-    private fun writeRequest(connection: HttpsURLConnection, request: JSONObject) {
+    private fun writeRequest(connection: HttpURLConnection, request: JSONObject) {
         ensureRunningBlocking()
         connection.outputStream.use { output ->
             output.write(request.toString().toByteArray(Charsets.UTF_8))
