@@ -83,7 +83,7 @@ def main() -> None:
                 "title": "Bounded AutoCrack Frida client",
                 "command": f"{root}/bin/frida-autocrack-client --help",
                 "expectedExitCodes": [0],
-                "outputContains": ["native-trace", "tls-trace"],
+                "outputContains": ["native-trace", "tls-trace", "java-field-write"],
             },
         ],
         "sources": [

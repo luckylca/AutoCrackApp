@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import pathlib
 import re
 import sys
@@ -12,6 +13,7 @@ DEFAULT_PORT = 27042
 MAX_TEXT = 512
 MODULE_RE = re.compile(r"^[A-Za-z0-9._+@-]{1,256}$")
 CLASS_RE = re.compile(r"^[A-Za-z0-9_.$\[\]/-]{1,512}$")
+FIELD_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]{0,511}$")
 
 
 def emit(value):
@@ -57,6 +59,27 @@ def require_class(text):
     return value
 
 
+def require_field(text):
+    value = str(text).strip()
+    if not FIELD_RE.fullmatch(value):
+        fail("field name contains unsupported characters")
+    return value
+
+
+def parse_scalar_json(text):
+    if len(text) > 16384:
+        fail("value-json is too large")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        fail(f"value-json must be valid JSON: {exc.msg}")
+    if value is not None and not isinstance(value, (bool, int, float, str)):
+        fail("value-json must be a scalar: null, boolean, number, or string")
+    if isinstance(value, float) and not math.isfinite(value):
+        fail("value-json number must be finite")
+    return value
+
+
 def agent_source():
     path = pathlib.Path(__file__).resolve().parent.parent / "libexec" / "autocrack-frida-agent.js"
     return path.read_text(encoding="utf-8")
@@ -91,6 +114,17 @@ def invoke(args):
             result = rpc.javaclasses(args.query[:MAX_TEXT], args.max_count)
         elif args.command == "java-methods":
             result = rpc.javamethods(require_class(args.class_name), args.max_count)
+        elif args.command == "java-fields":
+            result = rpc.javafields(require_class(args.class_name), args.max_count)
+        elif args.command == "java-instances":
+            result = rpc.javainstances(require_class(args.class_name), args.max_count, args.max_fields)
+        elif args.command == "java-field-write":
+            result = rpc.javafieldwrite(
+                require_class(args.class_name),
+                require_field(args.field_name),
+                args.instance_index,
+                parse_scalar_json(args.value_json),
+            )
         elif args.command == "net-stack":
             result = rpc.netstack(args.max_count)
         elif args.command == "tls-trace":
@@ -150,6 +184,21 @@ def build_parser():
     methods = sub.add_parser("java-methods")
     methods.add_argument("--class-name", required=True)
     methods.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 512, "max-count"), default=128)
+
+    fields = sub.add_parser("java-fields")
+    fields.add_argument("--class-name", required=True)
+    fields.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 512, "max-count"), default=128)
+
+    instances = sub.add_parser("java-instances")
+    instances.add_argument("--class-name", required=True)
+    instances.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 64, "max-count"), default=16)
+    instances.add_argument("--max-fields", type=lambda v: bounded_int(v, 0, 32, "max-fields"), default=16)
+
+    field_write = sub.add_parser("java-field-write")
+    field_write.add_argument("--class-name", required=True)
+    field_write.add_argument("--field-name", required=True)
+    field_write.add_argument("--instance-index", type=lambda v: bounded_int(v, 0, 63, "instance-index"), required=True)
+    field_write.add_argument("--value-json", required=True)
 
     net_stack = sub.add_parser("net-stack")
     net_stack.add_argument("--max-count", type=lambda v: bounded_int(v, 1, 128, "max-count"), default=64)

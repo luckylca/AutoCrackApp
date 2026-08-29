@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - agent/phase-5.15.6-continuation
+      - codex/frida-capabilities-1.0.4
     paths:
       - .github/workflows/frida-toolpack.yml
       - toolpacks/frida/**
@@ -27,7 +28,7 @@ jobs:
       FRIDA_PYTHON_WHEEL_SHA256: "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8"
       FRIDA_JAVA_BRIDGE_VERSION: "7.0.13"
       FRIDA_COMPILE_VERSION: "19.0.5"
-      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.0.3
+      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.0.4
 
     steps:
       - name: Check out AutoCrackApp
@@ -125,6 +126,7 @@ jobs:
             grep -F 'Interceptor.attach' toolpacks/frida/agent.ts
             grep -F 'SSL_write' toolpacks/frida/agent.ts
             grep -F 'SSL_read' toolpacks/frida/agent.ts
+            grep -F 'javafieldwrite' toolpacks/frida/agent.ts
             ! grep -Eq 'Interceptor\.replace|Memory\.write|rpc\.exports\..*eval' toolpacks/frida/agent.ts
           } 2>&1 | tee /tmp/frida-assemble.log
 
@@ -137,11 +139,12 @@ jobs:
             python3 toolpacks/frida/build_toolpack.py | tee dist/build-summary.txt
             unzip -t dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
             jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
-            jq -e '.version == "frida-17.17.0-autocrack-1.0.3"' dist/manifest.json >/dev/null
+            jq -e '.version == "frida-17.17.0-autocrack-1.0.4"' dist/manifest.json >/dev/null
             jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
             jq -e '([.commands[].name] | index("frida-server-android")) != null' dist/manifest.json >/dev/null
             jq -e '.commands | length == 2' dist/manifest.json >/dev/null
             jq -e '([.selfTests[] | select(.id == "frida-bounded-client-help") | .outputContains[]] | index("tls-trace")) != null' dist/manifest.json >/dev/null
+            jq -e '([.selfTests[] | select(.id == "frida-bounded-client-help") | .outputContains[]] | index("java-field-write")) != null' dist/manifest.json >/dev/null
           } 2>&1 | tee /tmp/frida-package.log
 
       - name: Upload Frida provenance metadata

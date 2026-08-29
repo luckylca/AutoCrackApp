@@ -22,6 +22,15 @@ type TlsTraceEvent = {
   previewText: string;
 };
 
+type JavaFieldMetadata = {
+  name: string;
+  type: string;
+  modifiers: string;
+  static: boolean;
+  final: boolean;
+  writable: boolean;
+};
+
 let traceListener: InvocationListener | null = null;
 let traceEvents: TraceEvent[] = [];
 let traceLimit = 64;
@@ -41,6 +50,115 @@ function clampInt(value: number, minimum: number, maximum: number): number {
 
 function normalizeText(value: string, maximum: number): string {
   return String(value ?? '').trim().slice(0, maximum);
+}
+
+function javaFieldMetadata(field: any): JavaFieldMetadata {
+  const modifiers = Number(field.getModifiers());
+  const type = String(field.getType().getName());
+  const isStatic = (modifiers & 0x0008) !== 0;
+  const isFinal = (modifiers & 0x0010) !== 0;
+  return {
+    name: String(field.getName()).slice(0, 512),
+    type: type.slice(0, 512),
+    modifiers: String(field.toString()).split(' ').slice(0, -1).join(' ').slice(0, 512),
+    static: isStatic,
+    final: isFinal,
+    writable: !isStatic && !isFinal && isSupportedJavaFieldType(type),
+  };
+}
+
+function isSupportedJavaFieldType(type: string): boolean {
+  return new Set([
+    'boolean', 'byte', 'short', 'int', 'long', 'float', 'double', 'char',
+    'java.lang.Boolean', 'java.lang.Byte', 'java.lang.Short', 'java.lang.Integer',
+    'java.lang.Long', 'java.lang.Float', 'java.lang.Double', 'java.lang.Character',
+    'java.lang.String',
+  ]).has(type);
+}
+
+function previewJavaValue(value: any): any {
+  if (value === null || value === undefined) return null;
+  const className = String(value.$className ?? '');
+  if (className === 'java.lang.String') {
+    return { type: className, value: String(value).slice(0, 512) };
+  }
+  if (new Set([
+    'java.lang.Boolean', 'java.lang.Byte', 'java.lang.Short', 'java.lang.Integer',
+    'java.lang.Long', 'java.lang.Float', 'java.lang.Double', 'java.lang.Character',
+  ]).has(className)) {
+    return { type: className, value: String(value).slice(0, 128) };
+  }
+  return { type: className || 'java.lang.Object' };
+}
+
+function previewJavaInstance(instance: any, className: string, maxFields: number): any {
+  const fields: any[] = [];
+  const declared = instance.getClass().getDeclaredFields();
+  for (let index = 0; index < declared.length && fields.length < maxFields; index += 1) {
+    const field = declared[index];
+    const metadata = javaFieldMetadata(field);
+    if (metadata.static) continue;
+    try {
+      field.setAccessible(true);
+      fields.push({ ...metadata, value: previewJavaValue(field.get(instance)) });
+    } catch (error) {
+      fields.push({ ...metadata, error: String(error).slice(0, 512) });
+    }
+  }
+  return { className, fields };
+}
+
+function requireFiniteNumber(value: any, type: string, minimum: number, maximum: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new Error(`${type} value must be a finite number in ${minimum}..${maximum}`);
+  }
+  return value;
+}
+
+function requireInteger(value: any, type: string, minimum: number, maximum: number): number {
+  const number = requireFiniteNumber(value, type, minimum, maximum);
+  if (!Number.isInteger(number)) throw new Error(`${type} value must be an integer`);
+  return number;
+}
+
+function coerceJavaFieldValue(type: string, value: any): any {
+  if (value === null) {
+    if (!type.includes('.')) throw new Error(`primitive ${type} cannot be set to null`);
+    return null;
+  }
+  switch (type) {
+    case 'boolean':
+    case 'java.lang.Boolean':
+      if (typeof value !== 'boolean') throw new Error(`${type} value must be boolean`);
+      return Java.use('java.lang.Boolean').valueOf(value);
+    case 'byte':
+    case 'java.lang.Byte':
+      return Java.use('java.lang.Byte').valueOf(requireInteger(value, type, -128, 127));
+    case 'short':
+    case 'java.lang.Short':
+      return Java.use('java.lang.Short').valueOf(requireInteger(value, type, -32768, 32767));
+    case 'int':
+    case 'java.lang.Integer':
+      return Java.use('java.lang.Integer').valueOf(requireInteger(value, type, -2147483648, 2147483647));
+    case 'long':
+    case 'java.lang.Long':
+      return Java.use('java.lang.Long').valueOf(requireInteger(value, type, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
+    case 'float':
+    case 'java.lang.Float':
+      return Java.use('java.lang.Float').valueOf(requireFiniteNumber(value, type, -3.4028235e38, 3.4028235e38));
+    case 'double':
+    case 'java.lang.Double':
+      return Java.use('java.lang.Double').valueOf(requireFiniteNumber(value, type, -Number.MAX_VALUE, Number.MAX_VALUE));
+    case 'char':
+    case 'java.lang.Character':
+      if (typeof value !== 'string' || Array.from(value).length !== 1) throw new Error(`${type} value must be one character`);
+      return Java.use('java.lang.Character').valueOf(value);
+    case 'java.lang.String':
+      if (typeof value !== 'string' || value.length > 4096) throw new Error('String value must contain at most 4096 characters');
+      return Java.use('java.lang.String').$new(value);
+    default:
+      throw new Error(`field type is not writable through the bounded agent: ${type}`);
+  }
 }
 
 function clearTrace(): void {
@@ -159,7 +277,7 @@ function installConscryptTlsHooks(): Promise<{ available: boolean; hookCount: nu
 rpc.exports = {
   ping() {
     return {
-      agentVersion: '1.1.0',
+      agentVersion: '1.2.0',
       fridaVersion: Frida.version,
       pid: Process.id,
       arch: Process.arch,
@@ -240,6 +358,123 @@ rpc.exports = {
             }
           }
           resolve({ available: true, className: requested, methods });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
+  javafields(className: string, maxCount: number) {
+    if (!Java.available) return Promise.resolve({ available: false, className, fields: [] as JavaFieldMetadata[] });
+    const requested = normalizeText(className, 512);
+    if (requested.length === 0) throw new Error('className must not be empty');
+    const limit = clampInt(maxCount, 1, 512);
+    return new Promise((resolve, reject) => {
+      Java.perform(() => {
+        try {
+          const klass = Java.use(requested);
+          const declared = klass.class.getDeclaredFields();
+          const fields: JavaFieldMetadata[] = [];
+          for (let index = 0; index < declared.length && fields.length < limit; index += 1) {
+            fields.push(javaFieldMetadata(declared[index]));
+          }
+          resolve({ available: true, className: requested, fields });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
+  javainstances(className: string, maxCount: number, maxFields: number) {
+    if (!Java.available) return Promise.resolve({ available: false, className, instances: [] as any[] });
+    const requested = normalizeText(className, 512);
+    if (requested.length === 0) throw new Error('className must not be empty');
+    const limit = clampInt(maxCount, 1, 64);
+    const fieldLimit = clampInt(maxFields, 0, 32);
+    return new Promise((resolve, reject) => {
+      Java.perform(() => {
+        const instances: any[] = [];
+        try {
+          Java.choose(requested, {
+            onMatch(instance) {
+              try {
+                instances.push({ index: instances.length, ...previewJavaInstance(instance, requested, fieldLimit) });
+                if (instances.length >= limit) return 'stop';
+                return undefined;
+              } catch (error) {
+                reject(error);
+                return 'stop';
+              }
+            },
+            onComplete() {
+              resolve({ available: true, className: requested, instances });
+            },
+          });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  },
+
+  javafieldwrite(className: string, fieldName: string, instanceIndex: number, value: any) {
+    if (!Java.available) return Promise.resolve({ available: false, className, fieldName, written: false });
+    const requested = normalizeText(className, 512);
+    const requestedField = normalizeText(fieldName, 512);
+    const selectedIndex = clampInt(instanceIndex, 0, 63);
+    if (requested.length === 0) throw new Error('className must not be empty');
+    if (requestedField.length === 0) throw new Error('fieldName must not be empty');
+    return new Promise((resolve, reject) => {
+      Java.perform(() => {
+        let currentIndex = 0;
+        let matched = false;
+        try {
+          Java.choose(requested, {
+            onMatch(instance) {
+              try {
+                if (currentIndex !== selectedIndex) {
+                  currentIndex += 1;
+                  return undefined;
+                }
+                matched = true;
+                const declared = instance.getClass().getDeclaredFields();
+                let selectedField: any = null;
+                for (let index = 0; index < declared.length; index += 1) {
+                  if (String(declared[index].getName()) === requestedField) {
+                    selectedField = declared[index];
+                    break;
+                  }
+                }
+                if (selectedField === null) throw new Error(`declared field was not found: ${requestedField}`);
+                const metadata = javaFieldMetadata(selectedField);
+                if (metadata.static) throw new Error('static field writes are not supported');
+                if (metadata.final) throw new Error('final field writes are not supported');
+                selectedField.setAccessible(true);
+                const before = previewJavaValue(selectedField.get(instance));
+                selectedField.set(instance, coerceJavaFieldValue(metadata.type, value));
+                const after = previewJavaValue(selectedField.get(instance));
+                resolve({
+                  available: true,
+                  className: requested,
+                  fieldName: requestedField,
+                  instanceIndex: selectedIndex,
+                  field: metadata,
+                  before,
+                  after,
+                  written: true,
+                });
+                return 'stop';
+              } catch (error) {
+                reject(error);
+                return 'stop';
+              }
+            },
+            onComplete() {
+              if (!matched) reject(new Error(`instance index was not found: ${selectedIndex}`));
+            },
+          });
         } catch (error) {
           reject(error);
         }
