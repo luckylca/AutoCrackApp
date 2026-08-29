@@ -130,32 +130,32 @@ function coerceJavaFieldValue(type: string, value: any): any {
     case 'boolean':
     case 'java.lang.Boolean':
       if (typeof value !== 'boolean') throw new Error(`${type} value must be boolean`);
-      return Java.use('java.lang.Boolean').valueOf(value);
+      return (Java.use('java.lang.Boolean') as any).valueOf(value);
     case 'byte':
     case 'java.lang.Byte':
-      return Java.use('java.lang.Byte').valueOf(requireInteger(value, type, -128, 127));
+      return (Java.use('java.lang.Byte') as any).valueOf(requireInteger(value, type, -128, 127));
     case 'short':
     case 'java.lang.Short':
-      return Java.use('java.lang.Short').valueOf(requireInteger(value, type, -32768, 32767));
+      return (Java.use('java.lang.Short') as any).valueOf(requireInteger(value, type, -32768, 32767));
     case 'int':
     case 'java.lang.Integer':
-      return Java.use('java.lang.Integer').valueOf(requireInteger(value, type, -2147483648, 2147483647));
+      return (Java.use('java.lang.Integer') as any).valueOf(requireInteger(value, type, -2147483648, 2147483647));
     case 'long':
     case 'java.lang.Long':
-      return Java.use('java.lang.Long').valueOf(requireInteger(value, type, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
+      return (Java.use('java.lang.Long') as any).valueOf(requireInteger(value, type, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
     case 'float':
     case 'java.lang.Float':
-      return Java.use('java.lang.Float').valueOf(requireFiniteNumber(value, type, -3.4028235e38, 3.4028235e38));
+      return (Java.use('java.lang.Float') as any).valueOf(requireFiniteNumber(value, type, -3.4028235e38, 3.4028235e38));
     case 'double':
     case 'java.lang.Double':
-      return Java.use('java.lang.Double').valueOf(requireFiniteNumber(value, type, -Number.MAX_VALUE, Number.MAX_VALUE));
+      return (Java.use('java.lang.Double') as any).valueOf(requireFiniteNumber(value, type, -Number.MAX_VALUE, Number.MAX_VALUE));
     case 'char':
     case 'java.lang.Character':
       if (typeof value !== 'string' || Array.from(value).length !== 1) throw new Error(`${type} value must be one character`);
-      return Java.use('java.lang.Character').valueOf(value);
+      return (Java.use('java.lang.Character') as any).valueOf(value);
     case 'java.lang.String':
       if (typeof value !== 'string' || value.length > 4096) throw new Error('String value must contain at most 4096 characters');
-      return Java.use('java.lang.String').$new(value);
+      return (Java.use('java.lang.String') as any).$new(value);
     default:
       throw new Error(`field type is not writable through the bounded agent: ${type}`);
   }
