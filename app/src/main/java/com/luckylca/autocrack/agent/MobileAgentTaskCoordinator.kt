@@ -8,6 +8,7 @@ import com.luckylca.autocrack.runtime.RuntimeLayout
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,18 +42,32 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val layout = RuntimeLayout(appContext).initialize()
     private val conversationStore = MobileAgentConversationStore(appContext)
+    private val preferencesStore = MobileAgentPreferencesStore(appContext)
     private val runner = ProcessRootCommandRunner()
     private val rootDetector = RootDetector(runner)
     private val toolFactory = AgentToolSessionFactory(appContext, runner, rootDetector)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val taskFile = File(layout.sessionsRoot, "mobile-agent-tasks.json")
+    private val agentAuditFile = File(layout.auditRoot, "mobile-agent-events.jsonl")
     private val taskLock = Any()
     private val jobs = ConcurrentHashMap<String, Job>()
     private val clients = ConcurrentHashMap<String, MobileAgentToolClient>()
     private val runtimes = ConcurrentHashMap<String, MobileAgentRuntimeSession>()
+    private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<DangerousOperationDecision>>()
+    private val mutableApprovals = MutableStateFlow<Map<String, DangerousOperationRequest>>(emptyMap())
     private val mutableTasks = MutableStateFlow(loadAndRecoverTasks())
 
     val tasks: StateFlow<Map<String, MobileAgentTaskSnapshot>> = mutableTasks.asStateFlow()
+    val approvals: StateFlow<Map<String, DangerousOperationRequest>> = mutableApprovals.asStateFlow()
+
+    fun resolveApproval(requestId: String, decision: DangerousOperationDecision): Boolean {
+        val request = mutableApprovals.value[requestId] ?: return false
+        if (decision == DangerousOperationDecision.ALWAYS_ALLOW_CATEGORY) {
+            preferencesStore.allowCategoryAlways(request.category.name)
+        }
+        mutableApprovals.value = mutableApprovals.value - requestId
+        return approvalWaiters.remove(requestId)?.complete(decision) == true
+    }
 
     suspend fun start(
         conversationId: String,
@@ -78,6 +93,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         )
         val job = scope.launch { execute(conversationId, config) }
         jobs[conversationId] = job
+        appendAudit("start", conversationId, JSONObject().put("attachmentCount", attachments.size))
         return true
     }
 
@@ -95,6 +111,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         var runtime: MobileAgentRuntimeSession? = null
         var leaseId: String? = null
         val client = MobileAgentToolClient()
+        val preferences = preferencesStore.load()
         clients[conversationId] = client
         try {
             leaseId = AgentExecutionForegroundService.acquire(appContext, "Mobile Agent")
@@ -102,19 +119,23 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
             runtime = toolFactory.createMobileAgent(
                 sessionId = conversationId,
                 knownRootStatus = null,
+                dangerousOperationGate = ::requestDangerousOperationApproval,
                 onStage = { stage ->
                     if (stage.startsWith("mobile_ready")) updateRunning(conversationId, "环境已就绪")
                 },
             )
             runtimes[conversationId] = runtime
             var conversation = requireNotNull(conversationStore.get(conversationId)) { "会话不存在：$conversationId" }
-            conversation = compactIfNeeded(conversationId, config, client, conversation)
+            if (preferences.contextCompressionEnabled) {
+                conversation = compactIfNeeded(conversationId, config, client, conversation)
+            }
             client.completeWithTools(
                 config = config,
-                systemPrompt = MobileAgentPromptBuilder.build(runtime),
+                systemPrompt = MobileAgentPromptBuilder.build(runtime, preferences),
                 conversation = conversation,
                 tools = runtime.tools.tools,
                 dispatcher = runtime.tools::dispatch,
+                maxToolRounds = preferences.maxToolIterations,
                 onTextSnapshot = { text ->
                     mutableTasks.value[conversationId]?.let { current ->
                         updateTask(
@@ -140,8 +161,10 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                 },
             )
             markTerminal(conversationId, MobileAgentTaskStatus.COMPLETED, "已完成", null)
+            appendAudit("completed", conversationId, JSONObject())
         } catch (cancelled: CancellationException) {
             markTerminal(conversationId, MobileAgentTaskStatus.CANCELLED, "已停止", cancelled.message)
+            appendAudit("cancelled", conversationId, JSONObject().put("reason", cancelled.message ?: JSONObject.NULL))
         } catch (error: Exception) {
             markTerminal(
                 conversationId,
@@ -149,12 +172,45 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                 "执行失败",
                 error.message ?: error::class.java.simpleName,
             )
+            appendAudit("failed", conversationId, JSONObject().put("error", error.message ?: error::class.java.simpleName))
         } finally {
             runtimes.remove(conversationId)?.cancelAllCommands?.invoke()
             runtime?.tools?.closeSafely()
             clients.remove(conversationId)?.cancelCurrent()
             leaseId?.let { AgentExecutionForegroundService.release(appContext, it) }
             jobs.remove(conversationId)
+        }
+    }
+
+    private suspend fun requestDangerousOperationApproval(
+        request: DangerousOperationRequest,
+    ): DangerousOperationDecision {
+        val preferences = preferencesStore.load()
+        if (request.category.name in preferences.alwaysAllowedDangerousCategories) {
+            return DangerousOperationDecision.ALLOW_ONCE
+        }
+        if (request.category == DangerousOperationCategory.SYSTEM_WRITE) {
+            when (preferences.systemWritePolicy) {
+                SystemWritePolicy.DENY -> return DangerousOperationDecision.DENY
+                SystemWritePolicy.ALLOW -> return DangerousOperationDecision.ALLOW_ONCE
+                SystemWritePolicy.ASK -> Unit
+            }
+        }
+        if (!preferences.dangerousOperationConfirmation) return DangerousOperationDecision.ALLOW_ONCE
+
+        val waiter = CompletableDeferred<DangerousOperationDecision>()
+        approvalWaiters[request.id] = waiter
+        mutableApprovals.value = mutableApprovals.value + (request.id to request)
+        appendAudit(
+            "approval_requested",
+            request.conversationId,
+            JSONObject().put("category", request.category.name).put("command", request.command.take(2_000)),
+        )
+        return try {
+            waiter.await()
+        } finally {
+            approvalWaiters.remove(request.id)
+            mutableApprovals.value = mutableApprovals.value - request.id
         }
     }
 
@@ -183,6 +239,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         if (toCompact.isEmpty()) return conversation
 
         updateRunning(conversationId, "正在压缩较早的会话上下文")
+        appendAudit("compaction", conversationId, JSONObject().put("messageCount", toCompact.size))
         val summary = client.summarizeForCompaction(
             config = config,
             existingSummary = conversation.summary,
@@ -193,6 +250,19 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
             summary = summary,
             throughMessageId = toCompact.last().id,
         )
+    }
+
+    private fun appendAudit(event: String, conversationId: String, detail: JSONObject) {
+        val record = JSONObject()
+            .put("schemaVersion", 1)
+            .put("event", event)
+            .put("conversationId", conversationId)
+            .put("timestampEpochMillis", System.currentTimeMillis())
+            .put("detail", detail)
+        synchronized(taskLock) {
+            agentAuditFile.parentFile?.mkdirs()
+            agentAuditFile.appendText(record.toString() + "\n", Charsets.UTF_8)
+        }
     }
 
     private fun updateRunning(conversationId: String, stage: String) {

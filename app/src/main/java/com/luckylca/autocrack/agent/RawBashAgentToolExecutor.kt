@@ -21,6 +21,8 @@ class RawBashAgentToolExecutor(
     private val workspaceFiles: WorkspaceFileService,
     private val dynamicToolsAllowed: Boolean = false,
     private val availableToolCommands: List<String> = emptyList(),
+    private val sessionId: String? = null,
+    private val dangerousOperationGate: (suspend (DangerousOperationRequest) -> DangerousOperationDecision)? = null,
 ) : AgentToolExecutor {
     override val tools: List<AgentToolDefinition> = buildDefinitions()
 
@@ -41,6 +43,26 @@ class RawBashAgentToolExecutor(
             "timeout_ms must be within ${ShellCommandRequest.MIN_TIMEOUT_MILLIS}..${ShellCommandRequest.MAX_TIMEOUT_MILLIS}"
         }
         val stdin = arguments.optNullableString("stdin")
+        val dangerousCategory = MobileAgentDangerousCommandClassifier.classify(script)
+        if (dangerousCategory != null && dangerousOperationGate != null && sessionId != null) {
+            val decision = dangerousOperationGate.invoke(
+                DangerousOperationRequest(
+                    conversationId = sessionId,
+                    category = dangerousCategory,
+                    command = script.take(MAX_SCRIPT_CHARS),
+                    reason = arguments.optNullableString("reason")?.take(MAX_REASON_CHARS),
+                ),
+            )
+            if (decision == DangerousOperationDecision.DENY) {
+                return JSONObject()
+                    .put("ok", false)
+                    .put("tool", TOOL_EXEC_BASH)
+                    .put("runtime", "debian-chroot")
+                    .put("error", "用户拒绝了危险操作")
+                    .put("dangerousCategory", dangerousCategory.name)
+                    .toString()
+            }
+        }
         val result = chroot.execute(
             ShellCommandRequest(
                 command = script,
@@ -147,6 +169,7 @@ class RawBashAgentToolExecutor(
         const val MAX_SCRIPT_CHARS = 200_000
         const val MAX_RETAINED_OUTPUT_CHARS = 200_000
         private const val KILL_TIMEOUT_MILLIS = 3_000L
+        private const val MAX_REASON_CHARS = 1_000
         private val ALLOWED_SIGNALS = setOf("TERM", "KILL", "INT", "HUP")
 
         internal fun normalizeWorkspaceCwd(cwd: String): String {
@@ -168,7 +191,8 @@ class RawBashAgentToolExecutor(
                         .put("script", stringSchema("Bash script to run."))
                         .put("cwd", stringSchema("Absolute chroot cwd under /workspace. Default: /workspace."))
                         .put("stdin", stringSchema("Optional stdin passed to the script."))
-                        .put("timeout_ms", integerSchema("Execution timeout in milliseconds.")),
+                        .put("timeout_ms", integerSchema("Execution timeout in milliseconds."))
+                        .put("reason", stringSchema("Short reason for an operation when it changes or deletes device/system data.")),
                     required = listOf("script"),
                 ),
             ),

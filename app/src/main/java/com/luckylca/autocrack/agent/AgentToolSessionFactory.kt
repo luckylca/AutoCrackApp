@@ -177,6 +177,7 @@ class AgentToolSessionFactory(
     suspend fun createMobileAgent(
         sessionId: String,
         knownRootStatus: RootStatus? = null,
+        dangerousOperationGate: (suspend (DangerousOperationRequest) -> DangerousOperationDecision)? = null,
         onStage: (String) -> Unit = {},
     ): MobileAgentRuntimeSession {
         val layout = RuntimeLayout(appContext).initialize()
@@ -189,7 +190,14 @@ class AgentToolSessionFactory(
         val installed = ToolpackPackageInstaller(appContext, layout).listInstalled()
         val commands = installed.flatMap { it.manifest.commands }.map { it.name }.distinct().sorted()
         val workspace = WorkspaceFileService(layout.createAgentWorkspace(sessionId))
-        val executor = RawBashAgentToolExecutor(chroot = chroot, host = host, workspaceFiles = workspace, availableToolCommands = commands)
+        val executor = RawBashAgentToolExecutor(
+            chroot = chroot,
+            host = host,
+            workspaceFiles = workspace,
+            availableToolCommands = commands,
+            sessionId = sessionId,
+            dangerousOperationGate = dangerousOperationGate,
+        )
         onStage("mobile_ready:${commands.joinToString(",")}")
         return MobileAgentRuntimeSession(
             tools = AgentToolSession(listOf(executor)),

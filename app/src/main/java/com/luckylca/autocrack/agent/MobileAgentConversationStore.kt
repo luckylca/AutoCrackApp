@@ -44,6 +44,7 @@ data class MobileAgentConversation(
     val messages: List<MobileAgentMessage>,
     val summary: String? = null,
     val summaryThroughMessageId: String? = null,
+    val compactionCount: Int = 0,
 )
 
 class MobileAgentConversationStore(context: Context) {
@@ -163,6 +164,7 @@ class MobileAgentConversationStore(context: Context) {
                 updatedAtEpochMillis = System.currentTimeMillis(),
                 summary = summary.trim(),
                 summaryThroughMessageId = throughMessageId,
+                compactionCount = current.compactionCount + 1,
             )
             all[index] = updated
             writeAll(all)
@@ -236,6 +238,7 @@ class MobileAgentConversationStore(context: Context) {
             messages = messages,
             summary = json.optString("summary").takeIf(String::isNotBlank),
             summaryThroughMessageId = json.optString("summaryThroughMessageId").takeIf(String::isNotBlank),
+            compactionCount = json.optInt("compactionCount", 0).coerceAtLeast(0),
         )
     }.getOrNull()
 
@@ -254,6 +257,7 @@ class MobileAgentConversationStore(context: Context) {
                                 .put("updatedAtEpochMillis", conversation.updatedAtEpochMillis)
                                 .put("summary", conversation.summary ?: JSONObject.NULL)
                                 .put("summaryThroughMessageId", conversation.summaryThroughMessageId ?: JSONObject.NULL)
+                                .put("compactionCount", conversation.compactionCount)
                                 .put(
                                     "messages",
                                     JSONArray().apply {

@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -112,6 +113,39 @@ class RawBashAgentToolExecutorTest {
         assertTrue(host.lastRequest!!.command.contains("kill -TERM"))
         assertEquals("/", host.lastRequest!!.workingDirectory)
         assertEquals(HostExecutionIdentity.ROOT, host.lastRequest!!.identity)
+    }
+
+    @Test
+    fun dangerousExecCanBeDeniedBeforeChrootExecution() = runBlocking {
+        val chroot = FakeEngine(stdout = "should-not-run")
+        var captured: DangerousOperationRequest? = null
+        val executor = RawBashAgentToolExecutor(
+            packageName = null,
+            chroot = chroot,
+            host = FakeEngine(),
+            workspaceFiles = WorkspaceFileService(tempWorkspace()),
+            sessionId = "session-1",
+            dangerousOperationGate = { request ->
+                captured = request
+                DangerousOperationDecision.DENY
+            },
+        )
+
+        val result = JSONObject(
+            executor.dispatch(
+                "exec_bash",
+                JSONObject()
+                    .put("script", "rm -rf /data/local/tmp/test")
+                    .put("reason", "clean generated test files"),
+            ),
+        )
+
+        assertFalse(result.getBoolean("ok"))
+        assertEquals("DESTRUCTIVE_DELETE", result.getString("dangerousCategory"))
+        val request = requireNotNull(captured)
+        assertEquals("session-1", request.conversationId)
+        assertEquals("clean generated test files", request.reason)
+        assertNull(chroot.lastRequest)
     }
 
     private fun executor(

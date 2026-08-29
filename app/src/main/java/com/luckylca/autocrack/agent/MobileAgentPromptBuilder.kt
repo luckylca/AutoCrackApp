@@ -1,7 +1,10 @@
 package com.luckylca.autocrack.agent
 
 object MobileAgentPromptBuilder {
-    fun build(runtime: MobileAgentRuntimeSession): String {
+    fun build(
+        runtime: MobileAgentRuntimeSession,
+        preferences: MobileAgentPreferences = MobileAgentPreferences(),
+    ): String {
         val toolpacks = if (runtime.installedToolpacks.isEmpty()) {
             "- 当前没有安装额外工具包"
         } else {
@@ -33,6 +36,8 @@ object MobileAgentPromptBuilder {
             当前会话 workspace：${runtime.workspacePath}
             当前已安装工具包：
             $toolpacks
+
+            ${preferences.customSystemPrompt.takeIf(String::isNotBlank)?.let { "用户配置的长期 Agent 指令：\n$it" }.orEmpty()}
         """.trimIndent()
     }
 }

@@ -38,6 +38,7 @@ class MobileAgentToolClient {
         onTextSnapshot: (String) -> Unit = {},
         onStage: (String) -> Unit = {},
         onProtocolMessage: suspend (MobileAgentMessage) -> Unit = {},
+        maxToolRounds: Int = DEFAULT_MAX_TOOL_ROUNDS,
     ): MobileAgentCompletion = withContext(Dispatchers.IO) {
         require(tools.isNotEmpty()) { "Agent tool list must not be empty" }
         cancelled = false
@@ -47,8 +48,9 @@ class MobileAgentToolClient {
         val toolJson = JSONArray().also { array -> tools.forEach { array.put(it.toOpenAiJson()) } }
         val knownTools = tools.associateBy(AgentToolDefinition::name)
         val executions = mutableListOf<AgentToolExecutionRecord>()
+        require(maxToolRounds in 1..64) { "maxToolRounds must be within 1..64" }
 
-        repeat(MAX_TOOL_ROUNDS) {
+        repeat(maxToolRounds) {
             ensureRunning()
             onStage("thinking")
             onTextSnapshot("")
@@ -137,7 +139,7 @@ class MobileAgentToolClient {
             }
         }
 
-        throw IOException("Agent tool loop 超过 $MAX_TOOL_ROUNDS 轮，已停止")
+        throw IOException("Agent tool loop 超过 $maxToolRounds 轮，已停止")
     }
 
     suspend fun summarizeForCompaction(
@@ -480,7 +482,7 @@ class MobileAgentToolClient {
         const val MAX_TOOL_RESULT_CHARS = 40_000
         const val MAX_ARGUMENT_CHARS = 12_000
         const val MAX_CALL_ID_CHARS = 256
-        const val MAX_TOOL_ROUNDS = 24
+        const val DEFAULT_MAX_TOOL_ROUNDS = 24
         const val MAX_TOOL_CALLS_PER_ROUND = 8
         const val COMPACTION_MESSAGE_CHARS = 6_000
         const val MAX_COMPACTION_INPUT_CHARS = 60_000
