@@ -26,7 +26,13 @@ jobs:
       ANDROID_LLVM_COMMIT: "d8003a456d14a3deb8054cdaa529ffbf02d9b262"
       TOOLPACK_ID: android-lldb-server
       TOOLPACK_VERSION: android-llvm-r522817_lldb-14_autocrack-2.0.0
+      LLDB_CLIENT_APT_VERSION: "1:14.0.6-12"
+      LLDB_CLIENT_FILE_VERSION: "14.0.6-12"
       LLDB_CLIENT_DEB_SHA256: b05d6bc6ba4ee60746fa1cc2af0c763a79c61cce4c3c6471521dabff8c088551
+      PYTHON3_LLDB_DEB_SHA256: 1b0c76c86c52568513f07dcf9412ac038ef7b88a4755c2b1aa667a8b02f4377a
+      LIBLLDB_DEB_SHA256: acdaa8e8c06b7ee643aec4326b96b45d76d26e3112bd08cadce0c7a1f54de813
+      LIBCLANG_CPP14_DEB_SHA256: dc983fc6aa0c1f7ef3f51aa3a2734ea6285ad5e7a283fe32d3239c85f718872d
+      LIBLLVM14_DEB_SHA256: f22c3e843b12de66d642dceddc1db0de02934a4028dd60aecc4722f8bf04e6d6
 
     steps:
       - name: Check out AutoCrackApp
@@ -387,9 +393,48 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v "$PWD/dist/lldb-client-root:/out" \
             -v "$PWD/dist/source/debian:/provenance" \
+            -e LLDB_CLIENT_APT_VERSION="$LLDB_CLIENT_APT_VERSION" \
+            -e LLDB_CLIENT_FILE_VERSION="$LLDB_CLIENT_FILE_VERSION" \
+            -e LLDB_CLIENT_DEB_SHA256="$LLDB_CLIENT_DEB_SHA256" \
+            -e PYTHON3_LLDB_DEB_SHA256="$PYTHON3_LLDB_DEB_SHA256" \
+            -e LIBLLDB_DEB_SHA256="$LIBLLDB_DEB_SHA256" \
+            -e LIBCLANG_CPP14_DEB_SHA256="$LIBCLANG_CPP14_DEB_SHA256" \
+            -e LIBLLVM14_DEB_SHA256="$LIBLLVM14_DEB_SHA256" \
             debian:bookworm-slim /bin/bash -euxc '
               apt-get update
-              apt-get install -y --no-install-recommends lldb-14 python3-lldb-14 pax-utils ca-certificates
+              apt-get install -y --no-install-recommends pax-utils ca-certificates
+              mkdir -p /tmp/pinned-lldb-debs
+              cd /tmp/pinned-lldb-debs
+              apt-get download \
+                "lldb-14=${LLDB_CLIENT_APT_VERSION}" \
+                "python3-lldb-14=${LLDB_CLIENT_APT_VERSION}" \
+                "liblldb-14=${LLDB_CLIENT_APT_VERSION}" \
+                "libclang-cpp14=${LLDB_CLIENT_APT_VERSION}" \
+                "libllvm14=${LLDB_CLIENT_APT_VERSION}"
+              LLDB_DEB="lldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
+              PYTHON3_LLDB_DEB="python3-lldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
+              LIBLLDB_DEB="liblldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
+              LIBCLANG_CPP14_DEB="libclang-cpp14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
+              LIBLLVM14_DEB="libllvm14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
+              for DEB in "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB"; do
+                test -f "$DEB"
+              done
+              printf "%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n" \
+                "$LLDB_CLIENT_DEB_SHA256" "$LLDB_DEB" \
+                "$PYTHON3_LLDB_DEB_SHA256" "$PYTHON3_LLDB_DEB" \
+                "$LIBLLDB_DEB_SHA256" "$LIBLLDB_DEB" \
+                "$LIBCLANG_CPP14_DEB_SHA256" "$LIBCLANG_CPP14_DEB" \
+                "$LIBLLVM14_DEB_SHA256" "$LIBLLVM14_DEB" \
+                | sha256sum -c -
+              sha256sum "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB" \
+                > /provenance/debian-core-debs.sha256
+              apt-get install -y --no-install-recommends \
+                "./$LLDB_DEB" "./$PYTHON3_LLDB_DEB" "./$LIBLLDB_DEB" \
+                "./$LIBCLANG_CPP14_DEB" "./$LIBLLVM14_DEB"
+              for PACKAGE in lldb-14 python3-lldb-14 liblldb-14 libclang-cpp14 libllvm14; do
+                test "$(dpkg-query -W -f=\"\${Version}\" "$PACKAGE")" = "$LLDB_CLIENT_APT_VERSION"
+              done
+              cd /
               cp -L /usr/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb
               cp -L /usr/lib/llvm-14/bin/lldb-argdumper /out/lib/llvm-14/bin/lldb-argdumper
               LLDB_LIB=$(find /usr/lib \( -type f -o -type l \) -name "liblldb-14.so*" -print -quit)
@@ -448,12 +493,20 @@ jobs:
             --lldb-server-sha256 "$SERVER_SHA" \
             --lldb-client-root dist/lldb-client-root \
             --lldb-client-source-sha256 "$LLDB_CLIENT_DEB_SHA256" \
+            --python3-lldb-source-sha256 "$PYTHON3_LLDB_DEB_SHA256" \
+            --liblldb-source-sha256 "$LIBLLDB_DEB_SHA256" \
+            --libclang-cpp14-source-sha256 "$LIBCLANG_CPP14_DEB_SHA256" \
+            --libllvm14-source-sha256 "$LIBLLVM14_DEB_SHA256" \
             --output-dir dist/package | tee dist/build-summary.txt
           python3 toolpacks/android-lldb-server/build_toolpack.py \
             --lldb-server dist/payload/bin/lldb-server-android \
             --lldb-server-sha256 "$SERVER_SHA" \
             --lldb-client-root dist/lldb-client-root \
             --lldb-client-source-sha256 "$LLDB_CLIENT_DEB_SHA256" \
+            --python3-lldb-source-sha256 "$PYTHON3_LLDB_DEB_SHA256" \
+            --liblldb-source-sha256 "$LIBLLDB_DEB_SHA256" \
+            --libclang-cpp14-source-sha256 "$LIBCLANG_CPP14_DEB_SHA256" \
+            --libllvm14-source-sha256 "$LIBLLVM14_DEB_SHA256" \
             --output-dir dist/package-rerun | tee dist/build-summary-rerun.txt
           cmp dist/package/payload.sha256 dist/package-rerun/payload.sha256
           cmp dist/package/payload.size dist/package-rerun/payload.size

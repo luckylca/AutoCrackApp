@@ -62,6 +62,10 @@ def main() -> None:
     parser.add_argument("--lldb-server-sha256", required=True)
     parser.add_argument("--lldb-client-root", required=True)
     parser.add_argument("--lldb-client-source-sha256", required=True)
+    parser.add_argument("--python3-lldb-source-sha256", required=True)
+    parser.add_argument("--liblldb-source-sha256", required=True)
+    parser.add_argument("--libclang-cpp14-source-sha256", required=True)
+    parser.add_argument("--libllvm14-source-sha256", required=True)
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
     binary = Path(args.lldb_server).resolve()
@@ -102,7 +106,11 @@ def main() -> None:
             ],
             "sources": [
                 {"name": "lldb-server", "version": "android-llvm-r522817-autocrack-seize-runtime-stop", "url": "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262", "sha256": actual},
-                {"name": "debian-lldb-14-arm64", "version": "14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/lldb-14_14.0.6-12_arm64.deb", "sha256": args.lldb_client_source_sha256.lower()},
+                {"name": "debian-lldb-14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/lldb-14_14.0.6-12_arm64.deb", "sha256": args.lldb_client_source_sha256.lower()},
+                {"name": "debian-python3-lldb-14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/python3-lldb-14_14.0.6-12_arm64.deb", "sha256": args.python3_lldb_source_sha256.lower()},
+                {"name": "debian-liblldb-14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/liblldb-14_14.0.6-12_arm64.deb", "sha256": args.liblldb_source_sha256.lower()},
+                {"name": "debian-libclang-cpp14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/libclang-cpp14_14.0.6-12_arm64.deb", "sha256": args.libclang_cpp14_source_sha256.lower()},
+                {"name": "debian-libllvm14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/libllvm14_14.0.6-12_arm64.deb", "sha256": args.libllvm14_source_sha256.lower()},
             ],
         }
         executables = {"bin/lldb", "bin/android-lldb-server", "host-bin/lldb-server-android", "lib/llvm-14/bin/lldb", "lib/llvm-14/bin/lldb-argdumper"}
