@@ -39,11 +39,33 @@ class DebugStandardLldbValidationActivity : Activity() {
             knownRootStatus = root,
             dangerousOperationGate = { DangerousOperationDecision.ALLOW_ONCE },
         )
+        val useCandidate = intent.getBooleanExtra("use_candidate", false)
+        val lldbSetup = if (useCandidate) {
+            """
+                R=/workspace/lldb2-root
+                LLDB="${'$'}R/usr/lib/llvm-14/bin/lldb"
+                test -x "${'$'}LLDB"
+                export LD_LIBRARY_PATH="${'$'}R/usr/lib/llvm-14/lib:${'$'}R/usr/lib/aarch64-linux-gnu:${'$'}R/lib/aarch64-linux-gnu:${'$'}R/usr/lib:${'$'}R/lib"
+                export PYTHONPATH="${'$'}R/usr/lib/llvm-14/lib/python3.11/dist-packages"
+                HOST_SERVER="${'$'}AUTOC_ROOTFS_HOST_PATH/opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb-server-android"
+                android-shell test -x "${'$'}HOST_SERVER"
+            """.trimIndent()
+        } else {
+            """
+                LLDB="${'$'}(command -v lldb)"
+                test -n "${'$'}LLDB"
+                command -v android-lldb-server
+            """.trimIndent()
+        }
+        val startServer = if (useCandidate) {
+            """android-shell --timeout-ms 120000 -- "${'$'}HOST_SERVER" gdbserver 127.0.0.1:5039 --attach "${'$'}target_pid"""
+        } else {
+            """AUTOC_LLDB_SERVER_TIMEOUT_MS=120000 android-lldb-server gdbserver 127.0.0.1:5039 --attach "${'$'}target_pid"""
+        }
         val script = """
             set -eu
-            command -v lldb
-            command -v android-lldb-server
-            lldb --version
+            __LLDB_SETUP__
+            "${'$'}LLDB" --version
 
             android-shell am start -n com.luckylca.autocrack/.debug.DebugFridaFixtureActivity >/dev/null
             sleep 1
@@ -57,7 +79,7 @@ class DebugStandardLldbValidationActivity : Activity() {
                 kill "${'$'}server_client" >/dev/null 2>&1 || true
                 wait "${'$'}server_client" >/dev/null 2>&1 || true
               fi
-              android-shell sh -c "tracer=\${'$'}(awk '/^TracerPid:/ { print \\$2; exit }' /proc/${'$'}target_pid/status 2>/dev/null); case \"\${'$'}{tracer:-0}\" in ''|0) ;; *) cmd=\${'$'}(tr '\\000' ' ' < /proc/\${'$'}tracer/cmdline 2>/dev/null || true); case \"\${'$'}cmd\" in *'/host-bin/lldb-server-android'*) kill -TERM \${'$'}tracer >/dev/null 2>&1 || true ;; esac ;; esac; kill -CONT ${'$'}target_pid >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+              android-shell sh -c "tracer=\${'$'}(awk '/^TracerPid:/ { print \\$2; exit }' /proc/${'$'}target_pid/status 2>/dev/null); case \"\${'$'}{tracer:-0}\" in ''|0) ;; *) cmd=\${'$'}(tr '\\000' ' ' < /proc/\${'$'}tracer/cmdline 2>/dev/null || true); case \"\${'$'}cmd\" in *'/bin/lldb-server-android'*|*'/host-bin/lldb-server-android'*) kill -TERM \${'$'}tracer >/dev/null 2>&1 || true ;; esac ;; esac; kill -CONT ${'$'}target_pid >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
             }
             trap cleanup EXIT INT TERM
 
@@ -98,8 +120,7 @@ class DebugStandardLldbValidationActivity : Activity() {
                 target.BreakpointDelete(breakpoint.GetID())
             PY
 
-            AUTOC_LLDB_SERVER_TIMEOUT_MS=120000 android-lldb-server \
-              gdbserver 127.0.0.1:5039 --attach "${'$'}target_pid" \
+            __START_SERVER__ \
               > /workspace/lldb-standard-server.log 2>&1 &
             server_client=${'$'}!
 
@@ -114,7 +135,7 @@ class DebugStandardLldbValidationActivity : Activity() {
             test "${'$'}ready" = true
             printf 'AUTOCRACK_LLDB_SERVER_READY=true\n'
 
-            lldb --batch \
+            "${'$'}LLDB" --batch \
               -o 'gdb-remote 127.0.0.1:5039' \
               -o 'process status' \
               -o 'register read pc sp x0' \
@@ -132,6 +153,8 @@ class DebugStandardLldbValidationActivity : Activity() {
             test -n "${'$'}(android-shell pidof 'com.luckylca.autocrack:frida_fixture' | tr -d '\r\n')"
             printf 'AUTOCRACK_LLDB_DETACH_OK=true\n'
         """.trimIndent()
+            .replace("__LLDB_SETUP__", lldbSetup)
+            .replace("__START_SERVER__", startServer)
 
         val result = try {
             JSONObject(

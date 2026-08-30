@@ -36,7 +36,8 @@ class DebugMobileAgentExecActivity : Activity() {
             ?: intent.getStringExtra("script_b64")?.let { encoded ->
                 String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
             }
-            ?: error("Missing script or script_b64")
+            ?: intent.getStringExtra("script_file")?.let(::readPrivateScript)
+            ?: error("Missing script, script_b64, or script_file")
         val timeoutMs = intent.getLongExtra("timeout_ms", 30_000L)
         val cwd = intent.getStringExtra("cwd")?.trim().orEmpty().ifBlank { "/workspace" }
         val runner = ProcessRootCommandRunner()
@@ -67,6 +68,16 @@ class DebugMobileAgentExecActivity : Activity() {
             .put("installedToolpacks", runtime.installedToolpacks.size)
             .put("cleanupCompleted", cleanupCompleted)
             .put("result", result)
+    }
+
+    private fun readPrivateScript(relativePath: String): String {
+        require(relativePath.isNotBlank()) { "script_file is blank" }
+        require(!File(relativePath).isAbsolute) { "script_file must be relative to filesDir" }
+        val root = filesDir.canonicalFile
+        val file = File(root, relativePath).canonicalFile
+        require(file.path.startsWith(root.path + File.separator)) { "script_file escapes filesDir" }
+        require(file.isFile) { "script_file does not exist: $relativePath" }
+        return file.readText(Charsets.UTF_8)
     }
 
     private companion object {
