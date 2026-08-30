@@ -506,9 +506,9 @@ jobs:
                 "./$LLDB_DEB" "./$PYTHON3_LLDB_DEB" "./$LIBLLDB_DEB" \
                 "./$LIBCLANG_CPP14_DEB" "./$LIBLLVM14_DEB" "./$PYTHON3_SIX_DEB"
               for PACKAGE in lldb-14 python3-lldb-14 liblldb-14 libclang-cpp14 libllvm14; do
-                test "$(dpkg-query -W -f=\"\${Version}\" "$PACKAGE")" = "$LLDB_CLIENT_APT_VERSION"
+                test "$(dpkg-query -W -f="\${Version}" "$PACKAGE")" = "$LLDB_CLIENT_APT_VERSION"
               done
-              test "$(dpkg-query -W -f=\"\${Version}\" python3-six)" = "$PYTHON3_SIX_VERSION"
+              test "$(dpkg-query -W -f="\${Version}" python3-six)" = "$PYTHON3_SIX_VERSION"
               cd /
               cp -L /usr/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb
               cp -L /usr/lib/llvm-14/bin/lldb-argdumper /out/lib/llvm-14/bin/lldb-argdumper
