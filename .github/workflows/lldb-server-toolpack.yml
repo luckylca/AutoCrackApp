@@ -397,7 +397,7 @@ jobs:
               test -e "$LLDB_LIB"
               if [ -d /usr/lib/llvm-14/lib/python3.11 ]; then
                 mkdir -p /out/lib/llvm-14/lib
-                # Preserve the Python sources first. Debian's python3-lldb package contains
+                # Preserve the Python sources first. The Debian python3-lldb package contains
                 # relative symlinks that are valid only in the distro filesystem layout; a
                 # blanket `cp -aL` fails when one of those links is dangling. Replace the two
                 # runtime links explicitly with ordinary files so the toolpack is relocatable.
