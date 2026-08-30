@@ -394,7 +394,10 @@ jobs:
               cp -L /usr/lib/llvm-14/bin/lldb-argdumper /out/lib/llvm-14/bin/lldb-argdumper
               if [ -d /usr/lib/llvm-14/lib/python3.11 ]; then
                 mkdir -p /out/lib/llvm-14/lib
-                cp -a /usr/lib/llvm-14/lib/python3.11 /out/lib/llvm-14/lib/
+                # Debian's python3-lldb package contains relative symlinks into the complete
+                # /usr/lib/llvm-14 tree. Resolve them while that tree still exists so the
+                # relocatable toolpack never contains dangling links after extraction.
+                cp -aL /usr/lib/llvm-14/lib/python3.11 /out/lib/llvm-14/lib/
               fi
               LLDB_LIB=$(find /usr/lib -type f -o -type l | grep -E "/liblldb-14\.so(\.|$)" | head -n 1)
               test -n "$LLDB_LIB"
