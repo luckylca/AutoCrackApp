@@ -6,17 +6,21 @@ import org.junit.Test
 
 class ToolpackPackageInstallerPathPolicyTest {
     @Test
-    fun executableNamespaces_includeRootfsAndAndroidHostBins() {
-        assertTrue(isToolpackExecutableRequiredPath("bin/frida"))
-        assertTrue(isToolpackExecutableRequiredPath("host-bin/tcpdump"))
-        assertTrue(isToolpackExecutableRequiredPath("host-bin/lldb-server-android"))
+    fun executableNamespaces_includePublicHostAndPrivateRuntimeBins() {
+        assertTrue(isToolpackExecutablePayloadPath("bin/frida"))
+        assertTrue(isToolpackExecutablePayloadPath("host-bin/tcpdump"))
+        assertTrue(isToolpackExecutablePayloadPath("host-bin/lldb-server-android"))
+        assertTrue(isToolpackExecutablePayloadPath("lib/llvm-14/bin/lldb"))
+        assertTrue(isToolpackExecutablePayloadPath("lib/llvm-14/bin/lldb-argdumper"))
+        assertTrue(isToolpackExecutablePayloadPath("lib/node_modules/example/bin/tool"))
     }
 
     @Test
     fun dataAndLibraryPaths_areNotMadeExecutableByConvention() {
-        assertFalse(isToolpackExecutableRequiredPath("python/frida/__init__.py"))
-        assertFalse(isToolpackExecutableRequiredPath("lib/liblldb.so"))
-        assertFalse(isToolpackExecutableRequiredPath("libexec/agent.js"))
+        assertFalse(isToolpackExecutablePayloadPath("python/frida/__init__.py"))
+        assertFalse(isToolpackExecutablePayloadPath("lib/liblldb.so"))
+        assertFalse(isToolpackExecutablePayloadPath("lib/llvm-14/lib/liblldb.so"))
+        assertFalse(isToolpackExecutablePayloadPath("libexec/agent.js"))
     }
 
     @Test

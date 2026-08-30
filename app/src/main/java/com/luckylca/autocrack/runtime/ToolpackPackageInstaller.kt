@@ -439,18 +439,27 @@ class ToolpackPackageInstaller(
         manifest.requiredPaths.forEach { requiredPath ->
             val required = ToolpackPathPolicy.resolve(staging, requiredPath)
             require(required.exists()) { "工具包缺少必需路径：$requiredPath" }
-            // java.util.zip extraction does not preserve Unix executable mode. Toolpacks use
-            // bin/ for rootfs CLI entrypoints and host-bin/ for Android-host executables; both
-            // are executable namespaces even when a host binary is intentionally not a command.
-            if (required.isFile && isToolpackExecutableRequiredPath(requiredPath)) {
-                Os.chmod(required.path, EXECUTABLE_MODE)
-            }
         }
+        restoreExecutablePayloadModes(staging)
         manifest.commands.forEach { command ->
             val executable = ToolpackPathPolicy.resolve(staging, command.relativePath)
             require(executable.isFile) { "工具命令不是普通文件：${command.relativePath}" }
             Os.chmod(executable.path, EXECUTABLE_MODE)
         }
+    }
+
+    private fun restoreExecutablePayloadModes(staging: File) {
+        // java.util.zip extraction does not preserve Unix executable mode. Restore standard
+        // executable namespaces for both public entrypoints and tool-private runtimes, e.g.
+        // lib/llvm-14/bin/lldb and lib/llvm-14/bin/lldb-argdumper.
+        staging.walkTopDown()
+            .filter(File::isFile)
+            .forEach { file ->
+                val relativePath = file.relativeTo(staging).invariantSeparatorsPath
+                if (isToolpackExecutablePayloadPath(relativePath)) {
+                    Os.chmod(file.path, EXECUTABLE_MODE)
+                }
+            }
     }
 
     private fun validateCommandConflicts(manifest: ToolpackPackageManifest) {
@@ -721,8 +730,12 @@ class ToolpackPackageInstaller(
     }
 }
 
-internal fun isToolpackExecutableRequiredPath(relativePath: String): Boolean =
-    relativePath.startsWith("bin/") || relativePath.startsWith("host-bin/")
+internal fun isToolpackExecutablePayloadPath(relativePath: String): Boolean {
+    val parts = relativePath.split('/').filter(String::isNotEmpty)
+    if (parts.size < 2) return false
+    if (parts.first() == "bin" || parts.first() == "host-bin") return true
+    return parts.first() == "lib" && parts.drop(1).dropLast(1).contains("bin")
+}
 
 private fun ByteArray.toHex(): String = joinToString(separator = "") { byte ->
     "%02x".format(byte)
