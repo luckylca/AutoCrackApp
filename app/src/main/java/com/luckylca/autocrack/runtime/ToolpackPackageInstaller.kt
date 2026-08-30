@@ -456,7 +456,7 @@ class ToolpackPackageInstaller(
             .filter(File::isFile)
             .forEach { file ->
                 val relativePath = file.relativeTo(staging).invariantSeparatorsPath
-                if (isToolpackExecutablePayloadPath(relativePath)) {
+                if (shouldRestoreToolpackExecutableMode(file, relativePath)) {
                     Os.chmod(file.path, EXECUTABLE_MODE)
                 }
             }
@@ -735,6 +735,27 @@ internal fun isToolpackExecutablePayloadPath(relativePath: String): Boolean {
     if (parts.size < 2) return false
     if (parts.first() == "bin" || parts.first() == "host-bin") return true
     return parts.first() == "lib" && parts.drop(1).dropLast(1).contains("bin")
+}
+
+internal fun shouldRestoreToolpackExecutableMode(file: File, relativePath: String): Boolean {
+    if (isToolpackExecutablePayloadPath(relativePath)) return true
+    // Trusted packages may contain private helper executables outside a conventional bin directory
+    // (Debian python3-lldb does this for lldb-argdumper). Limit content probing to extensionless
+    // files so ordinary shared libraries, Python modules and data files keep their normal modes.
+    if (file.extension.isNotEmpty()) return false
+    return runCatching {
+        file.inputStream().use { input ->
+            val header = ByteArray(4)
+            val read = input.read(header)
+            val isElf = read >= 4 &&
+                header[0] == 0x7f.toByte() &&
+                header[1] == 'E'.code.toByte() &&
+                header[2] == 'L'.code.toByte() &&
+                header[3] == 'F'.code.toByte()
+            val hasShebang = read >= 2 && header[0] == '#'.code.toByte() && header[1] == '!'.code.toByte()
+            isElf || hasShebang
+        }
+    }.getOrDefault(false)
 }
 
 private fun ByteArray.toHex(): String = joinToString(separator = "") { byte ->
