@@ -5,6 +5,11 @@ import com.luckylca.autocrack.dex.DexIndexSummary
 import com.luckylca.autocrack.dex.LocalAgentResult
 import java.net.URI
 
+enum class LlmApiProtocol {
+    OPENAI_CHAT,
+    ANTHROPIC_MESSAGES,
+}
+
 data class LlmProviderConfig(
     val baseUrl: String,
     val model: String,
@@ -46,11 +51,21 @@ object LlmEndpointNormalizer {
         require(uri.userInfo == null) { "API 地址不能包含用户名或密码" }
         require(uri.fragment == null) { "API 地址不能包含 URL Fragment" }
         return when {
+            trimmed.endsWith("/v1/messages") -> trimmed
+            trimmed.endsWith("/anthropic/v1") -> "$trimmed/messages"
+            trimmed.endsWith("/anthropic") -> "$trimmed/v1/messages"
             trimmed.endsWith("/chat/completions") -> trimmed
             trimmed.endsWith("/v1") -> "$trimmed/chat/completions"
             else -> "$trimmed/v1/chat/completions"
         }
     }
+
+    fun protocol(endpoint: String): LlmApiProtocol =
+        if (URI(endpoint).path?.endsWith("/v1/messages") == true) {
+            LlmApiProtocol.ANTHROPIC_MESSAGES
+        } else {
+            LlmApiProtocol.OPENAI_CHAT
+        }
 }
 
 object LlmPromptBuilder {

@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** OpenAI-compatible streaming tool loop used by the generic mobile Agent. */
+/** Streaming tool loop supporting OpenAI Chat Completions and Anthropic Messages APIs. */
 class MobileAgentToolClient {
     @Volatile
     private var activeConnection: HttpURLConnection? = null
@@ -46,7 +46,11 @@ class MobileAgentToolClient {
         val validated = config.validated()
         val startedAt = System.currentTimeMillis()
         var messages = buildProtocolMessages(systemPrompt, conversation)
-        val toolJson = JSONArray().also { array -> tools.forEach { array.put(it.toOpenAiJson()) } }
+        val protocol = LlmEndpointNormalizer.protocol(validated.baseUrl)
+        val toolJson = when (protocol) {
+            LlmApiProtocol.OPENAI_CHAT -> JSONArray().also { array -> tools.forEach { array.put(it.toOpenAiJson()) } }
+            LlmApiProtocol.ANTHROPIC_MESSAGES -> AnthropicMessagesAdapter.buildTools(tools)
+        }
         val knownTools = tools.associateBy(AgentToolDefinition::name)
         val toolRequestCounts = mutableMapOf<String, Int>()
         var toolExecutionCount = 0
@@ -376,6 +380,16 @@ class MobileAgentToolClient {
         messages: JSONArray,
         tools: JSONArray,
         onTextSnapshot: (String) -> Unit,
+    ): JSONObject = when (LlmEndpointNormalizer.protocol(config.baseUrl)) {
+        LlmApiProtocol.OPENAI_CHAT -> requestOpenAiStreamingMessage(config, messages, tools, onTextSnapshot)
+        LlmApiProtocol.ANTHROPIC_MESSAGES -> requestAnthropicStreamingMessage(config, messages, tools, onTextSnapshot)
+    }
+
+    private fun requestOpenAiStreamingMessage(
+        config: LlmProviderConfig,
+        messages: JSONArray,
+        tools: JSONArray,
+        onTextSnapshot: (String) -> Unit,
     ): JSONObject {
         val connection = openConnection(config)
         activeConnection = connection
@@ -413,6 +427,15 @@ class MobileAgentToolClient {
         config: LlmProviderConfig,
         messages: JSONArray,
         maxTokens: Int,
+    ): String = when (LlmEndpointNormalizer.protocol(config.baseUrl)) {
+        LlmApiProtocol.OPENAI_CHAT -> requestOpenAiSimple(config, messages, maxTokens)
+        LlmApiProtocol.ANTHROPIC_MESSAGES -> requestAnthropicSimple(config, messages, maxTokens)
+    }
+
+    private fun requestOpenAiSimple(
+        config: LlmProviderConfig,
+        messages: JSONArray,
+        maxTokens: Int,
     ): String {
         val connection = openConnection(config)
         activeConnection = connection
@@ -442,6 +465,78 @@ class MobileAgentToolClient {
         }
     }
 
+    private fun requestAnthropicStreamingMessage(
+        config: LlmProviderConfig,
+        messages: JSONArray,
+        tools: JSONArray,
+        onTextSnapshot: (String) -> Unit,
+    ): JSONObject {
+        val connection = openConnection(config)
+        activeConnection = connection
+        try {
+            val request = AnthropicMessagesAdapter.buildRequest(
+                config = config,
+                canonicalMessages = messages,
+                tools = tools,
+                maxTokens = MAX_RESPONSE_TOKENS,
+                stream = true,
+            )
+            writeRequest(connection, request)
+            val status = connection.responseCode
+            val input = if (status in 200..299) connection.inputStream else connection.errorStream
+            if (status !in 200..299) {
+                val responseText = readLimited(input, MAX_RESPONSE_CHARS)
+                throw IOException("Anthropic tool request 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}")
+            }
+            val contentType = connection.contentType.orEmpty().lowercase()
+            if (!contentType.contains("text/event-stream")) {
+                return AnthropicMessagesAdapter.parseResponse(readLimited(input, MAX_RESPONSE_CHARS)).message
+            }
+            return readAnthropicStreamingAssistant(input, onTextSnapshot)
+        } catch (error: IOException) {
+            if (cancelled) throw CancellationException("Agent request cancelled").also { it.initCause(error) }
+            throw error
+        } finally {
+            if (activeConnection === connection) activeConnection = null
+            connection.disconnect()
+        }
+    }
+
+    private fun requestAnthropicSimple(
+        config: LlmProviderConfig,
+        messages: JSONArray,
+        maxTokens: Int,
+    ): String {
+        val connection = openConnection(config)
+        activeConnection = connection
+        try {
+            val request = AnthropicMessagesAdapter.buildRequest(
+                config = config,
+                canonicalMessages = messages,
+                maxTokens = maxTokens,
+                stream = false,
+            )
+            writeRequest(connection, request)
+            val status = connection.responseCode
+            val responseText = readLimited(
+                if (status in 200..299) connection.inputStream else connection.errorStream,
+                MAX_RESPONSE_CHARS,
+            )
+            if (status !in 200..299) {
+                throw IOException("Anthropic request 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}")
+            }
+            return AnthropicMessagesAdapter.wrapAsCanonicalChatResponse(
+                AnthropicMessagesAdapter.parseResponse(responseText),
+            )
+        } catch (error: IOException) {
+            if (cancelled) throw CancellationException("Agent request cancelled").also { it.initCause(error) }
+            throw error
+        } finally {
+            if (activeConnection === connection) activeConnection = null
+            connection.disconnect()
+        }
+    }
+
     private fun openConnection(config: LlmProviderConfig): HttpURLConnection =
         (URL(config.baseUrl).openConnection() as? HttpURLConnection
             ?: throw IOException("外部模型地址不是 HTTP(S) 连接")).apply {
@@ -449,9 +544,18 @@ class MobileAgentToolClient {
             connectTimeout = CONNECT_TIMEOUT_MILLIS
             readTimeout = READ_TIMEOUT_MILLIS
             doOutput = true
-            setRequestProperty("Authorization", "Bearer ${config.apiKey}")
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "text/event-stream, application/json")
+            when (LlmEndpointNormalizer.protocol(config.baseUrl)) {
+                LlmApiProtocol.OPENAI_CHAT -> setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+                LlmApiProtocol.ANTHROPIC_MESSAGES -> {
+                    // MiniMax's Anthropic-compatible endpoint follows Claude Code's auth-token mode.
+                    // Also send x-api-key for compatibility with standard Anthropic gateways.
+                    setRequestProperty("Authorization", "Bearer ${config.apiKey}")
+                    setRequestProperty("x-api-key", config.apiKey)
+                    setRequestProperty("anthropic-version", ANTHROPIC_VERSION)
+                }
+            }
         }
 
     private fun writeRequest(connection: HttpURLConnection, request: JSONObject) {
@@ -538,6 +642,43 @@ class MobileAgentToolClient {
         return result
     }
 
+    private fun readAnthropicStreamingAssistant(
+        input: InputStream?,
+        onTextSnapshot: (String) -> Unit,
+    ): JSONObject {
+        requireNotNull(input) { "Anthropic 模型流式响应为空" }
+        val accumulator = AnthropicMessagesAdapter.StreamAccumulator()
+        var lastSnapshotAtNanos = 0L
+        var lastSnapshotLength = 0
+        fun publishTextSnapshot(force: Boolean = false) {
+            val text = accumulator.text()
+            if (text.length == lastSnapshotLength) return
+            val now = System.nanoTime()
+            if (
+                !force &&
+                text.length - lastSnapshotLength < STREAMING_SNAPSHOT_CHAR_STEP &&
+                now - lastSnapshotAtNanos < STREAMING_SNAPSHOT_INTERVAL_NANOS
+            ) return
+            onTextSnapshot(text.take(MAX_ANSWER_CHARS))
+            lastSnapshotLength = text.length
+            lastSnapshotAtNanos = now
+        }
+        BufferedReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
+            while (true) {
+                ensureRunningBlocking()
+                val line = reader.readLine() ?: break
+                if (!line.startsWith("data:")) continue
+                val payloadText = line.removePrefix("data:").trim()
+                if (payloadText.isBlank() || payloadText == "[DONE]") continue
+                val payload = runCatching { JSONObject(payloadText) }.getOrNull() ?: continue
+                accumulator.consume(payload)
+                publishTextSnapshot()
+            }
+        }
+        publishTextSnapshot(force = true)
+        return accumulator.toCanonicalMessage()
+    }
+
     private fun parseDeltaContent(value: Any?): String = when (value) {
         is String -> value
         is JSONArray -> buildString {
@@ -613,6 +754,7 @@ class MobileAgentToolClient {
     private companion object {
         const val CONNECT_TIMEOUT_MILLIS = 30_000
         const val READ_TIMEOUT_MILLIS = 180_000
+        const val ANTHROPIC_VERSION = "2023-06-01"
         const val MAX_RESPONSE_TOKENS = 4_096
         const val COMPACTION_RESPONSE_TOKENS = 1_500
         const val MAX_RESPONSE_CHARS = 320_000

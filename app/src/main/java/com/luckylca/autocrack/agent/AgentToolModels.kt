@@ -16,6 +16,11 @@ data class AgentToolDefinition(
                 .put("description", description)
                 .put("parameters", parameters),
         )
+
+    fun toAnthropicJson(): JSONObject = JSONObject()
+        .put("name", name)
+        .put("description", description)
+        .put("input_schema", parameters)
 }
 
 data class AgentToolExecutionRecord(

@@ -30,6 +30,26 @@ class LlmEndpointNormalizerTest {
     }
 
     @Test
+    fun normalize_supportsAnthropicCompatibleBase() {
+        assertEquals(
+            "https://api.minimaxi.com/anthropic/v1/messages",
+            LlmEndpointNormalizer.normalize("https://api.minimaxi.com/anthropic/"),
+        )
+        assertEquals(
+            LlmApiProtocol.ANTHROPIC_MESSAGES,
+            LlmEndpointNormalizer.protocol("https://api.minimaxi.com/anthropic/v1/messages"),
+        )
+    }
+
+    @Test
+    fun normalize_keepsFullAnthropicMessagesEndpoint() {
+        assertEquals(
+            "https://example.com/anthropic/v1/messages",
+            LlmEndpointNormalizer.normalize("https://example.com/anthropic/v1/messages"),
+        )
+    }
+
+    @Test
     fun normalize_allowsPinnedCleartextProviderOnly() {
         assertEquals(
             "http://128.241.229.70:8080/v1/chat/completions",
