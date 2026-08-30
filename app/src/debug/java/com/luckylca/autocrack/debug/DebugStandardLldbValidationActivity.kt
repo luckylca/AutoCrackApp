@@ -84,9 +84,11 @@ class DebugStandardLldbValidationActivity : Activity() {
             original = process.ReadMemory(sp, 1, read_error)
             if not read_error.Success() or len(original) != 1:
                 raise RuntimeError("stack memory read failed: " + str(read_error))
+            display_bytes = original.encode("latin1") if isinstance(original, str) else bytes(original)
             write_error = lldb.SBError()
             written = process.WriteMemory(sp, original, write_error)
-            print("AUTOCRACK_LLDB_MEMORY_READ_BYTE=" + original.hex())
+            print("AUTOCRACK_LLDB_MEMORY_RETURN_TYPE=" + type(original).__name__)
+            print("AUTOCRACK_LLDB_MEMORY_READ_BYTE=" + display_bytes.hex())
             print("AUTOCRACK_LLDB_MEMORY_WRITE_OK=" + str(written == 1 and write_error.Success()).lower())
 
             breakpoint = target.BreakpointCreateBySBAddress(frame.GetPCAddress())
