@@ -2,6 +2,11 @@ name: Build Android LLDB server toolpack
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_server_run_id:
+        description: "Optional prior run id whose verified Android lldb-server intermediate should be reused"
+        required: false
+        type: string
   push:
     branches:
       - codex/frida-capabilities-1.0.4
@@ -24,6 +29,7 @@ jobs:
     env:
       NDK_VERSION: "27.3.13750724"
       ANDROID_LLVM_COMMIT: "d8003a456d14a3deb8054cdaa529ffbf02d9b262"
+      ANDROID_LLDB_SERVER_SHA256: "71d9ed6a90776d7dbdbcb315ea2171a763c071e5a370ec1b8b0c28157af41b20"
       TOOLPACK_ID: android-lldb-server
       TOOLPACK_VERSION: android-llvm-r522817_lldb-14_autocrack-2.0.0
       LLDB_CLIENT_APT_VERSION: "1:14.0.6-12"
@@ -49,6 +55,7 @@ jobs:
           platforms: arm64
 
       - name: Install pinned NDK and build tools
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reuse_server_run_id == '' }}
         run: |
           set -euxo pipefail
           yes | sdkmanager --licenses >/dev/null || true
@@ -57,6 +64,7 @@ jobs:
           sudo apt-get install -y ninja-build ccache
 
       - name: Restore LLVM compiler cache
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reuse_server_run_id == '' }}
         id: restore-lldb-ccache
         uses: actions/cache/restore@v4
         with:
@@ -66,6 +74,7 @@ jobs:
             lldb-ccache-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.ANDROID_LLVM_COMMIT }}-
 
       - name: Fetch Android LLVM r522817 source
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reuse_server_run_id == '' }}
         run: |
           set -euxo pipefail
           git init android-llvm
@@ -76,6 +85,7 @@ jobs:
           test "$(cat android-llvm.commit.txt)" = "${ANDROID_LLVM_COMMIT}"
 
       - name: Patch LLDB for seized attach and runtime all-stop semantics
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reuse_server_run_id == '' }}
         run: |
           set -euxo pipefail
           python3 - <<'PY'
@@ -339,6 +349,7 @@ jobs:
           sha256sum autocrack-lldb-seize-runtime-stop.patch | tee autocrack-lldb-seize-runtime-stop.patch.sha256
 
       - name: Cross-compile patched lldb-server for Android arm64
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.reuse_server_run_id == '' }}
         run: |
           set -euxo pipefail
           NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
@@ -405,11 +416,30 @@ jobs:
             > dist/source/lldb-server.source-url.txt
 
       - name: Save LLVM compiler cache
-        if: always() && steps.restore-lldb-ccache.outputs.cache-hit != 'true'
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.reuse_server_run_id == '') && always() && steps.restore-lldb-ccache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/ccache
           key: lldb-ccache-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.ANDROID_LLVM_COMMIT }}-${{ hashFiles('.github/workflows/lldb-server-toolpack.yml', 'toolpacks/android-lldb-server/**') }}
+
+      - name: Reuse compiled Android LLDB server intermediate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.reuse_server_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: AutoCrackApp-android-lldb-server-intermediate-${{ inputs.reuse_server_run_id }}
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_server_run_id }}
+
+      - name: Verify reused Android LLDB server intermediate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.reuse_server_run_id != '' }}
+        run: |
+          set -euxo pipefail
+          test -f dist/payload/bin/lldb-server-android
+          test -f dist/source/android-llvm.commit.txt
+          test "$(cat dist/source/android-llvm.commit.txt)" = "${ANDROID_LLVM_COMMIT}"
+          printf '%s  %s\n' "${ANDROID_LLDB_SERVER_SHA256}" dist/payload/bin/lldb-server-android | sha256sum -c -
+          grep -F "${ANDROID_LLDB_SERVER_SHA256}" dist/source/lldb-server.sha256
 
       - name: Upload compiled Android LLDB server intermediate
         uses: actions/upload-artifact@v4
@@ -449,15 +479,19 @@ jobs:
                 "libclang-cpp14=${LLDB_CLIENT_APT_VERSION}" \
                 "libllvm14=${LLDB_CLIENT_APT_VERSION}" \
                 "python3-six=${PYTHON3_SIX_VERSION}"
-              LLDB_DEB="lldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
-              PYTHON3_LLDB_DEB="python3-lldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
-              LIBLLDB_DEB="liblldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
-              LIBCLANG_CPP14_DEB="libclang-cpp14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
-              LIBLLVM14_DEB="libllvm14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
-              PYTHON3_SIX_DEB="python3-six_${PYTHON3_SIX_VERSION}_all.deb"
-              for DEB in "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB" "$PYTHON3_SIX_DEB"; do
-                test -f "$DEB"
-              done
+              resolve_deb() {
+                PATTERN="$1"
+                set -- $PATTERN
+                test "$#" -eq 1
+                test -f "$1"
+                printf '%s\n' "$1"
+              }
+              LLDB_DEB="$(resolve_deb 'lldb-14_*_arm64.deb')"
+              PYTHON3_LLDB_DEB="$(resolve_deb 'python3-lldb-14_*_arm64.deb')"
+              LIBLLDB_DEB="$(resolve_deb 'liblldb-14_*_arm64.deb')"
+              LIBCLANG_CPP14_DEB="$(resolve_deb 'libclang-cpp14_*_arm64.deb')"
+              LIBLLVM14_DEB="$(resolve_deb 'libllvm14_*_arm64.deb')"
+              PYTHON3_SIX_DEB="$(resolve_deb 'python3-six_*_all.deb')"
               printf "%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n" \
                 "$LLDB_CLIENT_DEB_SHA256" "$LLDB_DEB" \
                 "$PYTHON3_LLDB_DEB_SHA256" "$PYTHON3_LLDB_DEB" \
