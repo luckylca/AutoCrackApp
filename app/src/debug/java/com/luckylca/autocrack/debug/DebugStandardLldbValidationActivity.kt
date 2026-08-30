@@ -58,7 +58,7 @@ class DebugStandardLldbValidationActivity : Activity() {
             """.trimIndent()
         }
         val startServer = if (useCandidate) {
-            """android-shell --timeout-ms 120000 -- "${'$'}HOST_SERVER" gdbserver 127.0.0.1:5039 --attach "${'$'}target_pid"""
+            """android-shell --timeout-ms 120000 -- "${'$'}HOST_SERVER" gdbserver 127.0.0.1:5039 --attach ${'$'}target_pid"""
         } else {
             """AUTOC_LLDB_SERVER_TIMEOUT_MS=120000 android-lldb-server gdbserver 127.0.0.1:5039 --attach "${'$'}target_pid"""
         }
@@ -79,12 +79,12 @@ class DebugStandardLldbValidationActivity : Activity() {
                 kill "${'$'}server_client" >/dev/null 2>&1 || true
                 wait "${'$'}server_client" >/dev/null 2>&1 || true
               fi
-              android-shell sh -c "tracer=\${'$'}(awk '/^TracerPid:/ { print \\$2; exit }' /proc/${'$'}target_pid/status 2>/dev/null); case \"\${'$'}{tracer:-0}\" in ''|0) ;; *) cmd=\${'$'}(tr '\\000' ' ' < /proc/\${'$'}tracer/cmdline 2>/dev/null || true); case \"\${'$'}cmd\" in *'/bin/lldb-server-android'*|*'/host-bin/lldb-server-android'*) kill -TERM \${'$'}tracer >/dev/null 2>&1 || true ;; esac ;; esac; kill -CONT ${'$'}target_pid >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+              android-shell sh -c "tracer=\${'$'}(sed -n 's/^TracerPid:[[:space:]]*//p' /proc/${'$'}target_pid/status 2>/dev/null | head -n 1); case \"\${'$'}{tracer:-0}\" in ''|0) ;; *) cmd=\${'$'}(tr '\\000' ' ' < /proc/\${'$'}tracer/cmdline 2>/dev/null || true); case \"\${'$'}cmd\" in *'/bin/lldb-server-android'*|*'/host-bin/lldb-server-android'*) kill -TERM \${'$'}tracer >/dev/null 2>&1 || true ;; esac ;; esac; kill -CONT ${'$'}target_pid >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
             }
             trap cleanup EXIT INT TERM
 
-            rm -f /workspace/lldb-standard-server.log /workspace/lldb-standard-client.log /workspace/lldb-standard-probe.py
-            cat > /workspace/lldb-standard-probe.py <<'PY'
+            rm -f /workspace/lldb-standard-server.log /workspace/lldb-standard-client.log /workspace/lldb_standard_probe.py
+            cat > /workspace/lldb_standard_probe.py <<'PY'
             import lldb
 
             target = lldb.debugger.GetSelectedTarget()
@@ -137,24 +137,26 @@ class DebugStandardLldbValidationActivity : Activity() {
 
             "${'$'}LLDB" --batch \
               -o 'gdb-remote 127.0.0.1:5039' \
-              -o 'process status' \
               -o 'register read pc sp x0' \
               -o 'memory read --count 16 --size 1 --format x ${'$'}sp' \
-              -o 'command script import /workspace/lldb-standard-probe.py' \
+              -o 'command script import /workspace/lldb_standard_probe.py' \
               -o 'thread step-inst' \
-              -o 'process status' \
+              -o 'script print("AUTOCRACK_LLDB_STEP_OK=true")' \
               -o 'detach' \
               2>&1 | tee /workspace/lldb-standard-client.log
 
             grep -F 'AUTOCRACK_LLDB_REGISTER_WRITE_OK=true' /workspace/lldb-standard-client.log
             grep -F 'AUTOCRACK_LLDB_MEMORY_WRITE_OK=true' /workspace/lldb-standard-client.log
             grep -F 'AUTOCRACK_LLDB_BREAKPOINT_OK=true' /workspace/lldb-standard-client.log
-            android-shell sh -c "test \"\${'$'}(awk '/^TracerPid:/ { print \\$2; exit }' /proc/${'$'}target_pid/status)\" = 0"
+            android-shell sh -c "test \"\${'$'}(sed -n 's/^TracerPid:[[:space:]]*//p' /proc/${'$'}target_pid/status | head -n 1)\" = 0"
             test -n "${'$'}(android-shell pidof 'com.luckylca.autocrack:frida_fixture' | tr -d '\r\n')"
             printf 'AUTOCRACK_LLDB_DETACH_OK=true\n'
         """.trimIndent()
             .replace("__LLDB_SETUP__", lldbSetup)
             .replace("__START_SERVER__", startServer)
+        val scriptOutput = File(filesDir, SCRIPT_PATH)
+        scriptOutput.parentFile?.mkdirs()
+        scriptOutput.writeText(script, Charsets.UTF_8)
 
         val result = try {
             JSONObject(
@@ -170,12 +172,24 @@ class DebugStandardLldbValidationActivity : Activity() {
             runCatching { runtime.cleanupSessionProcesses() }
             runtime.cancelAllCommands()
         }
+        val stdout = result.optString("stdout")
+        val stderr = result.optString("stderr")
         return JSONObject()
             .put("success", result.optBoolean("ok"))
-            .put("result", result)
+            .put("exitCode", result.optInt("exitCode", -1))
+            .put("serverReady", stdout.contains("AUTOCRACK_LLDB_SERVER_READY=true"))
+            .put("registerWriteOk", stdout.contains("AUTOCRACK_LLDB_REGISTER_WRITE_OK=true"))
+            .put("memoryWriteOk", stdout.contains("AUTOCRACK_LLDB_MEMORY_WRITE_OK=true"))
+            .put("breakpointOk", stdout.contains("AUTOCRACK_LLDB_BREAKPOINT_OK=true"))
+            .put("stepOk", stdout.contains("AUTOCRACK_LLDB_STEP_OK=true"))
+            .put("detachOk", stdout.contains("AUTOCRACK_LLDB_DETACH_OK=true"))
+            .put("failure", result.optString("failure"))
+            .put("stdoutTail", stdout.takeLast(4_000))
+            .put("stderrTail", stderr.takeLast(2_000))
     }
 
     private companion object {
         const val REPORT_PATH = "debug-validation/standard-lldb-report.json"
+        const val SCRIPT_PATH = "debug-validation/standard-lldb-script.sh"
     }
 }
