@@ -47,7 +47,7 @@ class DebugStandardLldbValidationActivity : Activity() {
                 test -x "${'$'}LLDB"
                 export LD_LIBRARY_PATH="${'$'}R/usr/lib/llvm-14/lib:${'$'}R/usr/lib/aarch64-linux-gnu:${'$'}R/lib/aarch64-linux-gnu:${'$'}R/usr/lib:${'$'}R/lib"
                 export PYTHONPATH="${'$'}R/usr/lib/llvm-14/lib/python3.11/dist-packages"
-                HOST_SERVER="${'$'}AUTOC_ROOTFS_HOST_PATH/opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb-server-android"
+                HOST_SERVER="${'$'}AUTOC_ROOTFS_HOST_PATH/opt/autocrack/toolpacks/active/android-lldb-server/host-bin/lldb-server-android"
                 android-shell test -x "${'$'}HOST_SERVER"
             """.trimIndent()
         } else {
@@ -60,7 +60,7 @@ class DebugStandardLldbValidationActivity : Activity() {
         val startServer = if (useCandidate) {
             """android-shell --timeout-ms 120000 -- "${'$'}HOST_SERVER" gdbserver 127.0.0.1:5039 --attach ${'$'}target_pid"""
         } else {
-            """AUTOC_LLDB_SERVER_TIMEOUT_MS=120000 android-lldb-server gdbserver 127.0.0.1:5039 --attach "${'$'}target_pid"""
+            """AUTOC_LLDB_SERVER_TIMEOUT_MS=120000 android-lldb-server gdbserver 127.0.0.1:5039 --attach ${'$'}target_pid"""
         }
         val script = """
             set -eu
@@ -79,7 +79,17 @@ class DebugStandardLldbValidationActivity : Activity() {
                 kill "${'$'}server_client" >/dev/null 2>&1 || true
                 wait "${'$'}server_client" >/dev/null 2>&1 || true
               fi
-              android-shell sh -c "tracer=\${'$'}(sed -n 's/^TracerPid:[[:space:]]*//p' /proc/${'$'}target_pid/status 2>/dev/null | head -n 1); case \"\${'$'}{tracer:-0}\" in ''|0) ;; *) cmd=\${'$'}(tr '\\000' ' ' < /proc/\${'$'}tracer/cmdline 2>/dev/null || true); case \"\${'$'}cmd\" in *'/bin/lldb-server-android'*|*'/host-bin/lldb-server-android'*) kill -TERM \${'$'}tracer >/dev/null 2>&1 || true ;; esac ;; esac; kill -CONT ${'$'}target_pid >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+              tracer="${'$'}(android-shell sed -n 's/^TracerPid:[[:space:]]*//p' "/proc/${'$'}target_pid/status" 2>/dev/null | head -n 1 | tr -d '\r\n')"
+              case "${'$'}{tracer:-0}" in
+                ''|0) ;;
+                *)
+                  tracer_exe="${'$'}(android-shell readlink "/proc/${'$'}tracer/exe" 2>/dev/null | tr -d '\r\n' || true)"
+                  case "${'$'}tracer_exe" in
+                    *lldb-server*) android-shell kill -TERM "${'$'}tracer" >/dev/null 2>&1 || true ;;
+                  esac
+                  ;;
+              esac
+              android-shell kill -CONT "${'$'}target_pid" >/dev/null 2>&1 || true
             }
             trap cleanup EXIT INT TERM
 
@@ -148,7 +158,8 @@ class DebugStandardLldbValidationActivity : Activity() {
             grep -F 'AUTOCRACK_LLDB_REGISTER_WRITE_OK=true' /workspace/lldb-standard-client.log
             grep -F 'AUTOCRACK_LLDB_MEMORY_WRITE_OK=true' /workspace/lldb-standard-client.log
             grep -F 'AUTOCRACK_LLDB_BREAKPOINT_OK=true' /workspace/lldb-standard-client.log
-            android-shell sh -c "test \"\${'$'}(sed -n 's/^TracerPid:[[:space:]]*//p' /proc/${'$'}target_pid/status | head -n 1)\" = 0"
+            tracer="${'$'}(android-shell sed -n 's/^TracerPid:[[:space:]]*//p' "/proc/${'$'}target_pid/status" | head -n 1 | tr -d '\r\n')"
+            test "${'$'}{tracer:-0}" = 0
             test -n "${'$'}(android-shell pidof 'com.luckylca.autocrack:frida_fixture' | tr -d '\r\n')"
             printf 'AUTOCRACK_LLDB_DETACH_OK=true\n'
         """.trimIndent()
