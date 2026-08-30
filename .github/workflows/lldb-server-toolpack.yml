@@ -484,14 +484,14 @@ jobs:
                 set -- $PATTERN
                 test "$#" -eq 1
                 test -f "$1"
-                printf '%s\n' "$1"
+                printf "%s\\n" "$1"
               }
-              LLDB_DEB="$(resolve_deb 'lldb-14_*_arm64.deb')"
-              PYTHON3_LLDB_DEB="$(resolve_deb 'python3-lldb-14_*_arm64.deb')"
-              LIBLLDB_DEB="$(resolve_deb 'liblldb-14_*_arm64.deb')"
-              LIBCLANG_CPP14_DEB="$(resolve_deb 'libclang-cpp14_*_arm64.deb')"
-              LIBLLVM14_DEB="$(resolve_deb 'libllvm14_*_arm64.deb')"
-              PYTHON3_SIX_DEB="$(resolve_deb 'python3-six_*_all.deb')"
+              LLDB_DEB="$(resolve_deb "lldb-14_*_arm64.deb")"
+              PYTHON3_LLDB_DEB="$(resolve_deb "python3-lldb-14_*_arm64.deb")"
+              LIBLLDB_DEB="$(resolve_deb "liblldb-14_*_arm64.deb")"
+              LIBCLANG_CPP14_DEB="$(resolve_deb "libclang-cpp14_*_arm64.deb")"
+              LIBLLVM14_DEB="$(resolve_deb "libllvm14_*_arm64.deb")"
+              PYTHON3_SIX_DEB="$(resolve_deb "python3-six_*_all.deb")"
               printf "%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n" \
                 "$LLDB_CLIENT_DEB_SHA256" "$LLDB_DEB" \
                 "$PYTHON3_LLDB_DEB_SHA256" "$PYTHON3_LLDB_DEB" \
