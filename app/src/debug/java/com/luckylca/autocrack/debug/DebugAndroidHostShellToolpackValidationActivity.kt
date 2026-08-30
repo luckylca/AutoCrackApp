@@ -59,7 +59,7 @@ class DebugAndroidHostShellToolpackValidationActivity : Activity() {
         check(selfTest.passed) { "android-host-shell toolpack self-test failed" }
 
         val runtime = AgentToolSessionFactory(applicationContext, runner, detector).createMobileAgent(
-            sessionId = "host-shell-smoke-${UUID.randomUUID()}",
+            sessionId = UUID.randomUUID().toString(),
             knownRootStatus = root,
             dangerousOperationGate = { DangerousOperationDecision.ALLOW_ONCE },
         )

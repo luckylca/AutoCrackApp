@@ -35,7 +35,7 @@ class DebugStandardLldbValidationActivity : Activity() {
         val root = detector.inspect()
         check(root.isRootGranted) { root.diagnostic ?: "Root not granted" }
         val runtime = AgentToolSessionFactory(applicationContext, runner, detector).createMobileAgent(
-            sessionId = "debug-standard-lldb-${UUID.randomUUID()}",
+            sessionId = UUID.randomUUID().toString(),
             knownRootStatus = root,
             dangerousOperationGate = { DangerousOperationDecision.ALLOW_ONCE },
         )

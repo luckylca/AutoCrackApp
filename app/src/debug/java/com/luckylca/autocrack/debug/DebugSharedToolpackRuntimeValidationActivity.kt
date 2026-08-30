@@ -8,6 +8,7 @@ import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.runtime.RuntimeLayout
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,7 +37,7 @@ class DebugSharedToolpackRuntimeValidationActivity : Activity() {
         val detector = RootDetector(runner)
         val root = detector.inspect()
         check(root.isRootGranted) { root.diagnostic ?: "Root not granted" }
-        val sessionId = "debug-shared-runtime"
+        val sessionId = UUID.randomUUID().toString()
         MobileAgentWorkspacePolicy.markIsolated(layout.createAgentWorkspace(sessionId))
         val runtime = AgentToolSessionFactory(applicationContext, runner, detector).createMobileAgent(
             sessionId = sessionId,

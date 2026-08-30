@@ -44,7 +44,7 @@ class DebugMobileAgentExecActivity : Activity() {
         val root = detector.inspect()
         check(root.isRootGranted) { root.diagnostic ?: "Root not granted" }
         val runtime = AgentToolSessionFactory(applicationContext, runner, detector).createMobileAgent(
-            sessionId = "adb-mobile-agent-${UUID.randomUUID()}",
+            sessionId = UUID.randomUUID().toString(),
             knownRootStatus = root,
             dangerousOperationGate = { DangerousOperationDecision.ALLOW_ONCE },
         )
