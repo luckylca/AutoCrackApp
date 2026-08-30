@@ -89,7 +89,8 @@ jobs:
 
       - name: Build deterministic toolpack
         run: |
-          python3 toolpacks/simplehook/build_toolpack.py | tee toolpacks/simplehook/dist/build-summary.txt
+          python3 toolpacks/simplehook/build_toolpack.py | tee /tmp/simplehook-build-summary.txt
+          cp /tmp/simplehook-build-summary.txt toolpacks/simplehook/dist/build-summary.txt
           unzip -t toolpacks/simplehook/dist/simplehook-toolpack-0.1.0.zip
           jq -e '
             .schemaVersion == 1 and
