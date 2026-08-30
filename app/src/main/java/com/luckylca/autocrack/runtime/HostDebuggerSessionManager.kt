@@ -705,9 +705,9 @@ class HostDebuggerSessionManager(
 
     companion object {
         const val TOOLPACK_ID = "android-lldb-server"
-        const val TOOLPACK_VERSION = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
+        const val TOOLPACK_VERSION = "android-llvm-r522817_lldb-14_autocrack-2.0.0"
         const val DEFAULT_PORT = 5039
-        private const val LLDB_SERVER_RELATIVE_PATH = "bin/lldb-server-android"
+        private const val LLDB_SERVER_RELATIVE_PATH = "host-bin/lldb-server-android"
         private const val READ_BUFFER_CHARS = 4_096
         private const val MAX_RETAINED_CHARS = 200_000
         private const val SERVER_READY_ATTEMPTS = 30

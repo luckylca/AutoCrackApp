@@ -111,7 +111,7 @@ jobs:
                   .networkScope == "127.0.0.1 only" and
                   .networkAddressFamily == "IPv4" and
                   .changesTargetState == false and
-                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" and
+                  .requiresToolpack.version == "android-llvm-r522817_lldb-14_autocrack-2.0.0" and
                   ([.guarantees[]] | index("start lldb-server gdbserver on IPv4 loopback without --attach so it reaches LISTEN before target attach") != null) and
                   ([.guarantees[]] | index("verify the 127.0.0.1 listener socket inode is owned by the verified helper PID") != null) and
                   ([.guarantees[]] | index("create the helper PID file under controller ownership before the root helper writes its PID") != null)) and
@@ -135,7 +135,7 @@ jobs:
                 (.tools[] | select(.id == "host.debugger.orphan_recovery") |
                   .confirmation == "exact_target_and_tracer_phrase" and
                   .authorizationTemplate == "RECOVER <packageName> <pid> <tracerPid>" and
-                  .requiresToolpack.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop" and
+                  .requiresToolpack.version == "android-llvm-r522817_lldb-14_autocrack-2.0.0" and
                   ([.guarantees[]] | index("accept only a trusted IPv4 loopback gdbserver command from either legacy --attach or typed client-driven attach sessions") != null) and
                   ([.guarantees[]] | index("send TERM only to the verified LLDB helper and never to the target PID") != null) and
                   ([.guarantees[]] | index("never escalate recovery to SIGKILL") != null))

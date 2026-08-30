@@ -196,7 +196,7 @@
       ],
       "requiresToolpack": {
         "id": "android-lldb-server",
-        "version": "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
+        "version": "android-llvm-r522817_lldb-14_autocrack-2.0.0"
       },
       "changesState": true,
       "changesTargetState": false,
@@ -368,7 +368,7 @@
       ],
       "requiresToolpack": {
         "id": "android-lldb-server",
-        "version": "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
+        "version": "android-llvm-r522817_lldb-14_autocrack-2.0.0"
       },
       "changesState": true,
       "changesTargetState": true,

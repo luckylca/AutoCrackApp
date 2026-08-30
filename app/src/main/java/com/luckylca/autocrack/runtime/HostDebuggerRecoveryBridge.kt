@@ -303,7 +303,7 @@ class HostDebuggerRecoveryBridge(
     private data class RecoveryEnvironment(val suPath: String, val binary: File)
 
     companion object {
-        private const val LLDB_SERVER_RELATIVE_PATH = "bin/lldb-server-android"
+        private const val LLDB_SERVER_RELATIVE_PATH = "host-bin/lldb-server-android"
         private const val COMMAND_TIMEOUT_MILLIS = 3_000L
         private const val DETACH_VERIFY_ATTEMPTS = 25
         private const val DETACH_VERIFY_DELAY_MILLIS = 120L

@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HostDebuggerRecoveryBridgeTest {
-    private val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/bin/lldb-server-android"
+    private val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/host-bin/lldb-server-android"
 
     @Test
     fun recoveryAuthorization_isBoundToPackageTargetAndTracer() {

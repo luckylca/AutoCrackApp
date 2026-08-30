@@ -277,7 +277,7 @@ class AgentToolSessionFactory(
         private const val FRIDA_TOOLPACK_ID = "android-frida"
         private const val FRIDA_TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.1.0"
         private const val LLDB_TOOLPACK_ID = "android-lldb-server"
-        private const val LLDB_TOOLPACK_VERSION = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
+        private const val LLDB_TOOLPACK_VERSION = "android-llvm-r522817_lldb-14_autocrack-2.0.0"
 
         internal fun selectExactTargetPid(
             packageName: String,

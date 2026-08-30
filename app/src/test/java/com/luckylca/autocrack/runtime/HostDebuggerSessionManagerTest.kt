@@ -26,7 +26,7 @@ class HostDebuggerSessionManagerTest {
     fun serverCommand_revalidatesIdentityButDefersAttachUntilTypedClient() {
         val command = HostDebuggerCommandFactory.buildAttach(
             suPath = "/system/bin/su",
-            binaryPath = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/bin/lldb-server-android",
+            binaryPath = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/host-bin/lldb-server-android",
             packageName = "com.example.target",
             pid = 4321,
             port = 5039,
@@ -52,7 +52,7 @@ class HostDebuggerSessionManagerTest {
 
     @Test
     fun helperProbe_requiresExactBinaryCommandAndOwnedIpv4Listener() {
-        val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/bin/lldb-server-android"
+        val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/host-bin/lldb-server-android"
         val command = HostDebuggerCommandFactory.buildProbeHelper(
             suPath = "/system/bin/su",
             binaryPath = binary,
@@ -108,7 +108,7 @@ class HostDebuggerSessionManagerTest {
 
     @Test
     fun stopCommand_signalsOnlyIdentityCheckedHelper() {
-        val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/bin/lldb-server-android"
+        val binary = "/data/user/0/com.luckylca.autocrack/files/runtime/rootfs/current/opt/autocrack/toolpacks/packs/android-lldb-server/v/host-bin/lldb-server-android"
         val command = HostDebuggerCommandFactory.buildStopHelper(
             suPath = "/system/bin/su",
             binaryPath = binary,
