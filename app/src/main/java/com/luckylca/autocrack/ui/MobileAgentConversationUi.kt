@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -81,6 +83,7 @@ internal fun MobileAgentConversationPage(
     onInputChange: (String) -> Unit,
     pendingAttachments: List<MobileAgentAttachment>,
     searchQuery: String,
+    searchMatchIds: Set<String>?,
     onSearchChange: (String) -> Unit,
     taskForConversation: (String) -> MobileAgentTaskSnapshot?,
     uiStatus: String?,
@@ -108,6 +111,7 @@ internal fun MobileAgentConversationPage(
                     conversations = conversations,
                     activeConversationId = activeConversation?.id,
                     searchQuery = searchQuery,
+                    searchMatchIds = searchMatchIds,
                     onSearchChange = onSearchChange,
                     taskForConversation = taskForConversation,
                     onNewConversation = {
@@ -198,8 +202,25 @@ private fun ConversationBody(
             }
         } else {
             val renderItems = remember(activeConversation.messages, running) { buildConversationItems(activeConversation.messages, running) }
+            val listState = rememberLazyListState()
+            val streamingText = task?.streamingText.orEmpty().takeIf { running && it.isNotBlank() }
+            val showTerminalStatus = !running && task != null &&
+                task.status in setOf(MobileAgentTaskStatus.FAILED, MobileAgentTaskStatus.CANCELLED, MobileAgentTaskStatus.INTERRUPTED)
+            val lastItemIndex = renderItems.size + (if (streamingText != null) 1 else 0) +
+                (if (showTerminalStatus) 1 else 0) - 1
+            val streamingScrollTick = streamingText?.length?.div(STREAMING_SCROLL_CHAR_STEP) ?: 0
+            LaunchedEffect(
+                activeConversation.id,
+                renderItems.size,
+                renderItems.lastOrNull()?.key,
+                streamingScrollTick,
+                showTerminalStatus,
+            ) {
+                if (lastItemIndex >= 0) listState.scrollToItem(lastItemIndex)
+            }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
+                state = listState,
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
@@ -210,10 +231,10 @@ private fun ConversationBody(
                         is ConversationItem.ToolCall -> ToolCallCard(item.call, onOpenFile, onShareFile, onSaveFile)
                     }
                 }
-                task?.streamingText?.takeIf { running && it.isNotBlank() }?.let { streaming ->
+                streamingText?.let { streaming ->
                     item(key = "streaming") { AssistantMessage(streaming, streaming = true) }
                 }
-                if (!running && task != null && task.status in setOf(MobileAgentTaskStatus.FAILED, MobileAgentTaskStatus.CANCELLED, MobileAgentTaskStatus.INTERRUPTED)) {
+                if (showTerminalStatus) {
                     item(key = "terminal-status") {
                         Text(
                             listOfNotNull(task.stage, task.error).joinToString(" · "),
@@ -374,19 +395,20 @@ private fun ToolCallCard(
 @Composable
 private fun ToolDetail(call: ToolCallPresentation) {
     val context = LocalContext.current
+    val output = remember(call.resultContent) { parseToolOutput(call.resultContent) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(call.displayTool, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(call.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-        call.stdout.takeIf(String::isNotBlank)?.let { ToolLogBlock("stdout", it) }
-        call.stderr.takeIf(String::isNotBlank)?.let { ToolLogBlock("stderr", it, error = true) }
+        output.stdout.takeIf(String::isNotBlank)?.let { ToolLogBlock("stdout", it) }
+        output.stderr.takeIf(String::isNotBlank)?.let { ToolLogBlock("stderr", it, error = true) }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("exit code: ${call.exitCode ?: "—"}", style = MaterialTheme.typography.labelSmall)
             call.durationMillis?.let { Text(formatDuration(it), style = MaterialTheme.typography.labelSmall) }
             TextButton(onClick = {
                 val complete = buildString {
                     appendLine(call.command)
-                    if (call.stdout.isNotBlank()) appendLine("\nstdout:\n${call.stdout}")
-                    if (call.stderr.isNotBlank()) appendLine("\nstderr:\n${call.stderr}")
+                    if (output.stdout.isNotBlank()) appendLine("\nstdout:\n${output.stdout}")
+                    if (output.stderr.isNotBlank()) appendLine("\nstderr:\n${output.stderr}")
                 }
                 context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Tool call", complete))
                 Toast.makeText(context, "Tool 日志已复制", Toast.LENGTH_SHORT).show()
@@ -442,6 +464,7 @@ private fun ConversationDrawer(
     conversations: List<MobileAgentConversation>,
     activeConversationId: String?,
     searchQuery: String,
+    searchMatchIds: Set<String>?,
     onSearchChange: (String) -> Unit,
     taskForConversation: (String) -> MobileAgentTaskSnapshot?,
     onNewConversation: () -> Unit,
@@ -455,7 +478,9 @@ private fun ConversationDrawer(
         OutlinedTextField(modifier = Modifier.fillMaxWidth(), value = searchQuery, onValueChange = onSearchChange, placeholder = { Text("搜索会话") }, singleLine = true)
         Spacer(Modifier.height(10.dp))
         val query = searchQuery.trim()
-        val filtered = conversations.filter { conversation -> query.isBlank() || conversation.title.contains(query, true) || conversation.messages.any { it.content.contains(query, true) } }
+        val filtered = conversations.filter { conversation ->
+            query.isBlank() || conversation.title.contains(query, true) || conversation.id in searchMatchIds.orEmpty()
+        }
         val grouped = remember(filtered) { groupConversations(filtered) }
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             grouped.forEach { (label, entries) ->
@@ -501,12 +526,13 @@ private data class ToolCallPresentation(
     val command: String,
     val summary: String,
     val status: ToolVisualStatus,
-    val stdout: String,
-    val stderr: String,
+    val resultContent: String?,
     val exitCode: Int?,
     val durationMillis: Long?,
     val generatedFile: AgentManagedFile? = null,
 )
+
+private data class ToolOutput(val stdout: String, val stderr: String)
 
 private fun buildConversationItems(messages: List<MobileAgentMessage>, taskRunning: Boolean): List<ConversationItem> {
     val toolResults = messages.filter { it.role == MobileAgentRole.TOOL && it.toolCallId != null }.associateBy { it.toolCallId.orEmpty() }
@@ -561,13 +587,25 @@ private fun buildToolPresentation(callId: String, toolName: String, args: JSONOb
         command = command,
         summary = command.lineSequence().take(2).joinToString("\n").take(280),
         status = status,
-        stdout = result?.optString("stdout").orEmpty().take(40_000),
-        stderr = result?.optString("stderr").orEmpty().ifBlank { result?.optString("error").orEmpty() }.take(40_000),
+        resultContent = resultMessage?.content,
         exitCode = result?.takeIf { it.has("exitCode") && !it.isNull("exitCode") }?.optInt("exitCode"),
         durationMillis = result?.takeIf { it.has("durationMillis") }?.optLong("durationMillis"),
         generatedFile = generated,
     )
 }
+
+private fun parseToolOutput(resultContent: String?): ToolOutput {
+    val result = resultContent?.let { runCatching { JSONObject(it) }.getOrNull() }
+    return ToolOutput(
+        stdout = result?.optString("stdout").orEmpty().take(MAX_TOOL_LOG_CHARS),
+        stderr = result?.optString("stderr").orEmpty()
+            .ifBlank { result?.optString("error").orEmpty() }
+            .take(MAX_TOOL_LOG_CHARS),
+    )
+}
+
+private const val STREAMING_SCROLL_CHAR_STEP = 192
+private const val MAX_TOOL_LOG_CHARS = 40_000
 
 private fun groupConversations(conversations: List<MobileAgentConversation>): List<Pair<String, List<MobileAgentConversation>>> {
     val zone = ZoneId.systemDefault()

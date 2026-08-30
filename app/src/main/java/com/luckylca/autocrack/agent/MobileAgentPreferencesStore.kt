@@ -11,7 +11,7 @@ enum class SystemWritePolicy {
 data class MobileAgentPreferences(
     val customSystemPrompt: String = "",
     val contextCompressionEnabled: Boolean = true,
-    val maxToolIterations: Int = 24,
+    val maxToolIterations: Int = 0,
     val dangerousOperationConfirmation: Boolean = true,
     val systemWritePolicy: SystemWritePolicy = SystemWritePolicy.ASK,
     val alwaysAllowedDangerousCategories: Set<String> = emptySet(),
@@ -26,8 +26,8 @@ data class MobileAgentPreferences(
     )
 
     companion object {
-        const val MIN_TOOL_ITERATIONS = 1
-        const val MAX_TOOL_ITERATIONS = 64
+        const val MIN_TOOL_ITERATIONS = 0
+        const val MAX_TOOL_ITERATIONS = 2_048
         const val MAX_SYSTEM_PROMPT_CHARS = 20_000
     }
 }
@@ -38,7 +38,7 @@ class MobileAgentPreferencesStore(context: Context) {
     fun load(): MobileAgentPreferences = MobileAgentPreferences(
         customSystemPrompt = preferences.getString(KEY_SYSTEM_PROMPT, "").orEmpty(),
         contextCompressionEnabled = preferences.getBoolean(KEY_COMPRESSION, true),
-        maxToolIterations = preferences.getInt(KEY_TOOL_ITERATIONS, 24),
+        maxToolIterations = readToolIterationLimit(),
         dangerousOperationConfirmation = preferences.getBoolean(KEY_DANGEROUS_CONFIRMATION, true),
         systemWritePolicy = runCatching {
             SystemWritePolicy.valueOf(preferences.getString(KEY_SYSTEM_WRITE_POLICY, SystemWritePolicy.ASK.name).orEmpty())
@@ -67,13 +67,29 @@ class MobileAgentPreferencesStore(context: Context) {
         save(load().copy(alwaysAllowedDangerousCategories = emptySet()))
     }
 
+    private fun readToolIterationLimit(): Int {
+        val configured = preferences.getInt(KEY_TOOL_ITERATIONS, MobileAgentPreferences().maxToolIterations)
+        if (preferences.getBoolean(KEY_ITERATION_POLICY_MIGRATED, false)) return configured
+
+        // 24 was the old default hard stop. Existing installs using that default migrate to
+        // automatic long-task mode so real Agent work is no longer cut off arbitrarily.
+        val migrated = if (configured == LEGACY_DEFAULT_TOOL_ITERATIONS) 0 else configured
+        preferences.edit()
+            .putInt(KEY_TOOL_ITERATIONS, migrated)
+            .putBoolean(KEY_ITERATION_POLICY_MIGRATED, true)
+            .apply()
+        return migrated
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "mobile_agent_preferences"
         const val KEY_SYSTEM_PROMPT = "custom_system_prompt"
         const val KEY_COMPRESSION = "context_compression_enabled"
         const val KEY_TOOL_ITERATIONS = "max_tool_iterations"
+        const val KEY_ITERATION_POLICY_MIGRATED = "tool_iteration_policy_migrated_v2"
         const val KEY_DANGEROUS_CONFIRMATION = "dangerous_operation_confirmation"
         const val KEY_SYSTEM_WRITE_POLICY = "system_write_policy"
         const val KEY_ALWAYS_ALLOWED = "always_allowed_dangerous_categories"
+        const val LEGACY_DEFAULT_TOOL_ITERATIONS = 24
     }
 }

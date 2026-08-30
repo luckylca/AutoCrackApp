@@ -39,20 +39,28 @@ class MobileAgentToolClient {
         onStage: (String) -> Unit = {},
         onProtocolMessage: suspend (MobileAgentMessage) -> Unit = {},
         maxToolRounds: Int = DEFAULT_MAX_TOOL_ROUNDS,
+        contextCompressionEnabled: Boolean = true,
     ): MobileAgentCompletion = withContext(Dispatchers.IO) {
         require(tools.isNotEmpty()) { "Agent tool list must not be empty" }
         cancelled = false
         val validated = config.validated()
         val startedAt = System.currentTimeMillis()
-        val messages = buildProtocolMessages(systemPrompt, conversation)
+        var messages = buildProtocolMessages(systemPrompt, conversation)
         val toolJson = JSONArray().also { array -> tools.forEach { array.put(it.toOpenAiJson()) } }
         val knownTools = tools.associateBy(AgentToolDefinition::name)
-        val executions = mutableListOf<AgentToolExecutionRecord>()
-        require(maxToolRounds in 1..64) { "maxToolRounds must be within 1..64" }
+        val toolRequestCounts = mutableMapOf<String, Int>()
+        var toolExecutionCount = 0
+        require(maxToolRounds in 0..ABSOLUTE_MAX_TOOL_ROUNDS) {
+            "maxToolRounds must be 0 (automatic) or within 1..$ABSOLUTE_MAX_TOOL_ROUNDS"
+        }
+        val effectiveRoundLimit = if (maxToolRounds == 0) ABSOLUTE_MAX_TOOL_ROUNDS else maxToolRounds
 
-        repeat(maxToolRounds) {
+        repeat(effectiveRoundLimit) { roundIndex ->
             ensureRunning()
-            onStage("thinking")
+            if (contextCompressionEnabled) {
+                messages = compactLoopContextIfNeeded(validated, messages, roundIndex + 1, onStage)
+            }
+            onStage("thinking:${roundIndex + 1}")
             onTextSnapshot("")
             val assistant = requestStreamingMessage(
                 config = validated,
@@ -76,7 +84,7 @@ class MobileAgentToolClient {
                     model = validated.model,
                     endpointHost = URI(validated.baseUrl).host.orEmpty(),
                     content = stored.content,
-                    toolExecutions = executions.toList(),
+                    toolExecutionCount = toolExecutionCount,
                     startedAtEpochMillis = startedAt,
                     completedAtEpochMillis = System.currentTimeMillis(),
                 )
@@ -97,6 +105,7 @@ class MobileAgentToolClient {
                 ),
             )
 
+            val roundResultCache = mutableMapOf<String, String>()
             for (index in 0 until calls.length()) {
                 ensureRunning()
                 val call = calls.getJSONObject(index)
@@ -110,8 +119,17 @@ class MobileAgentToolClient {
                 } catch (exception: Exception) {
                     JSONObject().put("_parse_error", exception.message ?: "invalid JSON")
                 }
+                val fingerprint = "$name\n${arguments.toString()}"
+                val requestCount = toolRequestCounts.getOrDefault(fingerprint, 0) + 1
+                toolRequestCounts[fingerprint] = requestCount
+                if (requestCount > MAX_IDENTICAL_TOOL_REQUESTS) {
+                    throw IOException(
+                        "模型重复请求同一工具和参数超过 $MAX_IDENTICAL_TOOL_REQUESTS 次，已停止以避免循环：$name",
+                    )
+                }
                 onStage("tool:$name")
-                val result = runCatching { dispatcher(name, arguments) }
+                val cachedResult = roundResultCache[fingerprint]
+                val result = cachedResult ?: runCatching { dispatcher(name, arguments) }
                     .getOrElse { error ->
                         JSONObject()
                             .put("ok", false)
@@ -119,13 +137,9 @@ class MobileAgentToolClient {
                             .toString()
                     }
                     .take(MAX_TOOL_RESULT_CHARS)
+                    .also { roundResultCache[fingerprint] = it }
                 ensureRunning()
-                executions += AgentToolExecutionRecord(
-                    callId = callId,
-                    toolName = name,
-                    argumentsJson = arguments.toString().take(MAX_ARGUMENT_CHARS),
-                    resultJson = result,
-                )
+                if (cachedResult == null) toolExecutionCount++
                 val toolMessage = MobileAgentMessage(
                     id = UUID.randomUUID().toString(),
                     role = MobileAgentRole.TOOL,
@@ -139,7 +153,119 @@ class MobileAgentToolClient {
             }
         }
 
-        throw IOException("Agent tool loop 超过 $maxToolRounds 轮，已停止")
+        if (maxToolRounds == 0) {
+            throw IOException("Agent tool loop 达到异常保护上限 $ABSOLUTE_MAX_TOOL_ROUNDS 轮，已停止；这通常表示模型陷入循环")
+        }
+        throw IOException("Agent tool loop 达到用户设置的 $maxToolRounds 轮上限，已停止")
+    }
+
+    private suspend fun compactLoopContextIfNeeded(
+        config: LlmProviderConfig,
+        messages: JSONArray,
+        round: Int,
+        onStage: (String) -> Unit,
+    ): JSONArray {
+        if (estimateProtocolChars(messages) < LOOP_COMPACTION_TRIGGER_CHARS) return messages
+        val keepStart = recentContextStart(messages)
+        if (keepStart <= 2) return messages
+
+        onStage("compacting:$round")
+        val compactableMessages = buildList {
+            for (index in 1 until keepStart) {
+                val message = messages.optJSONObject(index) ?: continue
+                val role = when (message.optString("role")) {
+                    "user" -> MobileAgentRole.USER
+                    "tool" -> MobileAgentRole.TOOL
+                    else -> MobileAgentRole.ASSISTANT
+                }
+                add(
+                    MobileAgentMessage(
+                        id = "loop-$index",
+                        role = role,
+                        content = message.optString("content"),
+                        createdAtEpochMillis = 0,
+                        toolName = message.optString("name").takeIf(String::isNotBlank),
+                        toolCallsJson = message.optJSONArray("tool_calls")?.toString(),
+                    ),
+                )
+            }
+        }
+        val compactedHistory = MobileAgentCompactionPolicy.buildSourceContext(
+            compactableMessages,
+            LOOP_COMPACTION_INPUT_CHARS,
+        )
+        if (compactedHistory.isBlank()) return messages
+
+        val summary = try {
+            val response = requestSimple(
+                config = config,
+                messages = JSONArray()
+                    .put(
+                        JSONObject()
+                            .put("role", "system")
+                            .put(
+                                "content",
+                                "你负责压缩正在执行中的 Agent 工作历史。必须保留用户目标、后续纠正、已确认事实、关键路径和符号、成功/失败操作、当前进度和下一步；删除冗长工具输出和重复尝试，不要编造。\n\n${MobileAgentCompactionPolicy.outputContract()}",
+                            ),
+                    )
+                    .put(
+                        JSONObject()
+                            .put("role", "user")
+                            .put("content", compactedHistory),
+                    ),
+                maxTokens = LOOP_COMPACTION_RESPONSE_TOKENS,
+            )
+            parseContent(parseMessage(response)).take(MAX_SUMMARY_CHARS)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return messages
+        }
+        if (MobileAgentCompactionPolicy.generatedSummaryError(summary, compactedHistory) != null) return messages
+
+        return buildCompactedLoopMessages(messages, summary, keepStart)
+    }
+
+    internal fun buildCompactedLoopMessagesForTesting(
+        messages: JSONArray,
+        summary: String,
+    ): JSONArray = buildCompactedLoopMessages(messages, summary, recentContextStart(messages))
+
+    private fun buildCompactedLoopMessages(
+        messages: JSONArray,
+        summary: String,
+        keepStart: Int,
+    ): JSONArray = JSONArray().apply {
+        put(messages.getJSONObject(0))
+        // Some OpenAI-compatible providers reject a tool history whose first non-system
+        // message is an assistant tool call. Keep the compressed working memory as a user
+        // anchor so the retained assistant/tool groups remain a valid continuation.
+        put(
+            JSONObject()
+                .put("role", "user")
+                .put(
+                    "content",
+                    "Working memory summary of earlier steps in this Agent run:\n$summary\n\nContinue the task from this state.",
+                ),
+        )
+        for (index in keepStart until messages.length()) {
+            put(messages.getJSONObject(index))
+        }
+    }
+
+    private fun estimateProtocolChars(messages: JSONArray): Int {
+        var total = 0L
+        for (index in 0 until messages.length()) {
+            total += messages.optJSONObject(index)?.toString()?.length ?: 0
+            if (total >= Int.MAX_VALUE) return Int.MAX_VALUE
+        }
+        return total.toInt()
+    }
+
+    private fun recentContextStart(messages: JSONArray): Int {
+        var start = maxOf(1, messages.length() - LOOP_RECENT_MESSAGE_COUNT)
+        while (start > 1 && messages.optJSONObject(start)?.optString("role") == "tool") start--
+        return start
     }
 
     suspend fun summarizeForCompaction(
@@ -150,24 +276,13 @@ class MobileAgentToolClient {
         require(messages.isNotEmpty()) { "没有可压缩的会话历史" }
         cancelled = false
         val validated = config.validated()
-        val history = messages.joinToString("\n\n") { message ->
-            val role = when (message.role) {
-                MobileAgentRole.USER -> "USER"
-                MobileAgentRole.ASSISTANT -> if (message.toolCallsJson != null) "ASSISTANT_TOOL_CALL" else "ASSISTANT"
-                MobileAgentRole.TOOL -> "TOOL:${message.toolName.orEmpty()}"
-            }
-            buildString {
-                append(role).append(": ").append(message.content.take(COMPACTION_MESSAGE_CHARS))
-                if (message.attachments.isNotEmpty()) {
-                    append("\nATTACHMENTS: ")
-                    append(message.attachments.joinToString { "${it.displayName}=${it.agentPath}" })
-                }
-            }
-        }.take(MAX_COMPACTION_INPUT_CHARS)
+        val history = MobileAgentCompactionPolicy.buildSourceContext(messages, MAX_COMPACTION_INPUT_CHARS)
         val prompt = buildString {
             appendLine("将下面的 Agent 会话压缩成可供后续模型继续工作的长期上下文摘要。")
             appendLine("必须保留：用户目标、关键约束、已确认事实、重要文件路径、执行过的关键操作、当前进度、未完成事项。")
             appendLine("删除：寒暄、重复信息、完整工具输出和无用中间步骤。不要编造。")
+            appendLine()
+            appendLine(MobileAgentCompactionPolicy.outputContract())
             existingSummary?.takeIf(String::isNotBlank)?.let {
                 appendLine()
                 appendLine("已有摘要：")
@@ -184,9 +299,17 @@ class MobileAgentToolClient {
                 .put(JSONObject().put("role", "user").put("content", prompt)),
             maxTokens = COMPACTION_RESPONSE_TOKENS,
         )
-        parseContent(parseMessage(response)).take(MAX_SUMMARY_CHARS).also {
-            require(it.isNotBlank()) { "上下文压缩返回空摘要" }
+        val responseJson = JSONObject(response)
+        val finishReason = responseJson.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optString("finish_reason")
+            .orEmpty()
+        val summary = parseContent(parseMessage(response)).take(MAX_SUMMARY_CHARS)
+        val validationError = MobileAgentCompactionPolicy.generatedSummaryError(summary, history)
+        require(validationError == null) {
+            "上下文压缩结果无效：$validationError；finish_reason=${finishReason.ifBlank { "unknown" }}；响应片段=${summary.take(240)}"
         }
+        summary
     }
 
     internal fun buildProtocolMessagesForTesting(
@@ -200,14 +323,16 @@ class MobileAgentToolClient {
     ): JSONArray {
         val messages = JSONArray()
             .put(JSONObject().put("role", "system").put("content", systemPrompt.take(MAX_MESSAGE_CHARS)))
-        conversation.summary?.takeIf(String::isNotBlank)?.let { summary ->
+        conversation.summary?.takeIf(MobileAgentCompactionPolicy::isUsablePersistedSummary)?.let { summary ->
             messages.put(
                 JSONObject()
                     .put("role", "system")
                     .put("content", "Earlier conversation summary:\n${summary.take(MAX_SUMMARY_CHARS)}"),
             )
         }
-        val startIndex = conversation.summaryThroughMessageId?.let { boundary ->
+        val startIndex = conversation.summaryThroughMessageId
+            ?.takeIf { MobileAgentCompactionPolicy.isUsablePersistedSummary(conversation.summary) }
+            ?.let { boundary ->
             conversation.messages.indexOfFirst { it.id == boundary }.takeIf { it >= 0 }?.plus(1)
         } ?: 0
         conversation.messages.drop(startIndex).forEach { message -> messages.put(message.toOpenAiJson()) }
@@ -227,7 +352,7 @@ class MobileAgentToolClient {
         MobileAgentRole.TOOL -> JSONObject()
             .put("role", "tool")
             .put("tool_call_id", requireNotNull(toolCallId) { "tool message 缺少 toolCallId" })
-            .put("content", content.take(MAX_TOOL_RESULT_CHARS))
+            .put("content", content.take(MAX_MODEL_TOOL_RESULT_CHARS))
             .apply { toolName?.let { put("name", it) } }
     }
 
@@ -343,6 +468,20 @@ class MobileAgentToolClient {
         requireNotNull(input) { "模型流式响应为空" }
         val content = StringBuilder()
         val toolCalls = sortedMapOf<Int, StreamingToolCall>()
+        var lastSnapshotAtNanos = 0L
+        var lastSnapshotLength = 0
+        fun publishTextSnapshot(force: Boolean = false) {
+            if (content.length == lastSnapshotLength) return
+            val now = System.nanoTime()
+            if (
+                !force &&
+                content.length - lastSnapshotLength < STREAMING_SNAPSHOT_CHAR_STEP &&
+                now - lastSnapshotAtNanos < STREAMING_SNAPSHOT_INTERVAL_NANOS
+            ) return
+            onTextSnapshot(content.toString())
+            lastSnapshotLength = content.length
+            lastSnapshotAtNanos = now
+        }
         BufferedReader(InputStreamReader(input, Charsets.UTF_8)).use { reader ->
             while (true) {
                 ensureRunningBlocking()
@@ -355,7 +494,7 @@ class MobileAgentToolClient {
                 parseDeltaContent(delta.opt("content")).takeIf(String::isNotEmpty)?.let { piece ->
                     content.append(piece)
                     if (content.length > MAX_ANSWER_CHARS) content.setLength(MAX_ANSWER_CHARS)
-                    onTextSnapshot(content.toString())
+                    publishTextSnapshot()
                 }
                 val deltaCalls = delta.optJSONArray("tool_calls") ?: continue
                 for (index in 0 until deltaCalls.length()) {
@@ -371,6 +510,7 @@ class MobileAgentToolClient {
                 }
             }
         }
+        publishTextSnapshot(force = true)
         val result = JSONObject()
             .put("role", "assistant")
             .put("content", content.toString().ifBlank { JSONObject.NULL })
@@ -480,11 +620,19 @@ class MobileAgentToolClient {
         const val MAX_ANSWER_CHARS = 100_000
         const val MAX_MESSAGE_CHARS = 80_000
         const val MAX_TOOL_RESULT_CHARS = 40_000
+        const val MAX_MODEL_TOOL_RESULT_CHARS = 16_000
         const val MAX_ARGUMENT_CHARS = 12_000
         const val MAX_CALL_ID_CHARS = 256
-        const val DEFAULT_MAX_TOOL_ROUNDS = 24
+        const val DEFAULT_MAX_TOOL_ROUNDS = 0
+        const val ABSOLUTE_MAX_TOOL_ROUNDS = 2_048
+        const val LOOP_COMPACTION_TRIGGER_CHARS = 320_000
+        const val LOOP_RECENT_MESSAGE_COUNT = 16
+        const val LOOP_COMPACTION_INPUT_CHARS = 80_000
+        const val LOOP_COMPACTION_RESPONSE_TOKENS = 2_000
+        const val STREAMING_SNAPSHOT_CHAR_STEP = 256
+        const val STREAMING_SNAPSHOT_INTERVAL_NANOS = 100_000_000L
         const val MAX_TOOL_CALLS_PER_ROUND = 8
-        const val COMPACTION_MESSAGE_CHARS = 6_000
+        const val MAX_IDENTICAL_TOOL_REQUESTS = 3
         const val MAX_COMPACTION_INPUT_CHARS = 60_000
         const val MAX_EXISTING_SUMMARY_CHARS = 20_000
         const val MAX_SUMMARY_CHARS = 24_000
@@ -495,7 +643,7 @@ data class MobileAgentCompletion(
     val model: String,
     val endpointHost: String,
     val content: String,
-    val toolExecutions: List<AgentToolExecutionRecord>,
+    val toolExecutionCount: Int,
     val startedAtEpochMillis: Long,
     val completedAtEpochMillis: Long,
 ) {

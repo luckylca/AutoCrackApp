@@ -18,12 +18,14 @@ import com.luckylca.autocrack.MainActivity
 import java.util.UUID
 
 internal data class AgentExecutionLease(
+    val conversationId: String,
     val label: String,
     val stage: String,
 )
 
 internal data class AgentExecutionLeaseSnapshot(
     val count: Int,
+    val latestConversationId: String?,
     val latestLabel: String?,
     val latestStage: String?,
 )
@@ -32,9 +34,11 @@ internal class AgentExecutionLeaseState {
     private val activeLeases = linkedMapOf<String, AgentExecutionLease>()
 
     @Synchronized
-    fun acquire(leaseId: String, label: String, stage: String): AgentExecutionLeaseSnapshot {
+    fun acquire(leaseId: String, conversationId: String, label: String, stage: String): AgentExecutionLeaseSnapshot {
         require(leaseId.isNotBlank()) { "Agent execution lease ID must not be blank" }
+        require(conversationId.isNotBlank()) { "Conversation ID must not be blank" }
         activeLeases[leaseId] = AgentExecutionLease(
+            conversationId = conversationId,
             label = label.ifBlank { "Mobile Agent" },
             stage = stage.ifBlank { "Agent 正在工作" },
         )
@@ -61,6 +65,7 @@ internal class AgentExecutionLeaseState {
         val latest = activeLeases.values.lastOrNull()
         return AgentExecutionLeaseSnapshot(
             count = activeLeases.size,
+            latestConversationId = latest?.conversationId,
             latestLabel = latest?.label,
             latestStage = latest?.stage,
         )
@@ -92,28 +97,36 @@ class AgentExecutionForegroundService : Service() {
         if (intent?.action != ACTION_ACQUIRE || leaseId == null) {
             // Every startForegroundService() request must transition promptly even if a stale start
             // intent arrives after its in-process lease was already released.
-            startForegroundWithDeclaredType(buildNotification(null, null, 1))
+            startForegroundWithDeclaredType(buildNotification(null, null, null, 1))
             stopForegroundAndSelf(startId)
             return START_NOT_STICKY
         }
 
         val snapshot = LEASE_STATE.snapshot()
         if (snapshot.count == 0) {
-            startForegroundWithDeclaredType(buildNotification(null, null, 1))
+            startForegroundWithDeclaredType(buildNotification(null, null, null, 1))
             stopForegroundAndSelf(startId)
             return START_NOT_STICKY
         }
         startForegroundWithDeclaredType(
-            buildNotification(snapshot.latestLabel, snapshot.latestStage, snapshot.count),
+            buildNotification(snapshot.latestConversationId, snapshot.latestLabel, snapshot.latestStage, snapshot.count),
         )
         return START_NOT_STICKY
     }
 
-    private fun buildNotification(label: String?, stage: String?, leaseCount: Int): Notification {
+    private fun buildNotification(
+        conversationId: String?,
+        label: String?,
+        stage: String?,
+        leaseCount: Int,
+    ): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
+            .setAction(MainActivity.ACTION_OPEN_CONVERSATION)
+            .putExtra(MainActivity.EXTRA_CONVERSATION_ID, conversationId)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            NOTIFICATION_ID,
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -149,7 +162,7 @@ class AgentExecutionForegroundService : Service() {
     private fun refreshNotification(snapshot: AgentExecutionLeaseSnapshot) {
         if (snapshot.count <= 0) return
         startForegroundWithDeclaredType(
-            buildNotification(snapshot.latestLabel, snapshot.latestStage, snapshot.count),
+            buildNotification(snapshot.latestConversationId, snapshot.latestLabel, snapshot.latestStage, snapshot.count),
         )
     }
 
@@ -170,11 +183,12 @@ class AgentExecutionForegroundService : Service() {
 
         fun acquire(
             context: Context,
+            conversationId: String,
             label: String,
             stage: String = "Agent 正在启动",
         ): String {
             val leaseId = UUID.randomUUID().toString()
-            LEASE_STATE.acquire(leaseId, label, stage)
+            LEASE_STATE.acquire(leaseId, conversationId, label, stage)
             val intent = Intent(context, AgentExecutionForegroundService::class.java)
                 .setAction(ACTION_ACQUIRE)
                 .putExtra(EXTRA_LEASE_ID, leaseId)

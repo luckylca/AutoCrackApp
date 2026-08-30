@@ -56,8 +56,38 @@ class MobileAgentConversationStore(context: Context) {
         synchronized(lock) { readAll().sortedByDescending(MobileAgentConversation::updatedAtEpochMillis) }
     }
 
+    suspend fun listMetadata(): List<MobileAgentConversation> = withContext(Dispatchers.IO) {
+        synchronized(lock) { readAll(includeMessages = false).sortedByDescending(MobileAgentConversation::updatedAtEpochMillis) }
+    }
+
     suspend fun get(conversationId: String): MobileAgentConversation? = withContext(Dispatchers.IO) {
-        synchronized(lock) { readAll().firstOrNull { it.id == conversationId } }
+        synchronized(lock) { readOne(conversationId) }
+    }
+
+    suspend fun searchIds(query: String): Set<String> = withContext(Dispatchers.IO) {
+        val normalized = query.trim()
+        if (normalized.isBlank()) return@withContext emptySet()
+        synchronized(lock) {
+            if (!file.isFile) return@synchronized emptySet()
+            runCatching {
+                val array = JSONObject(file.readText()).optJSONArray("conversations") ?: JSONArray()
+                buildSet {
+                    for (index in 0 until array.length()) {
+                        val conversation = array.optJSONObject(index) ?: continue
+                        val titleMatches = conversation.optString("title").contains(normalized, ignoreCase = true)
+                        val messages = conversation.optJSONArray("messages") ?: JSONArray()
+                        val messageMatches = (0 until messages.length()).any { messageIndex ->
+                            messages.optJSONObject(messageIndex)
+                                ?.optString("content")
+                                ?.contains(normalized, ignoreCase = true) == true
+                        }
+                        if (titleMatches || messageMatches) {
+                            conversation.optString("id").takeIf(String::isNotBlank)?.let(::add)
+                        }
+                    }
+                }
+            }.getOrDefault(emptySet())
+        }
     }
 
     suspend fun create(): MobileAgentConversation = withContext(Dispatchers.IO) {
@@ -70,6 +100,7 @@ class MobileAgentConversationStore(context: Context) {
                 updatedAtEpochMillis = now,
                 messages = emptyList(),
             )
+            MobileAgentWorkspacePolicy.markIsolated(layout.createAgentWorkspace(conversation.id))
             writeAll(readAll() + conversation)
             conversation
         }
@@ -193,21 +224,33 @@ class MobileAgentConversationStore(context: Context) {
         }
     }
 
-    private fun readAll(): List<MobileAgentConversation> {
+    private fun readAll(includeMessages: Boolean = true): List<MobileAgentConversation> {
         if (!file.isFile) return emptyList()
         return runCatching {
             val array = JSONObject(file.readText()).optJSONArray("conversations") ?: JSONArray()
             buildList {
                 for (index in 0 until array.length()) {
-                    parse(array.optJSONObject(index) ?: continue)?.let(::add)
+                    parse(array.optJSONObject(index) ?: continue, includeMessages)?.let(::add)
                 }
             }
         }.getOrDefault(emptyList())
     }
 
-    private fun parse(json: JSONObject): MobileAgentConversation? = runCatching {
+    private fun readOne(conversationId: String): MobileAgentConversation? {
+        if (!file.isFile) return null
+        return runCatching {
+            val array = JSONObject(file.readText()).optJSONArray("conversations") ?: JSONArray()
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                if (item.optString("id") == conversationId) return@runCatching parse(item, includeMessages = true)
+            }
+            null
+        }.getOrNull()
+    }
+
+    private fun parse(json: JSONObject, includeMessages: Boolean = true): MobileAgentConversation? = runCatching {
         val messageArray = json.optJSONArray("messages") ?: JSONArray()
-        val messages = buildList {
+        val messages = if (!includeMessages) emptyList() else buildList {
             for (index in 0 until messageArray.length()) {
                 val item = messageArray.optJSONObject(index) ?: continue
                 val role = runCatching { MobileAgentRole.valueOf(item.getString("role")) }.getOrNull() ?: continue

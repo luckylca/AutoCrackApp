@@ -21,6 +21,12 @@ class ChrootCommandBuilderTest {
         assertTrue(command.contains("VALUE='hello rootfs'"))
         assertTrue(command.contains("/bin/bash --noprofile --norc"))
         assertTrue(command.contains("/workspace"))
+        assertTrue(command.contains("AUTOC_ROOTFS_HOST_PATH="))
+        assertTrue(command.contains("/opt/autocrack/toolpacks/active"))
+        assertTrue(command.contains("[ -L"))
+        assertTrue(command.contains("PYTHONPATH="))
+        assertTrue(command.contains("NODE_PATH="))
+        assertTrue(command.contains("CLASSPATH="))
     }
 
     @Test

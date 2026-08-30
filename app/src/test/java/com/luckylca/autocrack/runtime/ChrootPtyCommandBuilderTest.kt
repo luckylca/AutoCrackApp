@@ -23,6 +23,12 @@ class ChrootPtyCommandBuilderTest {
             ),
         )
         assertFalse(command.contains("LD_LIBRARY_PATH="))
+        assertTrue(command.contains("AUTOC_ROOTFS_HOST_PATH="))
+        assertTrue(command.contains("/opt/autocrack/toolpacks/active"))
+        assertTrue(command.contains("[ -L"))
+        assertTrue(command.contains("PYTHONPATH="))
+        assertTrue(command.contains("NODE_PATH="))
+        assertTrue(command.contains("CLASSPATH="))
     }
 
     @Test

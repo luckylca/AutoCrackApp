@@ -26,4 +26,34 @@ class ChrootOrphanCleanupCommandBuilderTest {
             ChrootOrphanCleanupCommandBuilder.build("bad;kill -9 1")
         }
     }
+
+    @Test
+    fun staleAgentCleanupTargetsOnlyRawBashAgentProcesses() {
+        val script = ChrootStaleAgentCleanupCommandBuilder.build()
+
+        assertTrue(script.contains("AUTOC_AGENT_MODE=raw_bash"))
+        assertTrue(script.contains("/proc/[0-9]*/environ"))
+        assertTrue(script.contains("kill -TERM"))
+        assertTrue(script.contains("kill -KILL"))
+        assertFalse(script.contains("pkill"))
+    }
+
+    @Test
+    fun agentSessionCleanupMatchesOnlyExactSessionMarker() {
+        val sessionId = "123e4567-e89b-12d3-a456-426614174000"
+        val script = ChrootAgentSessionCleanupCommandBuilder.build(sessionId)
+
+        assertTrue(script.contains("AUTOC_AGENT_SESSION_ID=$sessionId"))
+        assertTrue(script.contains("/proc/[0-9]*/environ"))
+        assertTrue(script.contains("kill -TERM"))
+        assertTrue(script.contains("kill -KILL"))
+        assertFalse(script.contains("pkill"))
+    }
+
+    @Test
+    fun agentSessionCleanupRejectsNonUuidSessionText() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ChrootAgentSessionCleanupCommandBuilder.build("session;kill -9 1")
+        }
+    }
 }

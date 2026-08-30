@@ -5,9 +5,13 @@ import android.os.Bundle
 import com.luckylca.autocrack.agent.AgentFridaToolExecutor
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
+import com.luckylca.autocrack.root.RootToolCommandFactory
+import com.luckylca.autocrack.runtime.ChrootRuntimeEngine
 import com.luckylca.autocrack.runtime.HostFridaAuthorization
 import com.luckylca.autocrack.runtime.HostFridaSessionManager
+import com.luckylca.autocrack.runtime.RootShellRuntimeEngine
 import com.luckylca.autocrack.runtime.RuntimeLayout
+import com.luckylca.autocrack.runtime.ShellCommandRequest
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -38,6 +42,10 @@ class DebugAgentFridaValidationActivity : Activity() {
         val layout = RuntimeLayout(applicationContext).initialize()
         val runner = ProcessRootCommandRunner()
         val root = RootDetector(runner)
+        val rootStatus = root.inspect()
+        check(rootStatus.isRootGranted) { rootStatus.diagnostic ?: "Root not granted" }
+        val host = RootShellRuntimeEngine(layout, requireNotNull(rootStatus.suPath))
+        val chroot = ChrootRuntimeEngine(layout, host)
         val manager = HostFridaSessionManager(applicationContext, layout, root, runner)
         val executor = AgentFridaToolExecutor.authorized(
             packageName = packageName,
@@ -108,6 +116,36 @@ class DebugAgentFridaValidationActivity : Activity() {
             val methodPayload = javaMethods.getJSONObject("result").getJSONObject("result")
             check(methodPayload.optBoolean("available")) { "Java runtime unexpectedly unavailable" }
 
+            val port = start.getString("endpoint").substringAfterLast(':').toInt()
+            suspend fun runBoundedClient(command: String): JSONObject {
+                val result = chroot.execute(
+                    ShellCommandRequest(
+                        command = command,
+                        workingDirectory = "/workspace",
+                        timeoutMillis = 20_000L,
+                    ),
+                )
+                check(result.succeeded) { result.failure ?: result.stderr.ifBlank { "Bounded Frida client failed" } }
+                return JSONObject(result.stdout)
+            }
+            val stringClass = RootToolCommandFactory.shellQuote("java.lang.String")
+            val javaFieldsClient = runBoundedClient(
+                "frida-autocrack-client --pid $pid --port $port java-fields --class-name $stringClass --max-count 16",
+            )
+            val fieldPayload = javaFieldsClient.getJSONObject("result")
+            check(javaFieldsClient.optBoolean("ok") && fieldPayload.optBoolean("available")) {
+                "java-fields RPC failed: $javaFieldsClient"
+            }
+            check(fieldPayload.getJSONArray("fields").length() > 0) { "java.lang.String returned no declared fields" }
+
+            val javaInstancesClient = runBoundedClient(
+                "frida-autocrack-client --pid $pid --port $port java-instances --class-name $stringClass --max-count 2 --max-fields 4",
+            )
+            val instancePayload = javaInstancesClient.getJSONObject("result")
+            check(javaInstancesClient.optBoolean("ok") && instancePayload.optBoolean("available")) {
+                "java-instances RPC failed: $javaInstancesClient"
+            }
+
             val trace = call(
                 "frida_native_trace",
                 JSONObject()
@@ -133,6 +171,8 @@ class DebugAgentFridaValidationActivity : Activity() {
                 .put("javaClassCount", classes.length())
                 .put("javaClass", className)
                 .put("javaMethodCount", methodPayload.getJSONArray("methods").length())
+                .put("javaStringFieldCount", fieldPayload.getJSONArray("fields").length())
+                .put("javaStringInstanceCount", instancePayload.getJSONArray("instances").length())
                 .put("trace", traceClient)
                 .put("targetTracerPid", stop.optInt("targetTracerPid", -1))
                 .put("events", events)

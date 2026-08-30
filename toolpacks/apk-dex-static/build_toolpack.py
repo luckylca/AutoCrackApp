@@ -10,8 +10,10 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+FIXED_TIME = (1980, 1, 1, 0, 0, 0)
 TOOLPACK_ID = "apk-dex-static"
-TOOLPACK_VERSION = "jadx-1.5.6_apktool-3.0.3"
+TOOLPACK_VERSION = "jadx-1.5.6_apktool-3.0.3_autocrack-1.0.1"
+OUTPUT_NAME = f"AutoCrackApp-{TOOLPACK_ID}-{TOOLPACK_VERSION}-toolpack.zip"
 
 
 def sha256(path: Path) -> str:
@@ -29,73 +31,159 @@ def copy_executable(src: Path, dst: Path) -> None:
 
 
 def extract_jadx(jadx_zip: Path, target: Path) -> None:
-    with zipfile.ZipFile(jadx_zip) as zf:
-        zf.extractall(target)
-    children = [p for p in target.iterdir() if p.is_dir()]
+    with zipfile.ZipFile(jadx_zip) as archive:
+        archive.extractall(target)
+    children = [path for path in target.iterdir() if path.is_dir()]
     if len(children) == 1 and (children[0] / "bin" / "jadx").exists():
         inner = children[0]
-        tmp = target.with_name(target.name + ".inner")
-        inner.rename(tmp)
+        temporary = target.with_name(target.name + ".inner")
+        inner.rename(temporary)
         shutil.rmtree(target)
-        tmp.rename(target)
+        temporary.rename(target)
     if not (target / "bin" / "jadx").exists():
         raise SystemExit("JADX zip did not contain bin/jadx")
 
 
-def write_package(payload_dir: Path, output_dir: Path, jadx_zip: Path, apktool_jar: Path) -> Path:
-    payload_zip = output_dir / f"{TOOLPACK_ID}-{TOOLPACK_VERSION}-payload.zip"
-    with zipfile.ZipFile(payload_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(payload_dir.rglob("*")):
-            if path.is_file():
-                zf.write(path, path.relative_to(payload_dir).as_posix())
-    manifest = {
-        "schemaVersion": 1,
-        "id": TOOLPACK_ID,
-        "title": "JADX and Apktool static APK/DEX analysis",
-        "version": TOOLPACK_VERSION,
-        "payloadSha256": sha256(payload_zip),
-        "sources": [
-            {"name": "jadx", "version": "1.5.6", "sha256": sha256(jadx_zip)},
-            {"name": "apktool", "version": "3.0.3", "sha256": sha256(apktool_jar)},
-        ],
-        "commands": [
-            {"name": "jadx", "path": "bin/jadx"},
-            {"name": "apktool", "path": "bin/apktool"},
-        ],
-        "selfTests": [
-            {"id": "jadx-version", "title": "JADX prints a version", "command": "jadx --version", "expectedOutputContains": "1.5.6"},
-            {"id": "apktool-version", "title": "Apktool prints a version", "command": "apktool --version", "expectedOutputContains": "3.0.3"},
-        ],
-    }
-    manifest_path = output_dir / f"{TOOLPACK_ID}-{TOOLPACK_VERSION}-manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return payload_zip
+def deterministic_zip(root: Path, output: Path) -> None:
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            relative = path.relative_to(root).as_posix()
+            info = zipfile.ZipInfo(relative, FIXED_TIME)
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_STORED
+            mode = 0o755 if relative in {"bin/jadx", "bin/apktool"} else 0o644
+            info.external_attr = (stat.S_IFREG | mode) << 16
+            archive.writestr(info, path.read_bytes())
+
+
+def write_outer(output: Path, manifest: Path, payload_zip: Path) -> None:
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
+        for path in (manifest, payload_zip):
+            info = zipfile.ZipInfo(path.name, FIXED_TIME)
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_STORED
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(info, path.read_bytes())
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build AutoCrack apk-dex-static toolpack")
     parser.add_argument("--jadx-zip", required=True, type=Path)
     parser.add_argument("--apktool-jar", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     if not args.jadx_zip.is_file():
         raise SystemExit("--jadx-zip missing")
     if not args.apktool_jar.is_file():
         raise SystemExit("--apktool-jar missing")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
+
     root = Path(__file__).resolve().parent
-    with tempfile.TemporaryDirectory() as td:
-        payload = Path(td) / "payload"
+    output_dir = args.output_dir or (root / "dist")
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True)
+
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        payload = Path(temporary_directory) / "payload"
         payload.mkdir()
-        extract_jadx(args.jadx_zip, payload / "jadx")
-        (payload / "lib").mkdir()
-        shutil.copy2(args.apktool_jar, payload / "lib" / "apktool.jar")
+        extract_jadx(args.jadx_zip, payload / "lib" / "jadx")
+        (payload / "lib" / "apktool").mkdir(parents=True)
+        shutil.copy2(args.apktool_jar, payload / "lib" / "apktool" / "apktool.jar")
         copy_executable(root / "bin" / "jadx", payload / "bin" / "jadx")
         copy_executable(root / "bin" / "apktool", payload / "bin" / "apktool")
-        payload_zip = write_package(payload, args.output_dir, args.jadx_zip, args.apktool_jar)
-    print(f"APK_DEX_TOOLPACK_VERSION={TOOLPACK_VERSION}")
-    print(f"APK_DEX_TOOLPACK_PAYLOAD={payload_zip}")
-    print(f"APK_DEX_TOOLPACK_SHA256={sha256(payload_zip)}")
+        payload_zip = output_dir / "payload.zip"
+        deterministic_zip(payload, payload_zip)
+
+    payload_hash = sha256(payload_zip)
+    payload_size = payload_zip.stat().st_size
+    manifest_data = {
+        "schemaVersion": 1,
+        "id": TOOLPACK_ID,
+        "title": "JADX and Apktool static APK/DEX analysis",
+        "version": TOOLPACK_VERSION,
+        "description": (
+            "Static APK/DEX analysis for the Debian rootfs. JADX uses a mobile-safe default budget "
+            "of 768 MB heap and 2 worker CPUs; prefer targeted --single-class analysis for large APKs."
+        ),
+        "architecture": "all",
+        "payloadEntry": "payload.zip",
+        "payloadSha256": payload_hash,
+        "payloadSizeBytes": payload_size,
+        "requiredPaths": [
+            "bin/jadx",
+            "bin/apktool",
+            "lib/jadx/bin/jadx",
+            "lib/apktool/apktool.jar",
+        ],
+        "commands": [
+            {
+                "name": "jadx",
+                "relativePath": "bin/jadx",
+                "description": (
+                    "JADX CLI with mobile-safe defaults (768 MB heap, 2 threads). For large APKs first narrow "
+                    "the target and prefer --single-class; use jadx --autocrack-policy to inspect the active budget."
+                ),
+            },
+            {
+                "name": "apktool",
+                "relativePath": "bin/apktool",
+                "description": "Decode Android resources and smali without full Java decompilation.",
+            },
+        ],
+        "selfTests": [
+            {
+                "id": "java-version",
+                "title": "Java runtime",
+                "command": "java -version",
+                "expectedExitCodes": [0],
+                "outputContains": ["version"],
+            },
+            {
+                "id": "jadx-version",
+                "title": "JADX CLI",
+                "command": "jadx --version",
+                "expectedExitCodes": [0],
+                "outputContains": ["1.5.6"],
+            },
+            {
+                "id": "jadx-mobile-policy",
+                "title": "JADX mobile resource policy",
+                "command": "jadx --autocrack-policy",
+                "expectedExitCodes": [0],
+                "outputContains": ["AUTOC_JADX_HEAP_MB=768", "AUTOC_JADX_THREADS=2"],
+            },
+            {
+                "id": "apktool-version",
+                "title": "Apktool",
+                "command": "apktool --version",
+                "expectedExitCodes": [0],
+                "outputContains": ["3.0.3"],
+            },
+        ],
+        "sources": [
+            {
+                "name": "jadx",
+                "version": "1.5.6",
+                "url": "https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip",
+                "sha256": sha256(args.jadx_zip),
+            },
+            {
+                "name": "apktool",
+                "version": "3.0.3",
+                "url": "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
+                "sha256": sha256(args.apktool_jar),
+            },
+        ],
+    }
+    manifest = output_dir / "manifest.json"
+    manifest.write_text(json.dumps(manifest_data, indent=2) + "\n", encoding="utf-8")
+    output = output_dir / OUTPUT_NAME
+    write_outer(output, manifest, payload_zip)
+
+    print(f"TOOLPACK={output}")
+    print(f"PAYLOAD_SHA256={payload_hash}")
+    print(f"PAYLOAD_SIZE={payload_size}")
+    print(f"TOOLPACK_SHA256={sha256(output)}")
     return 0
 
 

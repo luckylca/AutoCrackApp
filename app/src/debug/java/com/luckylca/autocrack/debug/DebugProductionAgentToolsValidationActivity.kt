@@ -23,7 +23,11 @@ class DebugProductionAgentToolsValidationActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val targetPackage = intent.getStringExtra("package_name")?.trim().orEmpty().ifBlank { DEFAULT_TARGET_PACKAGE }
-        val foregroundLeaseId = AgentExecutionForegroundService.acquire(applicationContext, targetPackage)
+        val foregroundLeaseId = AgentExecutionForegroundService.acquire(
+            context = applicationContext,
+            conversationId = "debug-production-tools",
+            label = targetPackage,
+        )
         Thread {
             try {
                 val report = runCatching { runBlocking { validateProductionTools() } }.getOrElse { error ->

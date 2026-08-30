@@ -186,10 +186,20 @@ class AgentToolSessionFactory(
         require(root.isRootGranted) { root.diagnostic ?: "Mobile Agent 需要 Root" }
         val suPath = requireNotNull(root.suPath) { "Root granted without a usable su path" }
         val host = RootShellRuntimeEngine(layout = layout, suPath = suPath, onStage = { onStage("mobile_root_$it") })
-        val chroot = ChrootRuntimeEngine(layout, host) { onStage("mobile_chroot_$it") }
+        val sessionWorkspace = layout.createAgentWorkspace(sessionId)
+        val workspaceRoot = MobileAgentWorkspacePolicy.resolve(
+            sessionWorkspace = sessionWorkspace,
+            legacyWorkspace = layout.createRuntimeWorkspace(),
+        )
+        val chroot = ChrootRuntimeEngine(
+            layout = layout,
+            hostEngine = host,
+            workspaceRoot = workspaceRoot,
+            onStage = { onStage("mobile_chroot_$it") },
+        )
         val installed = ToolpackPackageInstaller(appContext, layout).listInstalled()
         val commands = installed.flatMap { it.manifest.commands }.map { it.name }.distinct().sorted()
-        val workspace = WorkspaceFileService(layout.createAgentWorkspace(sessionId))
+        val workspace = WorkspaceFileService(workspaceRoot)
         val hostWorkspace = layout.createRuntimeWorkspace()
         val hostShellBridge = installed.firstOrNull { toolpack ->
             toolpack.manifest.id == AndroidHostShellBridge.TOOLPACK_ID &&
@@ -216,10 +226,16 @@ class AgentToolSessionFactory(
         return MobileAgentRuntimeSession(
             tools = AgentToolSession(listOf(executor)),
             installedToolpacks = installed,
-            workspacePath = workspace.rootPath(),
+            workspacePath = RawBashAgentToolExecutor.DEFAULT_CHROOT_CWD,
             cancelAllCommands = {
                 hostShellBridge?.close()
                 host.cancelAll()
+            },
+            cleanupSessionProcesses = {
+                val result = chroot.cleanupAgentSessionProcesses(sessionId)
+                check(result.succeeded) {
+                    result.failure ?: result.stderr.ifBlank { "Agent session 子进程清理失败：exit=${result.exitCode}" }
+                }
             },
         )
     }
@@ -260,7 +276,7 @@ class AgentToolSessionFactory(
     companion object {
         private const val MAX_PROCESS_CANDIDATES = 32
         private const val FRIDA_TOOLPACK_ID = "android-frida"
-        private const val FRIDA_TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.0.3"
+        private const val FRIDA_TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.1.0"
         private const val LLDB_TOOLPACK_ID = "android-lldb-server"
         private const val LLDB_TOOLPACK_VERSION = "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"
 

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+LLVM_ROOT="$ROOT/lib/llvm-14"
+PRIVATE_LIB="$ROOT/lib/lldb-deps"
+
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+  export LD_LIBRARY_PATH="$LLVM_ROOT/lib:$PRIVATE_LIB:$LD_LIBRARY_PATH"
+else
+  export LD_LIBRARY_PATH="$LLVM_ROOT/lib:$PRIVATE_LIB"
+fi
+export PYTHONPATH="$LLVM_ROOT/lib/python3.11/dist-packages${PYTHONPATH:+:$PYTHONPATH}"
+
+exec "$LLVM_ROOT/bin/lldb" "$@"

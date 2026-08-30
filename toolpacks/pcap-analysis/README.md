@@ -1,6 +1,6 @@
 # rootfs-pcap-analysis
 
-Small Android/rootfs-only pcap analysis toolpack for AutoCrackApp.
+Android/rootfs-only pcap convenience analysis toolpack for AutoCrackApp.
 
 The first command is `pcap-summary`, a pure-Python bounded parser that reads an existing workspace pcap and emits JSON summaries for:
 
@@ -10,4 +10,4 @@ The first command is `pcap-summary`, a pure-Python bounded parser that reads an 
 - TLS ClientHello SNI / ALPN when visible
 - top TCP/UDP endpoint pairs
 
-It does not capture live traffic, accept BPF filters, edit Surfing/box settings, install certificates, or perform MITM.
+This helper's bounded JSON output prevents accidental multi-megabyte UI responses. It does not limit the Mobile Pi Agent's pcap capabilities: the standard `tcpdump` toolpack supports arbitrary valid BPF capture filters and offline `tcpdump -r /workspace/file.pcap` analysis.

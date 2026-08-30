@@ -108,6 +108,6 @@ class DebugFridaToolpackInstallActivity : Activity() {
     }
 
     private companion object {
-        const val OLD_TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.0.0"
+        const val OLD_TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.0.4"
     }
 }

@@ -42,6 +42,14 @@ def write_outer(manifest: dict, payload_root: Path, output_dir: Path, filename: 
                 info.compress_type = zipfile.ZIP_STORED
                 info.external_attr = (stat.S_IFREG | 0o644) << 16
                 archive.writestr(info, item.read_bytes())
+        shutil.copy2(manifest_path, output_dir / "manifest.json")
+        shutil.copy2(payload_zip, output_dir / "payload.zip")
+        (output_dir / "payload.sha256").write_text(manifest["payloadSha256"] + "\n", encoding="utf-8")
+        (output_dir / "payload.size").write_text(str(manifest["payloadSizeBytes"]) + "\n", encoding="utf-8")
+        (output_dir / f"{outer.name}.sha256").write_text(
+            f"{sha256(outer)}  {outer.name}\n",
+            encoding="utf-8",
+        )
         print(f"TOOLPACK={outer}")
         print(f"PAYLOAD_SHA256={manifest['payloadSha256']}")
         print(f"PAYLOAD_SIZE={manifest['payloadSizeBytes']}")

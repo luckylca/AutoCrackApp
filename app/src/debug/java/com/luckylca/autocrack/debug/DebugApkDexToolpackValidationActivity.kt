@@ -78,7 +78,21 @@ class DebugApkDexToolpackValidationActivity : Activity() {
         check(selfTest.passed) { "JADX/Apktool self-test failed" }
         markStage("self_test_passed")
 
+        val policy = chroot.execute(
+            ShellCommandRequest(
+                command = "jadx --autocrack-policy",
+                workingDirectory = "/workspace",
+                timeoutMillis = 10_000L,
+            ),
+        )
+        check(policy.succeeded) { policy.failure ?: "JADX mobile resource policy probe failed" }
+        check(policy.stdout.contains("AUTOC_JADX_HEAP_MB=768")) { "Unexpected JADX default heap: ${policy.stdout}" }
+        check(policy.stdout.contains("AUTOC_JADX_THREADS=2")) { "Unexpected JADX default threads: ${policy.stdout}" }
+        markStage("resource_policy_passed")
+
         val targetPackage = intent.getStringExtra("package_name")?.trim().orEmpty().ifBlank { DEFAULT_TARGET_PACKAGE }
+        val targetClass = intent.getStringExtra("class_name")?.trim().orEmpty().ifBlank { DEFAULT_TARGET_CLASS }
+        require(targetClass.matches(Regex("^[A-Za-z0-9_.$]+$"))) { "Invalid target class: $targetClass" }
         val repository = PackageRepository(applicationContext, runner)
         val extraction = repository.extractPackage(root, targetPackage)
         val base = extraction.artifacts.singleOrNull { it.kind == ApkArtifactKind.BASE }
@@ -101,9 +115,8 @@ class DebugApkDexToolpackValidationActivity : Activity() {
                     set -eu
                     rm -rf -- /workspace/$JADX_OUTPUT
                     mkdir -p /workspace/$JADX_OUTPUT
-                    export JADX_OPTS='-Xms64M -Xmx512M -XX:ActiveProcessorCount=2'
-                    jadx --threads-count 2 --no-res \
-                      --single-class com.example.myapplication.MainActivity \
+                    jadx --no-res \
+                      --single-class "$targetClass" \
                       --single-class-output /workspace/$JADX_OUTPUT/MainActivity.java \
                       /workspace/$SAMPLE_APK
                     test -s /workspace/$JADX_OUTPUT/MainActivity.java
@@ -188,8 +201,9 @@ class DebugApkDexToolpackValidationActivity : Activity() {
 
     private companion object {
         const val TOOLPACK_ID = "apk-dex-static"
-        const val TOOLPACK_VERSION = "jadx-1.5.6_apktool-3.0.3"
+        const val TOOLPACK_VERSION = "jadx-1.5.6_apktool-3.0.3_autocrack-1.0.1"
         const val DEFAULT_TARGET_PACKAGE = "com.example.myapplication"
+        const val DEFAULT_TARGET_CLASS = "com.example.myapplication.MainActivity"
         const val TOOLPACK_INPUT_PATH = "debug-validation/apk-dex-static-toolpack.zip"
         const val REPORT_PATH = "debug-validation/apk-dex-static-report.json"
         const val STAGE_PATH = "debug-validation/apk-dex-stage.txt"

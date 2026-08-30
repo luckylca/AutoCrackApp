@@ -28,7 +28,19 @@ jobs:
       FRIDA_PYTHON_WHEEL_SHA256: "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8"
       FRIDA_JAVA_BRIDGE_VERSION: "7.0.13"
       FRIDA_COMPILE_VERSION: "19.0.5"
-      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.0.4
+      FRIDA_TOOLS_VERSION: "14.10.4"
+      FRIDA_TOOLS_SDIST_SHA256: "7a2c544b545d095040fffbd3768a287a426343dad89095b4a24f4b20382d926a"
+      COLORAMA_VERSION: "0.4.6"
+      COLORAMA_WHEEL_SHA256: "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"
+      PROMPT_TOOLKIT_VERSION: "3.0.53"
+      PROMPT_TOOLKIT_WHEEL_SHA256: "01c0891d7f9237d5e339f7d3e42cdae80b7534abb1c7c0e3352efba6231492f2"
+      PYGMENTS_VERSION: "2.21.0"
+      PYGMENTS_WHEEL_SHA256: "2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9"
+      WCWIDTH_VERSION: "0.8.3"
+      WCWIDTH_WHEEL_SHA256: "d5b73dba6158a595ec9370350e7f2637bcac8d6c5e4fde34f30fcffb6103a5e4"
+      WEBSOCKETS_VERSION: "13.1"
+      WEBSOCKETS_WHEEL_SHA256: "308e20f22c2c77f3f39caca508e765f8725020b84aa963474e18c59accbf4c02"
+      TOOLPACK_VERSION: frida-17.17.0-autocrack-1.1.0
 
     steps:
       - name: Check out AutoCrackApp
@@ -87,7 +99,56 @@ jobs:
             sha256sum "${WHEEL}" > dist/source/frida-python.wheel.sha256
           } 2>&1 | tee /tmp/frida-python.log
 
-      - name: Compile fixed bounded Frida RPC agent
+      - name: Fetch pinned upstream Frida CLI tools and dependencies
+        id: tools
+        run: |
+          set -o pipefail
+          {
+            set -euxo pipefail
+            python3 -m pip download --disable-pip-version-check --no-deps \
+              "frida-tools==${FRIDA_TOOLS_VERSION}" --dest dist/download
+            TOOLS_SDIST="$(find dist/download -maxdepth 1 -type f -name "frida_tools-${FRIDA_TOOLS_VERSION}.tar.gz" -print -quit)"
+            test -n "${TOOLS_SDIST}"
+            printf '%s  %s\n' "${FRIDA_TOOLS_SDIST_SHA256}" "${TOOLS_SDIST}" | sha256sum -c -
+            mkdir -p dist/frida-tools-source
+            tar -xzf "${TOOLS_SDIST}" -C dist/frida-tools-source
+            TOOLS_ROOT="$(find dist/frida-tools-source -mindepth 1 -maxdepth 1 -type d -name "frida_tools-${FRIDA_TOOLS_VERSION}" -print -quit)"
+            test -d "${TOOLS_ROOT}/frida_tools"
+            cp -a "${TOOLS_ROOT}/frida_tools" dist/payload/python/frida_tools
+            sha256sum "${TOOLS_SDIST}" > dist/source/frida-tools.sdist.sha256
+
+            python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all: \
+              --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi cp311 \
+              "colorama==${COLORAMA_VERSION}" \
+              "prompt-toolkit==${PROMPT_TOOLKIT_VERSION}" \
+              "Pygments==${PYGMENTS_VERSION}" \
+              "wcwidth==${WCWIDTH_VERSION}" \
+              "websockets==${WEBSOCKETS_VERSION}" \
+              --dest dist/download
+
+            COLORAMA_WHEEL="$(find dist/download -maxdepth 1 -type f -name "colorama-${COLORAMA_VERSION}-*.whl" -print -quit)"
+            PROMPT_TOOLKIT_WHEEL="$(find dist/download -maxdepth 1 -type f -name "prompt_toolkit-${PROMPT_TOOLKIT_VERSION}-*.whl" -print -quit)"
+            PYGMENTS_WHEEL="$(find dist/download -maxdepth 1 -type f -name "pygments-${PYGMENTS_VERSION}-*.whl" -print -quit)"
+            WCWIDTH_WHEEL="$(find dist/download -maxdepth 1 -type f -name "wcwidth-${WCWIDTH_VERSION}-*.whl" -print -quit)"
+            WEBSOCKETS_WHEEL="$(find dist/download -maxdepth 1 -type f -name "websockets-${WEBSOCKETS_VERSION}-*aarch64.whl" -print -quit)"
+            test -n "${COLORAMA_WHEEL}" -a -n "${PROMPT_TOOLKIT_WHEEL}" -a -n "${PYGMENTS_WHEEL}" -a -n "${WCWIDTH_WHEEL}" -a -n "${WEBSOCKETS_WHEEL}"
+            printf '%s  %s\n' "${COLORAMA_WHEEL_SHA256}" "${COLORAMA_WHEEL}" | sha256sum -c -
+            printf '%s  %s\n' "${PROMPT_TOOLKIT_WHEEL_SHA256}" "${PROMPT_TOOLKIT_WHEEL}" | sha256sum -c -
+            printf '%s  %s\n' "${PYGMENTS_WHEEL_SHA256}" "${PYGMENTS_WHEEL}" | sha256sum -c -
+            printf '%s  %s\n' "${WCWIDTH_WHEEL_SHA256}" "${WCWIDTH_WHEEL}" | sha256sum -c -
+            printf '%s  %s\n' "${WEBSOCKETS_WHEEL_SHA256}" "${WEBSOCKETS_WHEEL}" | sha256sum -c -
+
+            for wheel in "${COLORAMA_WHEEL}" "${PROMPT_TOOLKIT_WHEEL}" "${PYGMENTS_WHEEL}" "${WCWIDTH_WHEEL}" "${WEBSOCKETS_WHEEL}"; do
+              unzip -q "${wheel}" -d dist/payload/python
+            done
+            sha256sum "${COLORAMA_WHEEL}" > dist/source/colorama.wheel.sha256
+            sha256sum "${PROMPT_TOOLKIT_WHEEL}" > dist/source/prompt-toolkit.wheel.sha256
+            sha256sum "${PYGMENTS_WHEEL}" > dist/source/pygments.wheel.sha256
+            sha256sum "${WCWIDTH_WHEEL}" > dist/source/wcwidth.wheel.sha256
+            sha256sum "${WEBSOCKETS_WHEEL}" > dist/source/websockets.wheel.sha256
+          } 2>&1 | tee /tmp/frida-tools.log
+
+      - name: Compile optional AutoCrack Frida RPC helper agent
         id: agent
         working-directory: toolpacks/frida
         run: |
@@ -112,7 +173,7 @@ jobs:
             sha256sum ../../dist/download/frida-java-bridge.tgz > ../../dist/source/frida-java-bridge.tgz.sha256
           } 2>&1 | tee /tmp/frida-agent.log
 
-      - name: Assemble bounded client payload
+      - name: Assemble upstream CLI-first Frida payload
         id: assemble
         run: |
           set -o pipefail
@@ -120,14 +181,27 @@ jobs:
             set -euxo pipefail
             cp toolpacks/frida/dist/autocrack-frida-agent.js dist/payload/libexec/autocrack-frida-agent.js
             cp toolpacks/frida/frida_autocrack_client.py dist/payload/libexec/frida_autocrack_client.py
+            cp toolpacks/frida/frida_tools_launcher.py dist/payload/libexec/frida_tools_launcher.py
             cp toolpacks/frida/frida-autocrack-client dist/payload/bin/frida-autocrack-client
-            chmod 0755 dist/payload/bin/frida-autocrack-client dist/payload/libexec/frida_autocrack_client.py
-            python3 -m py_compile toolpacks/frida/frida_autocrack_client.py
+            cp toolpacks/frida/android-frida-server dist/payload/bin/android-frida-server
+            for command in \
+              frida frida-ls-devices frida-ps frida-kill frida-ls frida-rm frida-pull frida-push \
+              frida-discover frida-trace frida-strace frida-itrace frida-join frida-create \
+              frida-compile frida-pm frida-apk; do
+              cp toolpacks/frida/frida-tool "dist/payload/bin/${command}"
+            done
+            chmod 0755 dist/payload/bin/* \
+              dist/payload/libexec/frida_autocrack_client.py \
+              dist/payload/libexec/frida_tools_launcher.py
+            python3 -m py_compile \
+              toolpacks/frida/frida_autocrack_client.py \
+              toolpacks/frida/frida_tools_launcher.py \
+              toolpacks/frida/android-frida-server \
+              toolpacks/frida/build_toolpack.py
             grep -F 'Interceptor.attach' toolpacks/frida/agent.ts
             grep -F 'SSL_write' toolpacks/frida/agent.ts
             grep -F 'SSL_read' toolpacks/frida/agent.ts
             grep -F 'javafieldwrite' toolpacks/frida/agent.ts
-            ! grep -Eq 'Interceptor\.replace|Memory\.write|rpc\.exports\..*eval' toolpacks/frida/agent.ts
           } 2>&1 | tee /tmp/frida-assemble.log
 
       - name: Build and validate deterministic toolpack
@@ -139,12 +213,17 @@ jobs:
             python3 toolpacks/frida/build_toolpack.py | tee dist/build-summary.txt
             unzip -t dist/AutoCrackApp-android-frida-17.17.0-toolpack.zip
             jq -e '.id == "android-frida"' dist/manifest.json >/dev/null
-            jq -e '.version == "frida-17.17.0-autocrack-1.0.4"' dist/manifest.json >/dev/null
+            jq -e '.version == "frida-17.17.0-autocrack-1.1.0"' dist/manifest.json >/dev/null
             jq -e '([.commands[].name] | index("frida-autocrack-client")) != null' dist/manifest.json >/dev/null
-            jq -e '([.commands[].name] | index("frida-server-android")) != null' dist/manifest.json >/dev/null
-            jq -e '.commands | length == 2' dist/manifest.json >/dev/null
-            jq -e '([.selfTests[] | select(.id == "frida-bounded-client-help") | .outputContains[]] | index("tls-trace")) != null' dist/manifest.json >/dev/null
-            jq -e '([.selfTests[] | select(.id == "frida-bounded-client-help") | .outputContains[]] | index("java-field-write")) != null' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("android-frida-server")) != null' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida")) != null' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida-ps")) != null' dist/manifest.json >/dev/null
+            jq -e '([.commands[].name] | index("frida-trace")) != null' dist/manifest.json >/dev/null
+            jq -e '.commands | length == 19' dist/manifest.json >/dev/null
+            jq -e '([.selfTests[].id] | index("frida-upstream-cli-version")) != null' dist/manifest.json >/dev/null
+            jq -e '([.selfTests[].id] | index("android-frida-server-help")) != null' dist/manifest.json >/dev/null
+            jq -e '([.selfTests[] | select(.id == "frida-autocrack-client-help") | .outputContains[]] | index("tls-trace")) != null' dist/manifest.json >/dev/null
+            jq -e '([.selfTests[] | select(.id == "frida-autocrack-client-help") | .outputContains[]] | index("java-field-write")) != null' dist/manifest.json >/dev/null
           } 2>&1 | tee /tmp/frida-package.log
 
       - name: Upload Frida provenance metadata

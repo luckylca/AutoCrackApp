@@ -81,6 +81,8 @@ class DebugAndroidHostShellToolpackValidationActivity : Activity() {
                             android-shell pm path com.ss.android.ugc.aweme
                             echo '=== HOST SHELL PIPELINE ==='
                             android-shell sh -c 'pm list packages | grep com.ss.android.ugc.aweme'
+                            echo '=== LONG HOST COMMAND ==='
+                            android-shell --timeout-ms 15000 sh -c 'sleep 6; echo HOST_LONG_COMMAND_OK'
                             echo '=== SHARED WORKSPACE ==='
                             android-shell sh -c 'printf HOST_BRIDGE_WORKSPACE_OK > /workspace/bridge-host-file.txt'
                             cat /workspace/bridge-host-file.txt
@@ -97,6 +99,7 @@ class DebugAndroidHostShellToolpackValidationActivity : Activity() {
         val stdout = result.getString("stdout")
         check(stdout.contains("uid=0(root)")) { "host shell was not root: $stdout" }
         check(stdout.contains("package:com.ss.android.ugc.aweme")) { "Douyin package was not visible through bridge" }
+        check(stdout.contains("HOST_LONG_COMMAND_OK")) { "android-shell response socket timed out before host command completed" }
         check(stdout.contains("HOST_BRIDGE_WORKSPACE_OK")) { "host/debian workspace bridge failed" }
 
         return JSONObject()

@@ -106,9 +106,13 @@ class AndroidHostShellBridge(
             errorResponse(error.message ?: error::class.java.simpleName)
         }
         val bytes = (response.toString() + "\n").toByteArray(Charsets.UTF_8)
-        socket.getOutputStream().use { output ->
-            output.write(bytes)
-            output.flush()
+        // The Debian client may time out/cancel and close its socket while the Android host command
+        // is still finishing. A late response must never escape this bridge coroutine and crash the App.
+        runCatching {
+            socket.getOutputStream().use { output ->
+                output.write(bytes)
+                output.flush()
+            }
         }
     }
 
@@ -196,7 +200,7 @@ class AndroidHostShellBridge(
 
     companion object {
         const val TOOLPACK_ID = "android-host-shell"
-        const val TOOLPACK_VERSION = "android-host-shell-1.0.1"
+        const val TOOLPACK_VERSION = "android-host-shell-1.0.2"
         const val COMMAND_NAME = "android-shell"
         const val ENV_HOST = "AUTOC_ANDROID_HOST_ADDR"
         const val ENV_PORT = "AUTOC_ANDROID_HOST_PORT"

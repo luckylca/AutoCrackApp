@@ -42,6 +42,14 @@ def write_outer(manifest: dict, payload_root: Path, output_dir: Path, filename: 
                 info.compress_type = zipfile.ZIP_STORED
                 info.external_attr = (stat.S_IFREG | 0o644) << 16
                 archive.writestr(info, item.read_bytes())
+        shutil.copy2(manifest_path, output_dir / "manifest.json")
+        shutil.copy2(payload_zip, output_dir / "payload.zip")
+        (output_dir / "payload.sha256").write_text(manifest["payloadSha256"] + "\n", encoding="utf-8")
+        (output_dir / "payload.size").write_text(str(manifest["payloadSizeBytes"]) + "\n", encoding="utf-8")
+        (output_dir / f"{outer.name}.sha256").write_text(
+            f"{sha256(outer)}  {outer.name}\n",
+            encoding="utf-8",
+        )
         print(f"TOOLPACK={outer}")
         print(f"PAYLOAD_SHA256={manifest['payloadSha256']}")
         print(f"PAYLOAD_SIZE={manifest['payloadSizeBytes']}")
@@ -52,7 +60,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tcpdump", required=True)
     parser.add_argument("--tcpdump-sha256", required=True)
-    parser.add_argument("--version", default="tcpdump-android-arm64-autocrack-1.0.0")
+    parser.add_argument("--tcpdump-version", default="4.99.5")
+    parser.add_argument("--tcpdump-source-sha256", required=True)
+    parser.add_argument("--libpcap-version", default="1.10.5")
+    parser.add_argument("--libpcap-source-sha256", required=True)
+    parser.add_argument("--version", default="tcpdump-4.99.5_libpcap-1.10.5_autocrack-1.1.0")
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
     binary = Path(args.tcpdump).resolve()
@@ -62,22 +74,30 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         payload = Path(tmp) / "payload"
         (payload / "host-bin").mkdir(parents=True)
+        (payload / "bin").mkdir(parents=True)
         shutil.copy2(binary, payload / "host-bin" / "tcpdump")
+        shutil.copy2(Path(__file__).resolve().parent / "bin" / "tcpdump", payload / "bin" / "tcpdump")
         manifest = {
             "schemaVersion": 1,
             "id": "android-pcap-helper",
-            "title": "Android tcpdump bounded capture helper",
+            "title": "Android host tcpdump",
             "version": args.version,
             "architecture": "arm64",
             "payloadEntry": "payload.zip",
             "payloadSha256": "0" * 64,
             "payloadSizeBytes": 1,
-            "requiredPaths": ["host-bin/tcpdump"],
-            "commands": [{"name": "tcpdump-autocrack", "relativePath": "host-bin/tcpdump"}],
-            "selfTests": [{"id": "tcpdump-binary", "title": "Android tcpdump binary", "command": "test -x /opt/autocrack/toolpacks/packs/android-pcap-helper/%s/host-bin/tcpdump && printf 'AUTOCRACK_TCPDUMP_BINARY_OK\n'" % args.version, "expectedExitCodes": [0], "outputContains": ["AUTOCRACK_TCPDUMP_BINARY_OK"]}],
-            "sources": [{"name": "tcpdump-android-arm64", "version": args.version, "url": "https://www.tcpdump.org/", "sha256": actual}],
+            "requiredPaths": ["bin/tcpdump", "host-bin/tcpdump"],
+            "commands": [{"name": "tcpdump", "relativePath": "bin/tcpdump"}],
+            "selfTests": [
+                {"id": "tcpdump-binary", "title": "Android tcpdump binary", "command": "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/host-bin/tcpdump && printf 'AUTOCRACK_TCPDUMP_BINARY_OK\n'", "expectedExitCodes": [0], "outputContains": ["AUTOCRACK_TCPDUMP_BINARY_OK"]},
+                {"id": "tcpdump-launcher", "title": "Standard tcpdump Android-host launcher", "command": "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/bin/tcpdump && grep -F '\"$@\"' /opt/autocrack/toolpacks/active/android-pcap-helper/bin/tcpdump", "expectedExitCodes": [0], "outputContains": ["$@"]},
+            ],
+            "sources": [
+                {"name": "tcpdump", "version": args.tcpdump_version, "url": "https://www.tcpdump.org/release/tcpdump-%s.tar.xz" % args.tcpdump_version, "sha256": args.tcpdump_source_sha256.lower()},
+                {"name": "libpcap", "version": args.libpcap_version, "url": "https://www.tcpdump.org/release/libpcap-%s.tar.xz" % args.libpcap_version, "sha256": args.libpcap_source_sha256.lower()},
+            ],
         }
-        write_outer(manifest, payload, Path(args.output_dir), "AutoCrackApp-android-pcap-helper-toolpack.zip", {"host-bin/tcpdump"})
+        write_outer(manifest, payload, Path(args.output_dir), "AutoCrackApp-android-pcap-helper-toolpack.zip", {"bin/tcpdump", "host-bin/tcpdump"})
 
 if __name__ == "__main__":
     main()

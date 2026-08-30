@@ -1,5 +1,5 @@
 # android-pcap-helper toolpack
 
-Packages a pinned Android ARM64 tcpdump binary for AutoCrackApp-managed passive capture.
+Packages pinned Android ARM64 tcpdump 4.99.5 and libpcap 1.10.5 sources as a standard `tcpdump` CLI. The Debian launcher forwards every upstream argv element to the bundled binary in the Android host network namespace through `android-shell`.
 
-`android_pcap_start` now prefers the app-managed runtime tcpdump location before falling back to system paths. This helper does not install certificates, edit Surfing / box configuration, use VPNService, expose arbitrary filters, or modify iptables/nftables.
+Normal interfaces, output modes, rotation options, and arbitrary valid BPF filters are available. `/workspace` arguments are mapped to the shared Android-host backing directory, so captures written by host tcpdump are immediately readable in Debian. The older structured capture helper may remain available to the UI as a convenience, but it is not the Mobile Pi Agent's capture boundary.

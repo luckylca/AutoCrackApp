@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+ROOTFS_HOST=${AUTOC_ROOTFS_HOST_PATH:?android-lldb-server requires an AutoCrack Mobile Agent session}
+HOST_BINARY="$ROOTFS_HOST/opt/autocrack/toolpacks/active/android-lldb-server/host-bin/lldb-server-android"
+TIMEOUT_MS=${AUTOC_LLDB_SERVER_TIMEOUT_MS:-1800000}
+
+exec android-shell --timeout-ms "$TIMEOUT_MS" -- "$HOST_BINARY" "$@"

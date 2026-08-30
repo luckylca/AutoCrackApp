@@ -12,6 +12,13 @@
     ]
   },
   "scope": "host_dynamic_scoped",
+  "mobilePiAgentPath": {
+    "runtime": "shared_debian_and_android_host",
+    "debianEntry": "exec_bash with active toolpack PATH/PYTHONPATH/NODE_PATH/CLASSPATH",
+    "androidHostEntry": "android-shell unrestricted root argv forwarding",
+    "upstreamInterfaces": ["frida", "lldb", "tcpdump", "trace_processor", "rizin", "jadx", "apktool", "python3 import lief"],
+    "typedToolsBelow": "legacy UI, diagnostics, recovery, and compatibility only"
+  },
   "safetyBoundary": {
     "ownedOrAuthorizedDevicesOnly": true,
     "defaultOperationMode": "read_only",
@@ -394,7 +401,7 @@
       ],
       "requiresToolpack": {
         "id": "android-frida",
-        "version": "frida-17.17.0-autocrack-1.0.3"
+        "version": "frida-17.17.0-autocrack-1.1.0"
       },
       "changesState": true,
       "changesTargetState": false,

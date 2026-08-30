@@ -52,7 +52,11 @@ class RawBashAgentToolExecutorTest {
 
         assertEquals(true, write.getBoolean("ok"))
         assertEquals("notes/plan.txt", write.getJSONObject("entry").getString("relativePath"))
+        assertEquals("/workspace", write.getString("workspaceRoot"))
+        assertEquals("/workspace/notes/plan.txt", write.getString("agentPath"))
         assertEquals("raw bash agent", read.getString("content"))
+        assertEquals("/workspace", read.getString("workspaceRoot"))
+        assertEquals("/workspace/notes/plan.txt", read.getString("agentPath"))
         Unit
     }
 
@@ -78,6 +82,7 @@ class RawBashAgentToolExecutorTest {
         )
 
         assertEquals(true, result.getBoolean("ok"))
+        assertEquals("/workspace", result.getString("workspace"))
         assertEquals("/workspace/analysis", chroot.lastRequest!!.workingDirectory)
         assertFalse(chroot.lastRequest!!.environment.containsKey("AUTOC_TARGET_PACKAGE"))
         assertEquals("jadx,rizin", chroot.lastRequest!!.environment["AUTOC_TOOLPACK_COMMANDS"])

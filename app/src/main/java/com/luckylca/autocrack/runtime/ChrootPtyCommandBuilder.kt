@@ -17,9 +17,11 @@ object ChrootPtyCommandBuilder {
             "JAVA_HOME" to JAVA_HOME,
             "PATH" to "$JAVA_HOME/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "AUTOC_WORKSPACE" to "/workspace",
+            "AUTOC_ROOTFS_HOST_PATH" to rootfsPath,
         )
         val interactiveShell = buildString {
             append("umask 077\n")
+            append(ToolpackSharedEnvironment.shellBootstrap()).append('\n')
             append("cd -- /workspace || exit 125\n")
             append("export PS1=").append(ShellEscaper.quote("autocrack:\\w# ")).append('\n')
             append("exec /bin/bash --noprofile --norc -i")

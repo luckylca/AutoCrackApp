@@ -70,6 +70,7 @@ class RawBashAgentToolExecutor(
                 workingDirectory = cwd,
                 environment = buildMap {
                     put("AUTOC_AGENT_MODE", "raw_bash")
+                    sessionId?.takeIf(String::isNotBlank)?.let { put("AUTOC_AGENT_SESSION_ID", it) }
                     put("AUTOC_TOOLPACK_COMMANDS", availableToolCommands.distinct().sorted().joinToString(","))
                     packageName?.takeIf(String::isNotBlank)?.let { put("AUTOC_TARGET_PACKAGE", it) }
                     putAll(extraEnvironment)
@@ -96,7 +97,8 @@ class RawBashAgentToolExecutor(
             .put("ok", true)
             .put("tool", TOOL_READ_FILE)
             .put("path", path)
-            .put("workspaceRoot", workspaceFiles.rootPath())
+            .put("agentPath", agentWorkspacePath(path))
+            .put("workspaceRoot", DEFAULT_CHROOT_CWD)
             .put("content", content)
             .put("truncated", content.endsWith("\n...[file preview truncated]"))
             .toString()
@@ -113,7 +115,8 @@ class RawBashAgentToolExecutor(
             .put("path", path)
             .put("append", append)
             .put("entry", entry.toJson())
-            .put("workspaceRoot", workspaceFiles.rootPath())
+            .put("agentPath", agentWorkspacePath(entry.relativePath))
+            .put("workspaceRoot", DEFAULT_CHROOT_CWD)
             .toString()
     }
 
@@ -187,7 +190,7 @@ class RawBashAgentToolExecutor(
         fun buildDefinitions(): List<AgentToolDefinition> = listOf(
             AgentToolDefinition(
                 TOOL_EXEC_BASH,
-                "Execute Bash in the managed Debian rootfs workspace. Specialized CLI commands come from installed toolpacks and are listed in the session context. Boundary: /workspace cwd, timeout, output cap and audit log.",
+                "Execute Bash in the managed Debian rootfs. It sees the exact same files as read_file and write_file under /workspace.",
                 AgentJsonSchema.objectSchema(
                     JSONObject()
                         .put("script", stringSchema("Bash script to run."))
@@ -200,7 +203,7 @@ class RawBashAgentToolExecutor(
             ),
             AgentToolDefinition(
                 TOOL_READ_FILE,
-                "Read a UTF-8 text file from the managed AutoCrack workspace.",
+                "Read a UTF-8 text file from the same /workspace used by exec_bash. The path is relative to /workspace.",
                 AgentJsonSchema.objectSchema(
                     JSONObject()
                         .put("path", stringSchema("Workspace-relative path."))
@@ -210,7 +213,7 @@ class RawBashAgentToolExecutor(
             ),
             AgentToolDefinition(
                 TOOL_WRITE_FILE,
-                "Write or append a UTF-8 text file inside the managed AutoCrack workspace.",
+                "Write or append a UTF-8 text file in the same /workspace used by exec_bash. The path is relative to /workspace.",
                 AgentJsonSchema.objectSchema(
                     JSONObject()
                         .put("path", stringSchema("Workspace-relative path."))
@@ -242,6 +245,9 @@ class RawBashAgentToolExecutor(
         private fun booleanSchema(description: String): JSONObject = JSONObject()
             .put("type", "boolean")
             .put("description", description)
+
+        private fun agentWorkspacePath(relativePath: String): String =
+            "$DEFAULT_CHROOT_CWD/${relativePath.removePrefix("./")}".trimEnd('/')
     }
 }
 

@@ -130,6 +130,10 @@ def main() -> int:
             request["stdin"] = stdin
 
     with socket.create_connection((host, int(port_text)), timeout=5.0) as sock:
+        # create_connection() leaves the 5 s connect timeout on the socket. Host commands such as
+        # dumpsys can legitimately take longer, so response reads must follow the requested command
+        # timeout instead of the short connection-establishment timeout.
+        sock.settimeout(max(10.0, timeout_ms / 1000.0 + 10.0))
         sock.sendall((json.dumps(request, separators=(",", ":")) + "\n").encode("utf-8"))
         response = read_response(sock)
 

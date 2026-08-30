@@ -14,7 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-fun AutoCrackApp() {
+internal fun AutoCrackApp(
+    routeRequest: MobileAgentRouteRequest? = null,
+    onRouteConsumed: () -> Unit = {},
+) {
     val darkTheme = isSystemInDarkTheme()
     val context = LocalContext.current
     val colors = when {
@@ -24,6 +27,8 @@ fun AutoCrackApp() {
         else -> lightColorScheme()
     }
     MaterialTheme(colorScheme = colors) {
-        Surface(modifier = Modifier.fillMaxSize()) { MobilePiAgentScreen() }
+        Surface(modifier = Modifier.fillMaxSize()) {
+            MobilePiAgentScreen(routeRequest = routeRequest, onRouteConsumed = onRouteConsumed)
+        }
     }
 }

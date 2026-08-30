@@ -365,8 +365,8 @@ jobs:
     env:
       LIEF_VERSION: "1.0.0"
       LIEF_WHEEL_SHA256: "95fb7dc84960068ab881bc681e646cab55f3d736c07bb07e91d5cbc8738885a7"
-      EXPECTED_PAYLOAD_SHA256: "DISCOVERY"
-      EXPECTED_PAYLOAD_SIZE: "0"
+      EXPECTED_PAYLOAD_SHA256: "ca01f7b80573b459f9a55658d4a493475b401e154b5aa9e80d1a7696ad5d6f15"
+      EXPECTED_PAYLOAD_SIZE: "12245708"
       TOOLPACK_ID: lief-static
       TOOLPACK_VERSION: lief-1.0.0-autocrack-1.0.0
 
@@ -398,7 +398,7 @@ jobs:
           unzip -t dist/source/lief.whl
           printf '%s' "$LIEF_URL" > dist/source/lief.url
 
-      - name: Assemble deterministic read-only LIEF payload
+      - name: Assemble deterministic full-API LIEF payload
         run: |
           set -euxo pipefail
           unzip -q dist/source/lief.whl -d dist/payload/python
@@ -426,10 +426,6 @@ jobs:
           ACTUAL_PAYLOAD_SIZE=$(stat -c '%s' dist/payload.zip)
           printf 'LIEF_PAYLOAD_SHA256=%s\nLIEF_PAYLOAD_SIZE=%s\n' \
             "$ACTUAL_PAYLOAD_SHA256" "$ACTUAL_PAYLOAD_SIZE" | tee dist/lief-build-summary.txt
-          if [ "$EXPECTED_PAYLOAD_SHA256" = DISCOVERY ]; then
-            echo "LIEF payload discovery run complete; pin the values above." >&2
-            exit 86
-          fi
           test "$ACTUAL_PAYLOAD_SHA256" = "$EXPECTED_PAYLOAD_SHA256"
           test "$ACTUAL_PAYLOAD_SIZE" = "$EXPECTED_PAYLOAD_SIZE"
 
@@ -440,6 +436,8 @@ jobs:
             -v "$PWD/dist/payload:/opt/lief-toolpack:ro" \
             debian:bookworm-slim /bin/bash -euxc '
               export PATH=/opt/lief-toolpack/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+              export PYTHONPATH=/opt/lief-toolpack/python
+              python3 -c "import lief; assert lief.__version__ == \"1.0.0-fe54643f\" or lief.__version__.startswith(\"1.0.0\"); print(lief.__version__)"
               lief-elf-report --self-test | grep -F "LIEF_STATIC_SELF_TEST_OK version=1.0.0"
               lief-elf-report /bin/ls > /tmp/lief-ls.json
               python3 -c "import json; x=json.load(open(\"/tmp/lief-ls.json\")); assert x[\"format\"] == \"ELF\"; assert x[\"counts\"][\"sections\"] > 0"
@@ -456,7 +454,7 @@ jobs:
           manifest = {
               "schemaVersion": 1,
               "id": os.environ["TOOLPACK_ID"],
-              "title": "LIEF read-only ELF analysis",
+              "title": "LIEF full Python API and ELF report helper",
               "version": os.environ["TOOLPACK_VERSION"],
               "architecture": "arm64",
               "payloadEntry": "payload.zip",
@@ -464,13 +462,22 @@ jobs:
               "payloadSizeBytes": int(os.environ["EXPECTED_PAYLOAD_SIZE"]),
               "requiredPaths": ["bin/lief-elf-report", "libexec/lief_elf_report.py", "python/lief/__init__.py"],
               "commands": [{"name": "lief-elf-report", "relativePath": "bin/lief-elf-report"}],
-              "selfTests": [{
-                  "id": "lief-static-self-test",
-                  "title": "LIEF ARM64 Python binding and fixed ELF reporter",
-                  "command": "lief-elf-report --self-test",
-                  "expectedExitCodes": [0],
-                  "outputContains": ["LIEF_STATIC_SELF_TEST_OK version=1.0.0"],
-              }],
+              "selfTests": [
+                  {
+                      "id": "lief-python-import",
+                      "title": "Complete LIEF Python API import",
+                      "command": "PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import lief; print(lief.__version__)\"",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["1.0.0"],
+                  },
+                  {
+                      "id": "lief-static-self-test",
+                      "title": "Optional bounded ELF report helper",
+                      "command": "lief-elf-report --self-test",
+                      "expectedExitCodes": [0],
+                      "outputContains": ["LIEF_STATIC_SELF_TEST_OK version=1.0.0"],
+                  },
+              ],
               "sources": [{
                   "name": "lief-python-aarch64",
                   "version": os.environ["LIEF_VERSION"],
@@ -495,5 +502,7 @@ jobs:
             dist/AutoCrackApp-lief-static-toolpack.zip.sha256
             dist/manifest.json
             dist/lief-build-summary.txt
+            dist/source/lief.whl
+            dist/source/lief.url
           if-no-files-found: error
           retention-days: 14

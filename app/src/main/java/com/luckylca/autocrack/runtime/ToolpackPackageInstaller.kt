@@ -23,6 +23,11 @@ private data class ToolpackActivation(
     val backup: File?,
 )
 
+private data class ActiveLinkActivation(
+    val link: File,
+    val previousTarget: Path?,
+)
+
 class ToolpackPackageInstaller(
     context: Context,
     private val layout: RuntimeLayout,
@@ -33,6 +38,7 @@ class ToolpackPackageInstaller(
     private val auditFile = File(layout.toolpacksRoot, "toolpack-audit.jsonl")
     private val rootfsToolpacksRoot = File(layout.rootfsRoot, "opt/autocrack/toolpacks")
     private val rootfsPacksRoot = File(rootfsToolpacksRoot, "packs")
+    private val rootfsActiveRoot = File(rootfsToolpacksRoot, "active")
     private val rootfsStagingRoot = File(rootfsToolpacksRoot, "staging")
     private val rootfsCommandRoot = File(layout.rootfsRoot, "usr/local/bin")
 
@@ -48,8 +54,10 @@ class ToolpackPackageInstaller(
         val packageFile = File(packagesRoot, "toolpack-${System.currentTimeMillis()}.zip")
         val payloadFile = File(layout.tempRoot, "toolpack-payload-${System.currentTimeMillis()}.zip")
         var manifest: ToolpackPackageManifest? = null
+        var previousInstalled: InstalledToolpack? = null
         var stagingDirectory: File? = null
         var activation: ToolpackActivation? = null
+        var activeLinkActivation: ActiveLinkActivation? = null
 
         try {
             onProgress("正在复制工具包到应用私有目录")
@@ -63,6 +71,7 @@ class ToolpackPackageInstaller(
                 payloadFile = payloadFile,
                 onProgress = onProgress,
             )
+            previousInstalled = readInstalled(manifest.id)
             validateCommandConflicts(manifest)
 
             val staging = File(
@@ -82,7 +91,8 @@ class ToolpackPackageInstaller(
             activation = activateStaging(staging, target)
             stagingDirectory = null
 
-            installCommandShims(manifest, target)
+            activeLinkActivation = activateLink(manifest.id, manifest.version)
+            installCommandShims(manifest)
             val installed = InstalledToolpack(
                 manifest = manifest,
                 packagePath = packageFile.path,
@@ -91,9 +101,12 @@ class ToolpackPackageInstaller(
                 installedAtEpochMillis = System.currentTimeMillis(),
             )
             writeInstalledRecord(installed)
-            activation.backup?.let(::deleteTreeNoFollow)
+            removeObsoleteCommandShims(previousInstalled?.manifest, manifest)
+            val obsoleteBackup = activation.backup
             activation = null
-            pruneOldVersions(manifest.id, target)
+            activeLinkActivation = null
+            runCatching { obsoleteBackup?.let(::deleteTreeNoFollow) }
+            runCatching { pruneOldVersions(manifest.id, target) }
 
             appendAudit(
                 event = "install",
@@ -116,7 +129,11 @@ class ToolpackPackageInstaller(
             )
         } catch (exception: Exception) {
             stagingDirectory?.let(::deleteTreeNoFollow)
-            activation?.let(::rollbackActivation)
+            activeLinkActivation?.let { active -> runCatching { rollbackActiveLink(active) } }
+            activation?.let { installedTarget -> runCatching { rollbackActivation(installedTarget) } }
+            manifest?.let { failedManifest ->
+                runCatching { restoreInstallMetadata(previousInstalled, failedManifest) }
+            }
             appendAudit(
                 event = "install_failed",
                 manifest = manifest,
@@ -149,6 +166,7 @@ class ToolpackPackageInstaller(
                 shim.delete()
             }
         }
+        removeActiveLink(toolpackId)
         deleteTreeNoFollow(File(rootfsPacksRoot, toolpackId))
         recordFile(toolpackId).delete()
         appendAudit(
@@ -161,13 +179,18 @@ class ToolpackPackageInstaller(
 
     suspend fun listInstalled(): List<InstalledToolpack> = withContext(Dispatchers.IO) {
         initializeAppDirectories()
-        installedRecordsRoot.listFiles()
+        val installed = installedRecordsRoot.listFiles()
             .orEmpty()
             .filter { file -> file.isFile && file.extension == "json" }
             .mapNotNull { file ->
                 runCatching { parseInstalledRecord(file.readText(Charsets.UTF_8)) }.getOrNull()
             }
             .sortedBy { installed -> installed.manifest.id }
+        if (layout.rootfsRoot.isDirectory) {
+            initializeRootfsDirectories()
+            reconcileActiveLinks(installed)
+        }
+        installed
     }
 
     suspend fun runSelfTests(
@@ -248,6 +271,7 @@ class ToolpackPackageInstaller(
         listOf(
             rootfsToolpacksRoot,
             rootfsPacksRoot,
+            rootfsActiveRoot,
             rootfsStagingRoot,
             rootfsCommandRoot,
         ).forEach(::ensureDirectory)
@@ -423,11 +447,76 @@ class ToolpackPackageInstaller(
         }
     }
 
-    private fun installCommandShims(manifest: ToolpackPackageManifest, target: File) {
+    private fun activateLink(toolpackId: String, version: String): ActiveLinkActivation {
+        val link = File(rootfsActiveRoot, toolpackId)
+        val linkPath = link.toPath()
+        require(!link.exists() || Files.isSymbolicLink(linkPath)) {
+            "active toolpack 路径不是 symlink：${link.path}"
+        }
+        val previousTarget = if (Files.isSymbolicLink(linkPath)) {
+            Files.readSymbolicLink(linkPath)
+        } else {
+            null
+        }
+        replaceActiveLink(link, activeLinkTarget(toolpackId, version))
+        return ActiveLinkActivation(link = link, previousTarget = previousTarget)
+    }
+
+    private fun rollbackActiveLink(activation: ActiveLinkActivation) {
+        val previous = activation.previousTarget
+        if (previous == null) {
+            Files.deleteIfExists(activation.link.toPath())
+        } else {
+            replaceActiveLink(activation.link, previous)
+        }
+    }
+
+    private fun replaceActiveLink(link: File, target: Path) {
+        rootfsActiveRoot.mkdirs()
+        val temporary = File(rootfsActiveRoot, ".${link.name}.${System.nanoTime()}.tmp")
+        Files.deleteIfExists(temporary.toPath())
+        Files.createSymbolicLink(temporary.toPath(), target)
+        try {
+            safeMove(temporary, link)
+        } finally {
+            Files.deleteIfExists(temporary.toPath())
+        }
+    }
+
+    private fun activeLinkTarget(toolpackId: String, version: String): Path =
+        Path.of("..", "packs", toolpackId, version)
+
+    private fun removeActiveLink(toolpackId: String) {
+        val link = File(rootfsActiveRoot, toolpackId)
+        if (Files.isSymbolicLink(link.toPath())) Files.deleteIfExists(link.toPath())
+    }
+
+    private fun reconcileActiveLinks(installed: List<InstalledToolpack>) {
+        val installedById = installed.associateBy { item -> item.manifest.id }
+        rootfsActiveRoot.listFiles().orEmpty().forEach { candidate ->
+            if (Files.isSymbolicLink(candidate.toPath()) && candidate.name !in installedById) {
+                Files.deleteIfExists(candidate.toPath())
+            }
+        }
+        installed.forEach { item ->
+            val installedDirectory = File(item.installedPath)
+            if (!installedDirectory.isDirectory) return@forEach
+            val expected = activeLinkTarget(item.manifest.id, item.manifest.version)
+            val link = File(rootfsActiveRoot, item.manifest.id)
+            val current = if (Files.isSymbolicLink(link.toPath())) {
+                Files.readSymbolicLink(link.toPath())
+            } else {
+                null
+            }
+            if (current != expected) replaceActiveLink(link, expected)
+        }
+    }
+
+    private fun installCommandShims(manifest: ToolpackPackageManifest) {
         rootfsCommandRoot.mkdirs()
         manifest.commands.forEach { command ->
-            val relativeTarget = target.relativeTo(layout.rootfsRoot).invariantSeparatorsPath
-            val chrootExecutable = "/$relativeTarget/${command.relativePath}"
+            val chrootExecutable =
+                "${ToolpackSharedEnvironment.ACTIVE_PACK_ROOT}/${manifest.id}/${command.relativePath}"
             val shim = File(rootfsCommandRoot, command.name)
             val temporary = File(
                 rootfsCommandRoot,
@@ -445,6 +534,41 @@ class ToolpackPackageInstaller(
             )
             Os.chmod(temporary.path, EXECUTABLE_MODE)
             safeMove(temporary, shim)
+        }
+    }
+
+    private fun removeObsoleteCommandShims(
+        previous: ToolpackPackageManifest?,
+        current: ToolpackPackageManifest,
+    ) {
+        val currentCommands = current.commands.map(ToolpackCommand::name).toSet()
+        previous?.commands.orEmpty()
+            .filterNot { command -> command.name in currentCommands }
+            .forEach { command -> removeOwnedCommandShim(current.id, command.name) }
+    }
+
+    private fun removeOwnedCommandShim(toolpackId: String, commandName: String) {
+        val shim = File(rootfsCommandRoot, commandName)
+        val owned = shim.isFile && runCatching {
+            shim.readText(Charsets.UTF_8).contains(toolpackMarker(toolpackId))
+        }.getOrDefault(false)
+        if (owned) Files.deleteIfExists(shim.toPath())
+    }
+
+    private fun restoreInstallMetadata(
+        previous: InstalledToolpack?,
+        failedManifest: ToolpackPackageManifest,
+    ) {
+        failedManifest.commands.forEach { command ->
+            if (previous?.manifest?.commands?.none { old -> old.name == command.name } != false) {
+                removeOwnedCommandShim(failedManifest.id, command.name)
+            }
+        }
+        if (previous == null) {
+            recordFile(failedManifest.id).delete()
+        } else {
+            installCommandShims(previous.manifest)
+            writeInstalledRecord(previous)
         }
     }
 

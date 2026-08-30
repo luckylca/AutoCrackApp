@@ -27,22 +27,28 @@ enum class DangerousOperationDecision {
 }
 
 object MobileAgentDangerousCommandClassifier {
-    private val destructiveDelete = Regex("(?is)(^|[;&|\\n])\\s*(sudo\\s+)?rm\\s+[^\\n;&|]*(-[^\\s]*r[^\\s]*f|-rf|-fr)[^\\n;&|]*(/(?:data|system|vendor|product|odm|apex|proc|sys|dev)(?:/|\\s|$)|/\\s*(?:$|[;&|]))")
-    private val systemWrite = Regex("(?is)(>|>>|tee\\s+|cp\\s+|mv\\s+|install\\s+|chmod\\s+|chown\\s+)[^\\n;&|]*(/(?:system|vendor|product|odm|apex)(?:/|\\s|$))")
-    private val blockWrite = Regex("(?is)(dd\\s+[^\\n;&|]*\\bof=/dev/(?:block|sd|mmc|nvme)|mkfs(?:\\.|\\s)|mkswap\\s+|wipefs\\s+)")
-    private val mountControl = Regex("(?im)(^|[;&|]\\s*)(mount|umount)\\b")
+    // Pi-Agent mode keeps only a minimal last-resort guardrail around operations that can destroy
+    // the device/runtime itself. Normal root administration is intentionally not capability-gated.
+    private val rmCommand = Regex("(?is)(^|[;&|\\n])\\s*(?:sudo\\s+)?rm\\s+([^\\n;&|]+)")
+    private val recursiveFlag = Regex("(?i)(^|\\s)(?:--recursive|-\\S*r\\S*)(?=\\s|$)")
+    private val forceFlag = Regex("(?i)(^|\\s)(?:--force|-\\S*f\\S*)(?=\\s|$)")
+    private val criticalDeleteTarget = Regex(
+        "(?i)(^|\\s|--\\s+)[\\\"']?/(?:data|system|vendor|product|odm|apex|proc|sys|dev)(?:/|[\\\"']?(?:\\s|$))|(^|\\s|--\\s+)[\\\"']?/[\\\"']?(?:\\s|$)",
+    )
+    private val blockWrite = Regex("(?is)(^|[;&|\\n])\\s*(?:sudo\\s+)?(?:dd\\s+[^\\n;&|]*\\bof=/dev/(?:block|sd|mmc|nvme)|(?:mkfs(?:\\.[A-Za-z0-9_-]+)?|mkswap|wipefs)\\b|(?:cat\\b[^\\n;&|]*>|tee\\s+)(?:\\s*)/dev/(?:block|sd|mmc|nvme))")
     private val deviceControl = Regex("(?im)(^|[;&|]\\s*)(reboot|poweroff|halt)\\b")
-    private val packageDataChange = Regex("(?im)(^|[;&|]\\s*)((?:pm|cmd\\s+package)\\s+(?:install(?:-existing)?|uninstall|clear|enable|disable(?:-user)?|grant|revoke|suspend|unsuspend|hide|unhide)\\b)")
-    private val settingsWrite = Regex("(?im)(^|[;&|]\\s*)(settings\\s+(?:put|delete)\\b|setprop\\s+)")
 
     fun classify(script: String): DangerousOperationCategory? = when {
-        destructiveDelete.containsMatchIn(script) -> DangerousOperationCategory.DESTRUCTIVE_DELETE
+        isDestructiveDelete(script) -> DangerousOperationCategory.DESTRUCTIVE_DELETE
         blockWrite.containsMatchIn(script) -> DangerousOperationCategory.BLOCK_DEVICE_WRITE
-        systemWrite.containsMatchIn(script) -> DangerousOperationCategory.SYSTEM_WRITE
-        mountControl.containsMatchIn(script) -> DangerousOperationCategory.MOUNT_CONTROL
         deviceControl.containsMatchIn(script) -> DangerousOperationCategory.DEVICE_CONTROL
-        packageDataChange.containsMatchIn(script) -> DangerousOperationCategory.PACKAGE_DATA_CHANGE
-        settingsWrite.containsMatchIn(script) -> DangerousOperationCategory.SYSTEM_WRITE
         else -> null
+    }
+
+    private fun isDestructiveDelete(script: String): Boolean = rmCommand.findAll(script).any { match ->
+        val arguments = match.groupValues[2]
+        recursiveFlag.containsMatchIn(arguments) &&
+            forceFlag.containsMatchIn(arguments) &&
+            criticalDeleteTarget.containsMatchIn(arguments)
     }
 }

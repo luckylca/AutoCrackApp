@@ -2,6 +2,12 @@ name: Build Android LLDB server toolpack
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/frida-capabilities-1.0.4
+    paths:
+      - '.github/workflows/lldb-server-toolpack.yml'
+      - 'toolpacks/android-lldb-server/**'
 
 permissions:
   contents: read
@@ -19,7 +25,8 @@ jobs:
       NDK_VERSION: "27.3.13750724"
       ANDROID_LLVM_COMMIT: "d8003a456d14a3deb8054cdaa529ffbf02d9b262"
       TOOLPACK_ID: android-lldb-server
-      TOOLPACK_VERSION: android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop
+      TOOLPACK_VERSION: android-llvm-r522817_lldb-14_autocrack-2.0.0
+      LLDB_CLIENT_DEB_SHA256: b05d6bc6ba4ee60746fa1cc2af0c763a79c61cce4c3c6471521dabff8c088551
 
     steps:
       - name: Check out AutoCrackApp
@@ -27,6 +34,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Set up ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Install pinned NDK and build tools
         run: |
@@ -368,121 +380,91 @@ jobs:
           printf '%s\n' "https://android.googlesource.com/toolchain/llvm-project/+/${ANDROID_LLVM_COMMIT}" \
             > dist/source/lldb-server.source-url.txt
 
-      - name: Build deterministic payload and manifest
+      - name: Assemble pinned Debian ARM64 LLDB client runtime
         run: |
           set -euxo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          import stat
-          import zipfile
-          from pathlib import Path
+          mkdir -p dist/lldb-client-root/lib/llvm-14/bin dist/lldb-client-root/lib/lldb-deps dist/source/debian
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist/lldb-client-root:/out" \
+            -v "$PWD/dist/source/debian:/provenance" \
+            debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends lldb-14 python3-lldb-14 pax-utils ca-certificates
+              cp -L /usr/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb
+              cp -L /usr/lib/llvm-14/bin/lldb-argdumper /out/lib/llvm-14/bin/lldb-argdumper
+              if [ -d /usr/lib/llvm-14/lib/python3.11 ]; then
+                mkdir -p /out/lib/llvm-14/lib
+                cp -a /usr/lib/llvm-14/lib/python3.11 /out/lib/llvm-14/lib/
+              fi
+              LLDB_LIB=$(find /usr/lib -type f -o -type l | grep -E "/liblldb-14\.so(\.|$)" | head -n 1)
+              test -n "$LLDB_LIB"
+              {
+                lddtree -l /usr/lib/llvm-14/bin/lldb
+                lddtree -l "$LLDB_LIB"
+              } | sort -u > /tmp/lldb-libraries.txt
+              while IFS= read -r LIBRARY; do
+                test -f "$LIBRARY" || continue
+                NAME=$(basename "$LIBRARY")
+                case "$NAME" in
+                  ld-linux-*|libc.so.*|libdl.so.*|libgcc_s.so.*|libm.so.*|libpthread.so.*|librt.so.*|libstdc++.so.*) continue ;;
+                esac
+                cp -L "$LIBRARY" "/out/lib/lldb-deps/$NAME"
+              done < /tmp/lldb-libraries.txt
+              chmod 0755 /out/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb-argdumper
+              dpkg-query -W -f="${Package}\t${Version}\t${Architecture}\n" | sort > /provenance/dpkg-packages.tsv
+              cp /tmp/lldb-libraries.txt /provenance/lldb-libraries.txt
+              sha256sum /out/lib/llvm-14/bin/lldb /out/lib/lldb-deps/* > /provenance/lldb-runtime.sha256
+            '
+          file dist/lldb-client-root/lib/llvm-14/bin/lldb | tee dist/source/debian/lldb.file.txt
+          grep -Eq 'ELF 64-bit.*(ARM aarch64|ARM64|aarch64)' dist/source/debian/lldb.file.txt
 
-          payload_root = Path('dist/payload')
-          payload_zip = Path('dist/payload.zip')
-          fixed_time = (1980, 1, 1, 0, 0, 0)
-          with zipfile.ZipFile(payload_zip, 'w', compression=zipfile.ZIP_STORED) as archive:
-              for path in sorted(p for p in payload_root.rglob('*') if p.is_file()):
-                  relative = path.relative_to(payload_root).as_posix()
-                  info = zipfile.ZipInfo(relative, fixed_time)
-                  info.create_system = 3
-                  info.compress_type = zipfile.ZIP_STORED
-                  info.external_attr = (stat.S_IFREG | 0o755) << 16
-                  archive.writestr(info, path.read_bytes())
-
-          payload_bytes = payload_zip.read_bytes()
-          payload_sha = hashlib.sha256(payload_bytes).hexdigest()
-          payload_size = len(payload_bytes)
-          binary_sha = hashlib.sha256(Path('dist/payload/bin/lldb-server-android').read_bytes()).hexdigest()
-          source_url = Path('dist/source/lldb-server.source-url.txt').read_text().strip()
-          version = os.environ['TOOLPACK_VERSION']
-          self_test_path = f'/opt/autocrack/toolpacks/packs/android-lldb-server/{version}/bin/lldb-server-android'
-
-          manifest = {
-              'schemaVersion': 1,
-              'id': os.environ['TOOLPACK_ID'],
-              'title': 'Android LLDB server',
-              'version': version,
-              'architecture': 'arm64',
-              'payloadEntry': 'payload.zip',
-              'payloadSha256': payload_sha,
-              'payloadSizeBytes': payload_size,
-              'requiredPaths': ['bin/lldb-server-android'],
-              'commands': [
-                  {'name': 'lldb-server-android', 'relativePath': 'bin/lldb-server-android'}
-              ],
-              'selfTests': [
-                  {
-                      'id': 'lldb-server-android-binary',
-                      'title': 'Android LLDB server payload',
-                      'command': f'test -x {self_test_path} && printf "AUTOCRACK_LLDB_ANDROID_BINARY_OK\\n"',
-                      'expectedExitCodes': [0],
-                      'outputContains': ['AUTOCRACK_LLDB_ANDROID_BINARY_OK']
-                  }
-              ],
-              'sources': [
-                  {
-                      'name': 'lldb-server',
-                      'version': 'android-llvm-r522817-autocrack-seize-runtime-stop',
-                      'url': source_url,
-                      'sha256': binary_sha
-                  }
-              ]
-          }
-
-          Path('dist/manifest.json').write_text(
-              json.dumps(manifest, indent=2) + '\n', encoding='utf-8'
-          )
-          Path('dist/payload.sha256').write_text(payload_sha + '\n', encoding='utf-8')
-          Path('dist/payload.size').write_text(str(payload_size) + '\n', encoding='utf-8')
-          print(f'LLDB_SERVER_BINARY_SHA256={binary_sha}')
-          print(f'LLDB_SERVER_PAYLOAD_SHA256={payload_sha}')
-          print(f'LLDB_SERVER_PAYLOAD_SIZE={payload_size}')
-          PY
-
-      - name: Package deterministic toolpack
+      - name: Package deterministic standard LLDB toolpack twice
         run: |
           set -euxo pipefail
-          python3 - <<'PY'
-          import hashlib
-          import stat
-          import zipfile
-          from pathlib import Path
+          SERVER_SHA=$(sha256sum dist/payload/bin/lldb-server-android | awk '{print $1}')
+          python3 toolpacks/android-lldb-server/build_toolpack.py \
+            --lldb-server dist/payload/bin/lldb-server-android \
+            --lldb-server-sha256 "$SERVER_SHA" \
+            --lldb-client-root dist/lldb-client-root \
+            --lldb-client-source-sha256 "$LLDB_CLIENT_DEB_SHA256" \
+            --output-dir dist/package | tee dist/build-summary.txt
+          python3 toolpacks/android-lldb-server/build_toolpack.py \
+            --lldb-server dist/payload/bin/lldb-server-android \
+            --lldb-server-sha256 "$SERVER_SHA" \
+            --lldb-client-root dist/lldb-client-root \
+            --lldb-client-source-sha256 "$LLDB_CLIENT_DEB_SHA256" \
+            --output-dir dist/package-rerun | tee dist/build-summary-rerun.txt
+          cmp dist/package/payload.sha256 dist/package-rerun/payload.sha256
+          cmp dist/package/payload.size dist/package-rerun/payload.size
+          unzip -t dist/package/AutoCrackApp-android-lldb-server-toolpack.zip
+          jq -e '.id == "android-lldb-server"' dist/package/manifest.json >/dev/null
+          jq -e '.version == "android-llvm-r522817_lldb-14_autocrack-2.0.0"' dist/package/manifest.json >/dev/null
+          jq -e '.commands | map(.name) == ["lldb", "android-lldb-server"]' dist/package/manifest.json >/dev/null
 
-          output = Path('dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip')
-          fixed_time = (1980, 1, 1, 0, 0, 0)
-          with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_STORED) as archive:
-              for name in ('manifest.json', 'payload.zip'):
-                  path = Path('dist') / name
-                  info = zipfile.ZipInfo(name, fixed_time)
-                  info.create_system = 3
-                  info.compress_type = zipfile.ZIP_STORED
-                  info.external_attr = (stat.S_IFREG | 0o644) << 16
-                  archive.writestr(info, path.read_bytes())
-
-          digest = hashlib.sha256(output.read_bytes()).hexdigest()
-          Path(str(output) + '.sha256').write_text(
-              f'{digest}  {output.name}\n', encoding='utf-8'
-          )
-          print(f'LLDB_SERVER_TOOLPACK_SHA256={digest}')
-          PY
-
-          unzip -t dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip
-          jq -e '.id == "android-lldb-server"' dist/manifest.json >/dev/null
-          jq -e '.version == "android-llvm-r522817_autocrack-1.3.0-seize-runtime-stop"' dist/manifest.json >/dev/null
-          jq -e '.selfTests[0].id == "lldb-server-android-binary"' dist/manifest.json >/dev/null
+      - name: Run ARM64 standard LLDB client self-test
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/selftest-payload
+          unzip -q dist/package/payload.zip -d dist/selftest-payload
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist/selftest-payload:/opt/autocrack/toolpacks/active/android-lldb-server:ro" \
+            debian:bookworm-slim /bin/bash -euxc '
+              /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --version | grep -F "lldb version 14.0.6"
+              /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --batch \
+                -o "target create /bin/ls" -o "image list" | grep -F "/bin/ls"
+            '
 
       - name: Upload patched Android LLDB server toolpack
         uses: actions/upload-artifact@v4
         with:
-          name: AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack
+          name: AutoCrackApp-android-lldb-server-standard-toolpack
           path: |
-            dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip
-            dist/AutoCrackApp-android-lldb-server-seize-runtime-stop-toolpack.zip.sha256
-            dist/manifest.json
-            dist/payload.sha256
-            dist/payload.size
+            dist/package/AutoCrackApp-android-lldb-server-toolpack.zip
+            dist/package/AutoCrackApp-android-lldb-server-toolpack.zip.sha256
+            dist/package/manifest.json
+            dist/package/payload.sha256
+            dist/package/payload.size
+            dist/build-summary.txt
             dist/source/
           if-no-files-found: error
           retention-days: 14

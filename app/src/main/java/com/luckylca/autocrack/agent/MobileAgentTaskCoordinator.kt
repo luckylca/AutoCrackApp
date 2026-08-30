@@ -4,6 +4,8 @@ import android.content.Context
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.runtime.AgentExecutionForegroundService
+import com.luckylca.autocrack.runtime.ChrootRuntimeEngine
+import com.luckylca.autocrack.runtime.RootShellRuntimeEngine
 import com.luckylca.autocrack.runtime.RuntimeLayout
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -12,8 +14,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +62,10 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     private val approvalWaiters = ConcurrentHashMap<String, CompletableDeferred<DangerousOperationDecision>>()
     private val mutableApprovals = MutableStateFlow<Map<String, DangerousOperationRequest>>(emptyMap())
     private val mutableTasks = MutableStateFlow(loadAndRecoverTasks())
+    // Start stale-process cleanup as soon as the coordinator is created. A previous Agent may have
+    // been force-stopped or failed after spawning background work (for example a large JADX job).
+    // Do not wait for the next user request before reclaiming those CPU/RAM resources.
+    private val startupProcessCleanup = scope.async { cleanupRecoveredAgentProcesses() }
 
     val tasks: StateFlow<Map<String, MobileAgentTaskSnapshot>> = mutableTasks.asStateFlow()
     val approvals: StateFlow<Map<String, DangerousOperationRequest>> = mutableApprovals.asStateFlow()
@@ -115,9 +124,11 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         val preferences = preferencesStore.load()
         clients[conversationId] = client
         try {
+            startupProcessCleanup.await()
             val initialConversation = requireNotNull(conversationStore.get(conversationId)) { "会话不存在：$conversationId" }
             leaseId = AgentExecutionForegroundService.acquire(
                 appContext,
+                conversationId,
                 initialConversation.title.ifBlank { "Mobile Agent" },
                 "检查运行环境",
             )
@@ -143,6 +154,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                 tools = runtime.tools.tools,
                 dispatcher = runtime.tools::dispatch,
                 maxToolRounds = preferences.maxToolIterations,
+                contextCompressionEnabled = preferences.contextCompressionEnabled,
                 onTextSnapshot = { text ->
                     mutableTasks.value[conversationId]?.let { current ->
                         if (current.stage != "Agent 正在回复") {
@@ -160,7 +172,9 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                 },
                 onStage = { stage ->
                     val label = when {
+                        stage.startsWith("thinking:") -> "Agent 正在思考 · 第 ${stage.substringAfter(':')} 轮"
                         stage == "thinking" -> "Agent 正在思考"
+                        stage.startsWith("compacting:") -> "正在压缩工作上下文 · 第 ${stage.substringAfter(':')} 轮"
                         stage.startsWith("tool:") -> "正在运行 ${stage.removePrefix("tool:")}"
                         else -> stage
                     }
@@ -184,12 +198,42 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
             )
             appendAudit("failed", conversationId, JSONObject().put("error", error.message ?: error::class.java.simpleName))
         } finally {
-            runtimes.remove(conversationId)?.cancelAllCommands?.invoke()
-            runtime?.tools?.closeSafely()
+            val finishedRuntime = runtimes.remove(conversationId) ?: runtime
+            finishedRuntime?.cancelAllCommands?.invoke()
+            withContext(NonCancellable) {
+                runCatching { finishedRuntime?.cleanupSessionProcesses?.invoke() }
+                    .onFailure { cleanupError ->
+                        appendAudit(
+                            "session_process_cleanup_failed",
+                            conversationId,
+                            JSONObject().put("error", cleanupError.message ?: cleanupError::class.java.simpleName),
+                        )
+                    }
+            }
+            finishedRuntime?.tools?.closeSafely()
             clients.remove(conversationId)?.cancelCurrent()
             foregroundLeases.remove(conversationId)
             leaseId?.let { AgentExecutionForegroundService.release(appContext, it) }
             jobs.remove(conversationId)
+        }
+    }
+
+    private suspend fun cleanupRecoveredAgentProcesses() {
+        runCatching {
+            val root = rootDetector.inspect()
+            if (!root.isRootGranted) return@runCatching
+            val suPath = root.suPath ?: return@runCatching
+            val host = RootShellRuntimeEngine(layout = layout, suPath = suPath)
+            val result = ChrootRuntimeEngine(layout, host).cleanupStaleAgentProcesses()
+            check(result.succeeded) {
+                result.failure ?: result.stderr.ifBlank { "遗留 Agent 子进程清理失败：exit=${result.exitCode}" }
+            }
+        }.onFailure { error ->
+            appendAudit(
+                "startup_process_cleanup_failed",
+                "runtime",
+                JSONObject().put("error", error.message ?: error::class.java.simpleName),
+            )
         }
     }
 
@@ -231,7 +275,10 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         client: MobileAgentToolClient,
         conversation: MobileAgentConversation,
     ): MobileAgentConversation {
-        val startIndex = conversation.summaryThroughMessageId?.let { boundary ->
+        val persistedSummaryIsUsable = MobileAgentCompactionPolicy.isUsablePersistedSummary(conversation.summary)
+        val startIndex = conversation.summaryThroughMessageId
+            ?.takeIf { persistedSummaryIsUsable }
+            ?.let { boundary ->
             conversation.messages.indexOfFirst { it.id == boundary }.takeIf { it >= 0 }?.plus(1)
         } ?: 0
         val unsummarized = conversation.messages.drop(startIndex)
@@ -250,17 +297,45 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         if (toCompact.isEmpty()) return conversation
 
         updateRunning(conversationId, "正在压缩较早的会话上下文")
-        appendAudit("compaction", conversationId, JSONObject().put("messageCount", toCompact.size))
-        val summary = client.summarizeForCompaction(
-            config = config,
-            existingSummary = conversation.summary,
-            messages = toCompact,
+        appendAudit(
+            "compaction_started",
+            conversationId,
+            JSONObject()
+                .put("messageCount", toCompact.size)
+                .put("rebuildingInvalidSummary", conversation.summary != null && !persistedSummaryIsUsable),
         )
-        return conversationStore.updateSummary(
+        val summary = try {
+            client.summarizeForCompaction(
+                config = config,
+                existingSummary = conversation.summary.takeIf { persistedSummaryIsUsable },
+                messages = toCompact,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            appendAudit(
+                "compaction_rejected",
+                conversationId,
+                JSONObject()
+                    .put("messageCount", toCompact.size)
+                    .put("error", (error.message ?: error::class.java.simpleName).take(2_000)),
+            )
+            return conversation
+        }
+        val updated = conversationStore.updateSummary(
             conversationId = conversationId,
             summary = summary,
             throughMessageId = toCompact.last().id,
         )
+        appendAudit(
+            "compaction_completed",
+            conversationId,
+            JSONObject()
+                .put("messageCount", toCompact.size)
+                .put("summaryChars", summary.length)
+                .put("throughMessageId", toCompact.last().id),
+        )
+        return updated
     }
 
     private fun appendAudit(event: String, conversationId: String, detail: JSONObject) {
@@ -394,8 +469,8 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     }
 
     companion object {
-        private const val COMPACT_MESSAGE_THRESHOLD = 36
-        private const val COMPACT_CHAR_THRESHOLD = 52_000
+        private const val COMPACT_MESSAGE_THRESHOLD = 96
+        private const val COMPACT_CHAR_THRESHOLD = 180_000
         private const val RECENT_PROTOCOL_MESSAGES = 16
 
         @Volatile

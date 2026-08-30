@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+ROOTFS_HOST=${AUTOC_ROOTFS_HOST_PATH:?tcpdump requires an AutoCrack Mobile Agent session}
+HOST_BINARY="$ROOTFS_HOST/opt/autocrack/toolpacks/active/android-pcap-helper/host-bin/tcpdump"
+TIMEOUT_MS=${AUTOC_TCPDUMP_TIMEOUT_MS:-1800000}
+
+exec android-shell --timeout-ms "$TIMEOUT_MS" -- "$HOST_BINARY" "$@"

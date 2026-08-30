@@ -85,6 +85,7 @@ internal data class DebugUiInfo(
 internal fun MobileAgentSettingsRouter(
     page: AgentSettingsPage,
     onPageChange: (AgentSettingsPage) -> Unit,
+    onBack: () -> Unit,
     savedConfig: LlmProviderConfig?,
     baseUrl: String,
     model: String,
@@ -151,7 +152,7 @@ internal fun MobileAgentSettingsRouter(
             status = configStatus,
             onSave = onSaveConfig,
             onClear = onClearConfig,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
         AgentSettingsPage.AGENT -> AgentSettings(
             preferences = preferences,
@@ -161,14 +162,14 @@ internal fun MobileAgentSettingsRouter(
             onMaxToolIterationsChange = onMaxToolIterationsChange,
             onCompressionChange = onCompressionChange,
             onSave = onSaveAgentPreferences,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
         AgentSettingsPage.ENVIRONMENT -> EnvironmentSettings(
             rootGranted = rootGranted,
             rootProvider = rootProvider,
             rootfsInfo = rootfsInfo,
             onPageChange = onPageChange,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
         AgentSettingsPage.PERMISSION_CHECK -> PermissionCheckSettings(
             checks = environmentChecks,
@@ -176,7 +177,7 @@ internal fun MobileAgentSettingsRouter(
             status = environmentStatus,
             onRefresh = onRefreshEnvironment,
             onRepair = onRepairEnvironment,
-            onBack = { onPageChange(AgentSettingsPage.ENVIRONMENT) },
+            onBack = onBack,
         )
         AgentSettingsPage.ROOTFS -> RootfsSettings(
             info = rootfsInfo,
@@ -185,43 +186,43 @@ internal fun MobileAgentSettingsRouter(
             onStop = onRootfsStop,
             onUpdate = onRootfsUpdate,
             onRebuild = onRootfsRebuild,
-            onBack = { onPageChange(AgentSettingsPage.ENVIRONMENT) },
+            onBack = onBack,
         )
         AgentSettingsPage.TOOLPACKS -> ToolpackSettings(
             installed = installedToolpacks,
             status = toolpackStatus,
             onSelect = { onSelectToolpack(it); onPageChange(AgentSettingsPage.TOOLPACK_DETAIL) },
             onInstall = onInstallToolpack,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
         AgentSettingsPage.TOOLPACK_DETAIL -> ToolpackDetail(
             installed = selectedToolpack,
             status = toolpackStatus,
             onUpdate = onUpdateToolpack,
             onUninstall = onUninstallToolpack,
-            onBack = { onPageChange(AgentSettingsPage.TOOLPACKS) },
+            onBack = onBack,
         )
         AgentSettingsPage.SAFETY -> SafetySettings(
             preferences = preferences,
             onConfirmationChange = onDangerousConfirmationChange,
             onSystemWritePolicyChange = onSystemWritePolicyChange,
             onClearAlwaysAllowed = onClearAlwaysAllowed,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
         AgentSettingsPage.STORAGE -> StorageSettings(
             storage = storage,
             onRefresh = onRefreshStorage,
             onClearCache = onClearCache,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
         AgentSettingsPage.ADVANCED -> AdvancedSettings(
             onPageChange = onPageChange,
-            onBack = { onPageChange(AgentSettingsPage.HOME) },
+            onBack = onBack,
         )
-        AgentSettingsPage.DEBUG -> DebugSettings(debugInfo, onBack = { onPageChange(AgentSettingsPage.ADVANCED) })
-        AgentSettingsPage.AGENT_LOGS -> LogSettings("Agent Logs", agentLog, onBack = { onPageChange(AgentSettingsPage.ADVANCED) })
-        AgentSettingsPage.TOOL_LOGS -> LogSettings("Tool Logs", toolLog, onBack = { onPageChange(AgentSettingsPage.ADVANCED) })
-        AgentSettingsPage.TERMINAL -> MobileAgentTerminalPage(onBack = { onPageChange(AgentSettingsPage.ADVANCED) })
+        AgentSettingsPage.DEBUG -> DebugSettings(debugInfo, onBack = onBack)
+        AgentSettingsPage.AGENT_LOGS -> LogSettings("Agent Logs", agentLog, onBack = onBack)
+        AgentSettingsPage.TOOL_LOGS -> LogSettings("Tool Logs", toolLog, onBack = onBack)
+        AgentSettingsPage.TERMINAL -> MobileAgentTerminalPage(onBack = onBack)
     }
 }
 
@@ -309,9 +310,9 @@ private fun AgentSettings(
         OutlinedTextField(
             modifier = Modifier.fillMaxWidth(),
             value = maxToolIterations,
-            onValueChange = { onMaxToolIterationsChange(it.filter(Char::isDigit).take(2)) },
-            label = { Text("最大 Tool Iterations") },
-            supportingText = { Text("1–64，默认 24") },
+            onValueChange = { onMaxToolIterationsChange(it.filter(Char::isDigit).take(4)) },
+            label = { Text("Tool Iterations 上限") },
+            supportingText = { Text("0 = 自动长任务模式；1–2048 = 手动限制。默认 0，不再按 24 轮停止") },
             singleLine = true,
         )
         Button(modifier = Modifier.fillMaxWidth(), onClick = onSave) { Text("保存 Agent 设置") }

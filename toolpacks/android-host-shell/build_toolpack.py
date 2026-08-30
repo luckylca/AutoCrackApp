@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-VERSION = "android-host-shell-1.0.1"
+VERSION = "android-host-shell-1.0.2"
 TOOLPACK_ID = "android-host-shell"
 OUTPUT_NAME = f"AutoCrackApp-{TOOLPACK_ID}-{VERSION}-toolpack.zip"
 
@@ -57,7 +57,7 @@ def main() -> None:
     payload_hash = sha256(payload_zip)
     payload_size = payload_zip.stat().st_size
     client_hash = sha256(root / "bin/android-shell")
-    pack_root = f"/opt/autocrack/toolpacks/packs/{TOOLPACK_ID}/{VERSION}"
+    pack_root = f"/opt/autocrack/toolpacks/active/{TOOLPACK_ID}"
 
     manifest_data = {
         "schemaVersion": 1,
@@ -97,7 +97,7 @@ def main() -> None:
         "sources": [
             {
                 "name": "android-host-shell-client",
-                "version": "1.0.0",
+                "version": "1.0.2",
                 "url": "https://github.com/luckylca/AutoCrackApp/blob/main/toolpacks/android-host-shell/bin/android-shell",
                 "sha256": client_hash,
             }
@@ -108,6 +108,12 @@ def main() -> None:
 
     output = dist / OUTPUT_NAME
     write_outer(output, manifest, payload_zip)
+    (dist / "payload.sha256").write_text(payload_hash + "\n", encoding="utf-8")
+    (dist / "payload.size").write_text(str(payload_size) + "\n", encoding="utf-8")
+    (dist / f"{output.name}.sha256").write_text(
+        f"{sha256(output)}  {output.name}\n",
+        encoding="utf-8",
+    )
     print(f"TOOLPACK={output}")
     print(f"PAYLOAD_SHA256={payload_hash}")
     print(f"PAYLOAD_SIZE={payload_size}")

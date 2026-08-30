@@ -8,7 +8,13 @@ The production Agent runtime target is `android_rootfs_only`: every Agent-callab
 
 See [Final runtime target](docs/FINAL_RUNTIME_TARGET.md) and [Android/rootfs network capture plan](docs/ANDROID_ROOTFS_NETWORK_CAPTURE.md).
 
-## Current milestone
+## Current architecture
+
+Mobile Pi Agent uses four primitive actions (`exec_bash`, `read_file`, `write_file`, and `kill_process`) in one Debian ARM64 environment. Toolpacks remain independently verified and atomically installed, while active toolpack commands share `/usr/local/bin` and Python, Node, and Java dependencies share their conventional runtime search paths. Mature upstream CLIs and language APIs are the capability surface; AutoCrack helpers are optional conveniences.
+
+Android-host commands run through `android-shell`, which forwards root argv without a command allowlist. Only clearly destructive recursive deletion of critical trees, block-device writes/formatting, and reboot/poweroff/halt require an extra confirmation. Existing typed bridges remain available for legacy UI diagnostics and recovery, but the Mobile Pi Agent does not depend on them.
+
+## Earlier milestone
 
 Phase 5 provides an end-to-end static-analysis Agent MVP:
 
@@ -81,6 +87,6 @@ It does not send APK, DEX, SO, signing-certificate bytes, application private da
 
 ## Safety
 
-Use AutoCrackApp only on applications and devices you own or are explicitly authorized to analyze. The app does not accept arbitrary Root Shell commands. Package names, Android user IDs, source paths, destinations, ownership, permissions, and timeouts are constructed by typed tools defined in application code.
+Use AutoCrackApp only on applications and devices you own or are explicitly authorized to analyze. Mobile Pi Agent intentionally has general Debian Bash and Android host root-command access; the minimal destructive-operation confirmation is not a substitute for authorization or careful review. Toolpack hashes, timeouts, audit logs, process identity checks, loopback validation, and cleanup remain integrity and reliability controls.
 
 See [Phase 5 documentation](docs/PHASE_5.md) for the index schema, privacy boundary, and device test checklist.

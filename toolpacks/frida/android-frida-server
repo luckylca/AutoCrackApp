@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+import time
+
+PID_FILE = "/data/local/tmp/autocrack-frida-server.pid"
+LOG_FILE = "/data/local/tmp/autocrack-frida-server.log"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 27042
+
+
+def host_binary() -> str:
+    root = os.environ.get("AUTOC_ROOTFS_HOST_PATH", "").rstrip("/")
+    if not root:
+        raise SystemExit("android-frida-server requires an AutoCrack Mobile Agent session")
+    return root + "/opt/autocrack/toolpacks/active/android-frida/bin/frida-server-android"
+
+
+def android_shell(*argv: str, timeout_ms: int = 30000) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["android-shell", "--timeout-ms", str(timeout_ms), "--", *argv],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+
+def emit(ok: bool, state: str, **fields) -> int:
+    print(json.dumps({"ok": ok, "state": state, **fields}, sort_keys=True))
+    return 0 if ok else 1
+
+
+def status() -> tuple[bool, dict]:
+    binary = host_binary()
+    script = r'''
+BIN="$1"; PID_FILE="$2"; PORT="$3"
+[ -r "$PID_FILE" ] || exit 3
+PID=$(cat "$PID_FILE")
+case "$PID" in ''|*[!0-9]*) exit 4 ;; esac
+[ -d "/proc/$PID" ] || exit 5
+CMD=$(tr '\000' ' ' < "/proc/$PID/cmdline")
+case "$CMD" in "$BIN "*|"$BIN") ;; *) exit 6 ;; esac
+PORT_HEX=$(printf '%04X' "$PORT")
+grep -Eiq "(^|[[:space:]])0100007F:$PORT_HEX[[:space:]].*[[:space:]]0A[[:space:]]" /proc/net/tcp || exit 7
+VERSION=$($BIN --version 2>/dev/null | head -n 1)
+printf '%s\n%s\n' "$PID" "$VERSION"
+'''
+    result = android_shell(
+        "sh", "-c", script, "autocrack-frida-status", binary, PID_FILE, str(DEFAULT_PORT)
+    )
+    if result.returncode != 0:
+        return False, {"host": DEFAULT_HOST, "port": DEFAULT_PORT, "pid": None, "serverVersion": None}
+    lines = result.stdout.strip().splitlines()
+    if len(lines) < 2 or not lines[0].isdigit():
+        return False, {"host": DEFAULT_HOST, "port": DEFAULT_PORT, "pid": None, "serverVersion": None}
+    return True, {
+        "host": DEFAULT_HOST,
+        "port": DEFAULT_PORT,
+        "pid": int(lines[0]),
+        "serverVersion": lines[1],
+    }
+
+
+def start() -> int:
+    running, details = status()
+    if running:
+        return emit(True, "running", **details)
+    binary = host_binary()
+    script = r'''
+BIN="$1"; PID_FILE="$2"; LOG_FILE="$3"; HOST="$4"; PORT="$5"
+rm -f "$PID_FILE"
+"$BIN" -l "$HOST:$PORT" >"$LOG_FILE" 2>&1 &
+PID=$!
+printf '%s\n' "$PID" > "$PID_FILE"
+printf '%s\n' "$PID"
+'''
+    result = android_shell(
+        "sh", "-c", script, "autocrack-frida-start",
+        binary, PID_FILE, LOG_FILE, DEFAULT_HOST, str(DEFAULT_PORT),
+    )
+    if result.returncode != 0:
+        return emit(False, "start_failed", error=(result.stderr or result.stdout).strip())
+    for _ in range(50):
+        running, details = status()
+        if running:
+            return emit(True, "running", **details)
+        time.sleep(0.1)
+    log = android_shell("sh", "-c", 'tail -n 20 "$1" 2>/dev/null || true', "autocrack-frida-log", LOG_FILE)
+    return emit(False, "start_failed", error=log.stdout.strip() or "server did not become ready")
+
+
+def stop() -> int:
+    running, details = status()
+    if not running:
+        return emit(True, "stopped", **details)
+    binary = host_binary()
+    script = r'''
+BIN="$1"; PID_FILE="$2"; PID="$3"
+CMD=$(tr '\000' ' ' < "/proc/$PID/cmdline")
+case "$CMD" in "$BIN "*|"$BIN") ;; *) exit 6 ;; esac
+kill -TERM "$PID"
+I=0
+while [ -d "/proc/$PID" ] && [ "$I" -lt 30 ]; do sleep 0.1; I=$((I + 1)); done
+[ ! -d "/proc/$PID" ] || exit 7
+rm -f "$PID_FILE"
+'''
+    result = android_shell(
+        "sh", "-c", script, "autocrack-frida-stop",
+        binary, PID_FILE, str(details["pid"]),
+    )
+    if result.returncode != 0:
+        return emit(False, "stop_failed", **details, error=(result.stderr or result.stdout).strip())
+    return emit(True, "stopped", host=DEFAULT_HOST, port=DEFAULT_PORT, pid=None, serverVersion=details["serverVersion"])
+
+
+def main() -> int:
+    action = sys.argv[1] if len(sys.argv) == 2 else ""
+    if action == "start":
+        return start()
+    if action == "status":
+        running, details = status()
+        return emit(running, "running" if running else "stopped", **details)
+    if action == "stop":
+        return stop()
+    print("Usage: android-frida-server {start|status|stop}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

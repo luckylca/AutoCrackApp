@@ -3,11 +3,15 @@ package com.luckylca.autocrack.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.BackEventCompat
 import androidx.core.content.ContextCompat
 
 import android.net.Uri
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,8 +44,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -74,7 +82,10 @@ import com.luckylca.autocrack.runtime.RuntimeRootfsState
 import com.luckylca.autocrack.runtime.ToolpackPackageInstaller
 import java.io.File
 import java.io.RandomAccessFile
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -87,8 +98,14 @@ private enum class MobileAgentMainTab(val label: String) {
 
 private enum class RootfsInstallMode { UPDATE, REBUILD }
 
+private const val RUNNING_CONVERSATION_REFRESH_MILLIS = 1_500L
+private const val CONVERSATION_SEARCH_DEBOUNCE_MILLIS = 250L
+
 @Composable
-fun MobilePiAgentScreen() {
+internal fun MobilePiAgentScreen(
+    routeRequest: MobileAgentRouteRequest? = null,
+    onRouteConsumed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
@@ -107,13 +124,25 @@ fun MobilePiAgentScreen() {
     val environmentProbe = remember(appContext) { MobileAgentEnvironmentProbe(appContext) }
     val ptyManager = remember(appContext) { ChrootPtySessionManager.get(appContext) }
 
-    var tab by remember { mutableStateOf(MobileAgentMainTab.CONVERSATIONS) }
-    var settingsPage by remember { mutableStateOf(AgentSettingsPage.HOME) }
+    val navigationSaver = remember {
+        Saver<MobileAgentNavigationHistory, String>(
+            save = { history -> history.encode() },
+            restore = MobileAgentNavigationHistory::decode,
+        )
+    }
+    var navigation by rememberSaveable(stateSaver = navigationSaver) {
+        mutableStateOf(MobileAgentNavigationHistory.initial(routeRequest?.route))
+    }
+    val currentDestination = navigation.current
+    val predictiveBackProgress = remember { Animatable(0f) }
+    var predictiveBackGestureActive by remember { mutableStateOf(false) }
+    var predictiveBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
     var conversations by remember { mutableStateOf<List<MobileAgentConversation>>(emptyList()) }
     var activeConversation by remember { mutableStateOf<MobileAgentConversation?>(null) }
     var input by remember { mutableStateOf("") }
     var pendingAttachments by remember { mutableStateOf<List<MobileAgentAttachment>>(emptyList()) }
     var searchQuery by remember { mutableStateOf("") }
+    var searchMatchIds by remember { mutableStateOf<Set<String>?>(null) }
     var renameTarget by remember { mutableStateOf<MobileAgentConversation?>(null) }
     var renameInput by remember { mutableStateOf("") }
     var uiStatus by remember { mutableStateOf<String?>(null) }
@@ -149,9 +178,38 @@ fun MobilePiAgentScreen() {
 
     var pendingSave by remember { mutableStateOf<Pair<String, AgentManagedFile>?>(null) }
 
+    fun navigate(destination: MobileAgentDestination) {
+        navigation = navigation.navigate(destination)
+    }
+
+    fun navigateSettings(page: AgentSettingsPage) {
+        navigate(MobileAgentDestination.Settings(page))
+    }
+
+    fun navigateBack() {
+        navigation = navigation.back()
+    }
+
+    PredictiveBackHandler(enabled = navigation.canGoBack) { backEvents ->
+        predictiveBackGestureActive = true
+        try {
+            backEvents.collect { event ->
+                predictiveBackEdge = event.swipeEdge
+                predictiveBackProgress.snapTo(event.progress.coerceIn(0f, 1f))
+            }
+            navigateBack()
+        } catch (_: CancellationException) {
+            predictiveBackProgress.animateTo(0f, animationSpec = tween(durationMillis = 180))
+        } finally {
+            predictiveBackGestureActive = false
+            predictiveBackProgress.snapTo(0f)
+        }
+    }
+
     suspend fun refreshConversations() {
-        conversations = conversationStore.list()
-        activeConversation?.let { active -> activeConversation = conversations.firstOrNull { it.id == active.id } }
+        val activeId = activeConversation?.id
+        conversations = conversationStore.listMetadata()
+        if (activeId != null) activeConversation = conversationStore.get(activeId)
     }
 
     suspend fun refreshRootAndRootfs(refreshEnvironment: Boolean = false) {
@@ -214,10 +272,25 @@ fun MobilePiAgentScreen() {
         refreshLogs()
     }
 
-    val taskStatusKey = tasks.values.sortedBy(MobileAgentTaskSnapshot::conversationId).joinToString { "${it.conversationId}:${it.status.name}:${it.updatedAtEpochMillis}" }
-    LaunchedEffect(taskStatusKey) {
+    val latestTasks by rememberUpdatedState(tasks)
+    val taskLifecycleKey = tasks.values.sortedBy(MobileAgentTaskSnapshot::conversationId)
+        .joinToString { "${it.conversationId}:${it.status.name}:${it.startedAtEpochMillis}" }
+    LaunchedEffect(taskLifecycleKey) {
         refreshConversations()
+        while (latestTasks.values.any { it.status == MobileAgentTaskStatus.RUNNING }) {
+            delay(RUNNING_CONVERSATION_REFRESH_MILLIS)
+            refreshConversations()
+        }
         refreshLogs()
+    }
+    LaunchedEffect(searchQuery, conversations.maxOfOrNull(MobileAgentConversation::updatedAtEpochMillis)) {
+        val query = searchQuery.trim()
+        searchMatchIds = if (query.isBlank()) {
+            null
+        } else {
+            delay(CONVERSATION_SEARCH_DEBOUNCE_MILLIS)
+            conversationStore.searchIds(query)
+        }
     }
     LaunchedEffect(toolpackRefreshKey) { refreshToolpacks() }
     LaunchedEffect(storageRefreshKey) { refreshStorage() }
@@ -227,6 +300,10 @@ fun MobilePiAgentScreen() {
         pendingAttachments = emptyList()
         input = ""
         uiStatus = null
+        scope.launch {
+            val loaded = conversationStore.get(conversation.id) ?: return@launch
+            if (activeConversation?.id == conversation.id) activeConversation = loaded
+        }
     }
 
     fun newConversation() {
@@ -234,15 +311,26 @@ fun MobilePiAgentScreen() {
             val conversation = conversationStore.create()
             refreshConversations()
             openConversation(conversation)
-            tab = MobileAgentMainTab.CONVERSATIONS
+            navigate(MobileAgentDestination.Conversations)
         }
+    }
+
+    LaunchedEffect(routeRequest?.sequence) {
+        val request = routeRequest ?: return@LaunchedEffect
+        when (val route = request.route) {
+            is MobileAgentLaunchRoute.Conversation -> {
+                navigation = navigation.navigate(MobileAgentDestination.Conversations)
+                conversationStore.get(route.conversationId)?.let(::openConversation)
+            }
+            MobileAgentLaunchRoute.Terminal -> navigateSettings(AgentSettingsPage.TERMINAL)
+        }
+        onRouteConsumed()
     }
 
     fun sendMessage() {
         val config = savedConfig
         if (config == null) {
-            tab = MobileAgentMainTab.SETTINGS
-            settingsPage = AgentSettingsPage.MODEL
+            navigateSettings(AgentSettingsPage.MODEL)
             configStatus = "请先配置 API"
             return
         }
@@ -377,9 +465,16 @@ fun MobilePiAgentScreen() {
 
     val debugInfo = buildDebugInfo(activeConversation, savedConfig?.model, layout.readRootfsState(), activeConversation?.id?.let { tasks[it] })
 
-    Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    val renderDestination: @Composable (MobileAgentDestination) -> Unit = { destination ->
+        val destinationTab = when (destination) {
+            MobileAgentDestination.Conversations -> MobileAgentMainTab.CONVERSATIONS
+            is MobileAgentDestination.Settings -> MobileAgentMainTab.SETTINGS
+        }
+        val destinationSettingsPage = (destination as? MobileAgentDestination.Settings)?.page ?: AgentSettingsPage.HOME
+
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (tab) {
+            when (destinationTab) {
                 MobileAgentMainTab.CONVERSATIONS -> MobileAgentConversationPage(
                     conversations = conversations,
                     activeConversation = activeConversation,
@@ -387,6 +482,7 @@ fun MobilePiAgentScreen() {
                     onInputChange = { input = it },
                     pendingAttachments = pendingAttachments,
                     searchQuery = searchQuery,
+                    searchMatchIds = searchMatchIds,
                     onSearchChange = { searchQuery = it },
                     taskForConversation = { id -> tasks[id] },
                     uiStatus = uiStatus,
@@ -416,7 +512,7 @@ fun MobilePiAgentScreen() {
                                 .onFailure { uiStatus = it.message }
                         }
                     },
-                    onOpenApiSettings = { tab = MobileAgentMainTab.SETTINGS; settingsPage = AgentSettingsPage.MODEL },
+                    onOpenApiSettings = { navigateSettings(AgentSettingsPage.MODEL) },
                     onOpenFile = { file ->
                         val conversationId = activeConversation?.id
                         if (conversationId != null) {
@@ -443,8 +539,9 @@ fun MobilePiAgentScreen() {
                 )
 
                 MobileAgentMainTab.SETTINGS -> MobileAgentSettingsRouter(
-                    page = settingsPage,
-                    onPageChange = { settingsPage = it },
+                    page = destinationSettingsPage,
+                    onPageChange = ::navigateSettings,
+                    onBack = ::navigateBack,
                     savedConfig = savedConfig,
                     baseUrl = baseUrlInput,
                     model = modelInput,
@@ -495,7 +592,7 @@ fun MobilePiAgentScreen() {
                     onRefreshEnvironment = { scope.launch { refreshRootAndRootfs(refreshEnvironment = true) } },
                     onRepairEnvironment = { check ->
                         when (check.id) {
-                            "rootfs" -> settingsPage = AgentSettingsPage.ROOTFS
+                            "rootfs" -> navigateSettings(AgentSettingsPage.ROOTFS)
                             "notifications" -> notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     },
@@ -520,7 +617,7 @@ fun MobilePiAgentScreen() {
                         scope.launch {
                             toolpackStatus = "正在卸载 ${pack.manifest.title}"
                             runCatching { toolpackInstaller.uninstall(pack.manifest.id) { toolpackStatus = it } }
-                                .onSuccess { selectedToolpack = null; settingsPage = AgentSettingsPage.TOOLPACKS; toolpackRefreshKey += 1 }
+                                .onSuccess { selectedToolpack = null; navigateBack(); toolpackRefreshKey += 1 }
                                 .onFailure { toolpackStatus = "卸载失败：${it.message}" }
                         }
                     },
@@ -561,11 +658,13 @@ fun MobilePiAgentScreen() {
         NavigationBar {
             MobileAgentMainTab.entries.forEach { item ->
                 NavigationBarItem(
-                    selected = tab == item,
+                    selected = destinationTab == item,
                     onClick = {
-                        tab = item
+                        when (item) {
+                            MobileAgentMainTab.CONVERSATIONS -> navigate(MobileAgentDestination.Conversations)
+                            MobileAgentMainTab.SETTINGS -> navigateSettings(AgentSettingsPage.HOME)
+                        }
                         if (item == MobileAgentMainTab.SETTINGS) {
-                            settingsPage = AgentSettingsPage.HOME
                             scope.launch { refreshLogs(); refreshStorage() }
                         }
                     },
@@ -573,6 +672,32 @@ fun MobilePiAgentScreen() {
                     label = { Text(item.label) },
                 )
             }
+        }
+    }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        if (predictiveBackGestureActive) {
+            navigation.previous?.let { previousDestination ->
+                Box(
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        val progress = predictiveBackProgress.value
+                        val direction = if (predictiveBackEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                        translationX = -direction * size.width * 0.05f * (1f - progress)
+                    },
+                ) {
+                    renderDestination(previousDestination)
+                }
+            }
+        }
+        Box(
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                val progress = predictiveBackProgress.value
+                val direction = if (predictiveBackEdge == BackEventCompat.EDGE_RIGHT) -1f else 1f
+                translationX = direction * size.width * progress
+            },
+        ) {
+            renderDestination(currentDestination)
         }
     }
 }

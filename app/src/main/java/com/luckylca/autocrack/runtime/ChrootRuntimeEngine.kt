@@ -10,6 +10,7 @@ import org.json.JSONObject
 class ChrootRuntimeEngine(
     private val layout: RuntimeLayout,
     private val hostEngine: RootShellRuntimeEngine,
+    private val workspaceRoot: File? = null,
     private val onStage: (String) -> Unit = {},
 ) : RuntimeEngine {
     override val mode: RuntimeCapabilityMode = RuntimeCapabilityMode.FULL_ROOT
@@ -27,7 +28,7 @@ class ChrootRuntimeEngine(
         val executionToken = UUID.randomUUID().toString()
         return try {
             onStage("workspace_enter")
-            val workspace = layout.createRuntimeWorkspace()
+            val workspace = (workspaceRoot ?: layout.createRuntimeWorkspace()).canonicalFile
             onStage("workspace_ready")
             onStage("mount_enter")
             val mountResult = performPrepareMounts(workspace)
@@ -97,6 +98,26 @@ class ChrootRuntimeEngine(
         hostEngine.execute(
             ShellCommandRequest(
                 command = ChrootOrphanCleanupCommandBuilder.build(executionToken),
+                workingDirectory = layout.runtimeRoot.path,
+                timeoutMillis = ORPHAN_CLEANUP_TIMEOUT_MILLIS,
+                identity = HostExecutionIdentity.ROOT,
+            ),
+        )
+
+    suspend fun cleanupStaleAgentProcesses(): ShellCommandResult =
+        hostEngine.execute(
+            ShellCommandRequest(
+                command = ChrootStaleAgentCleanupCommandBuilder.build(),
+                workingDirectory = layout.runtimeRoot.path,
+                timeoutMillis = ORPHAN_CLEANUP_TIMEOUT_MILLIS,
+                identity = HostExecutionIdentity.ROOT,
+            ),
+        )
+
+    suspend fun cleanupAgentSessionProcesses(sessionId: String): ShellCommandResult =
+        hostEngine.execute(
+            ShellCommandRequest(
+                command = ChrootAgentSessionCleanupCommandBuilder.build(sessionId),
                 workingDirectory = layout.runtimeRoot.path,
                 timeoutMillis = ORPHAN_CLEANUP_TIMEOUT_MILLIS,
                 identity = HostExecutionIdentity.ROOT,
@@ -256,6 +277,81 @@ internal object ChrootOrphanCleanupCommandBuilder {
     }
 }
 
+internal object ChrootStaleAgentCleanupCommandBuilder {
+    fun build(): String {
+        val marker = ShellEscaper.quote("AUTOC_AGENT_MODE=raw_bash")
+        return """
+            set -eu
+            MARKER=$marker
+            find_tagged_pids() {
+              grep -a -l -F -- "${'$'}MARKER" /proc/[0-9]*/environ 2>/dev/null |
+                while IFS= read -r ENV_FILE; do
+                  PID=${'$'}{ENV_FILE#/proc/}
+                  PID=${'$'}{PID%/environ}
+                  case "${'$'}PID" in ''|*[!0-9]*) continue ;; esac
+                  [ "${'$'}PID" -gt 1 ] && printf '%s\n' "${'$'}PID"
+                done
+            }
+
+            PIDS=${'$'}(find_tagged_pids | sort -nr -u)
+            for PID in ${'$'}PIDS; do kill -TERM "${'$'}PID" 2>/dev/null || true; done
+            [ -z "${'$'}PIDS" ] || sleep 1
+
+            REMAINING=${'$'}(find_tagged_pids | sort -nr -u)
+            for PID in ${'$'}REMAINING; do kill -KILL "${'$'}PID" 2>/dev/null || true; done
+            [ -z "${'$'}REMAINING" ] || sleep 1
+
+            FINAL=${'$'}(find_tagged_pids | sort -nr -u)
+            [ -z "${'$'}FINAL" ] || {
+              printf 'CHROOT_STALE_AGENT_CLEANUP_REMAINING=%s\n' "${'$'}FINAL" >&2
+              exit 1
+            }
+            printf 'CHROOT_STALE_AGENT_CLEANUP_OK term=%s kill=%s\n' \
+              "${'$'}(printf '%s\n' "${'$'}PIDS" | awk 'NF {n++} END {print n+0}')" \
+              "${'$'}(printf '%s\n' "${'$'}REMAINING" | awk 'NF {n++} END {print n+0}')"
+        """.trimIndent()
+    }
+}
+
+internal object ChrootAgentSessionCleanupCommandBuilder {
+    private val SESSION_ID_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+    fun build(sessionId: String): String {
+        require(SESSION_ID_REGEX.matches(sessionId)) { "非法 Agent session id" }
+        val marker = ShellEscaper.quote("AUTOC_AGENT_SESSION_ID=$sessionId")
+        return """
+            set -eu
+            MARKER=$marker
+            find_tagged_pids() {
+              grep -a -l -F -- "${'$'}MARKER" /proc/[0-9]*/environ 2>/dev/null |
+                while IFS= read -r ENV_FILE; do
+                  PID=${'$'}{ENV_FILE#/proc/}
+                  PID=${'$'}{PID%/environ}
+                  case "${'$'}PID" in ''|*[!0-9]*) continue ;; esac
+                  [ "${'$'}PID" -gt 1 ] && printf '%s\n' "${'$'}PID"
+                done
+            }
+
+            PIDS=${'$'}(find_tagged_pids | sort -nr -u)
+            for PID in ${'$'}PIDS; do kill -TERM "${'$'}PID" 2>/dev/null || true; done
+            [ -z "${'$'}PIDS" ] || sleep 1
+
+            REMAINING=${'$'}(find_tagged_pids | sort -nr -u)
+            for PID in ${'$'}REMAINING; do kill -KILL "${'$'}PID" 2>/dev/null || true; done
+            [ -z "${'$'}REMAINING" ] || sleep 1
+
+            FINAL=${'$'}(find_tagged_pids | sort -nr -u)
+            [ -z "${'$'}FINAL" ] || {
+              printf 'CHROOT_AGENT_SESSION_CLEANUP_REMAINING=%s\n' "${'$'}FINAL" >&2
+              exit 1
+            }
+            printf 'CHROOT_AGENT_SESSION_CLEANUP_OK term=%s kill=%s\n' \
+              "${'$'}(printf '%s\n' "${'$'}PIDS" | awk 'NF {n++} END {print n+0}')" \
+              "${'$'}(printf '%s\n' "${'$'}REMAINING" | awk 'NF {n++} END {print n+0}')"
+        """.trimIndent()
+    }
+}
+
 object ChrootCommandBuilder {
     fun build(rootfsPath: String, request: ShellCommandRequest): String {
         require(request.workingDirectory.startsWith('/')) {
@@ -275,9 +371,11 @@ object ChrootCommandBuilder {
             "JAVA_HOME" to "/usr/lib/jvm/java-17-openjdk-arm64",
             "PATH" to "/usr/lib/jvm/java-17-openjdk-arm64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "AUTOC_WORKSPACE" to "/workspace",
+            "AUTOC_ROOTFS_HOST_PATH" to rootfsPath,
         ).apply { putAll(request.environment) }
 
         val inner = buildString {
+            append(ToolpackSharedEnvironment.shellBootstrap()).append('\n')
             append("cd -- ").append(ShellEscaper.quote(request.workingDirectory))
                 .append(" || exit 125\n")
             append("exec /bin/bash --noprofile --norc -lc ")

@@ -84,6 +84,144 @@ class MobileAgentToolClientTest {
         assertEquals("done", messages.getJSONObject(5).getString("content"))
     }
 
+    @Test
+    fun protocolCapsLargeToolResultsSentBackToModel() {
+        val largeResult = "x".repeat(50_000)
+        val conversation = MobileAgentConversation(
+            id = "session-large-tool",
+            title = "test",
+            createdAtEpochMillis = 1,
+            updatedAtEpochMillis = 2,
+            messages = listOf(
+                message("user", MobileAgentRole.USER, "inspect", 1),
+                MobileAgentMessage(
+                    id = "tool-result",
+                    role = MobileAgentRole.TOOL,
+                    content = largeResult,
+                    createdAtEpochMillis = 2,
+                    toolCallId = "call-large",
+                    toolName = "exec_bash",
+                ),
+            ),
+        )
+
+        val messages = MobileAgentToolClient().buildProtocolMessagesForTesting("system", conversation)
+        val modelToolContent = messages.getJSONObject(2).getString("content")
+
+        assertEquals(16_000, modelToolContent.length)
+        assertEquals(50_000, conversation.messages.last().content.length)
+    }
+
+    @Test
+    fun loopCompactionKeepsUserAnchorAndCompleteToolCallGroup() {
+        val messages = JSONArray()
+            .put(JSONObject().put("role", "system").put("content", "system"))
+            .put(JSONObject().put("role", "user").put("content", "original task"))
+        repeat(8) { index ->
+            val callId = "old-call-$index"
+            messages
+                .put(assistantToolCall(callId))
+                .put(toolResult(callId))
+        }
+        val retainedCallIds = listOf("recent-call-1", "recent-call-2")
+        messages.put(
+            JSONObject()
+                .put("role", "assistant")
+                .put("content", JSONObject.NULL)
+                .put(
+                    "tool_calls",
+                    JSONArray().apply { retainedCallIds.forEach { put(toolCall(it)) } },
+                ),
+        )
+        retainedCallIds.forEach { messages.put(toolResult(it)) }
+
+        val compacted = MobileAgentToolClient()
+            .buildCompactedLoopMessagesForTesting(messages, "verified state")
+
+        assertEquals("system", compacted.getJSONObject(0).getString("role"))
+        assertEquals("user", compacted.getJSONObject(1).getString("role"))
+        assertTrue(compacted.getJSONObject(1).getString("content").contains("verified state"))
+        val retainedAssistant = compacted.getJSONObject(compacted.length() - 3)
+        assertEquals("assistant", retainedAssistant.getString("role"))
+        assertEquals(
+            retainedCallIds,
+            retainedAssistant.getJSONArray("tool_calls").let { calls ->
+                List(calls.length()) { calls.getJSONObject(it).getString("id") }
+            },
+        )
+        assertEquals("recent-call-1", compacted.getJSONObject(compacted.length() - 2).getString("tool_call_id"))
+        assertEquals("recent-call-2", compacted.getJSONObject(compacted.length() - 1).getString("tool_call_id"))
+    }
+
+    @Test
+    fun brokenPersistedSummaryDoesNotHideOriginalMessages() {
+        val conversation = MobileAgentConversation(
+            id = "broken-summary",
+            title = "test",
+            createdAtEpochMillis = 1,
+            updatedAtEpochMillis = 2,
+            summary = "# 长",
+            summaryThroughMessageId = "old-assistant",
+            messages = listOf(
+                message("old-user", MobileAgentRole.USER, "find OfflineFeedParam", 1),
+                message("old-assistant", MobileAgentRole.ASSISTANT, "found FeedCacheConfigItem.maxSize", 2),
+            ),
+        )
+
+        val messages = MobileAgentToolClient().buildProtocolMessagesForTesting("system", conversation)
+
+        assertEquals(3, messages.length())
+        assertTrue(messages.getJSONObject(1).getString("content").contains("OfflineFeedParam"))
+        assertTrue(messages.getJSONObject(2).getString("content").contains("FeedCacheConfigItem.maxSize"))
+    }
+
+    @Test
+    fun generatedCheckpointRejectsTruncatedPlaceholder() {
+        assertFalse(MobileAgentCompactionPolicy.isUsablePersistedSummary("# 长"))
+        assertTrue(
+            MobileAgentCompactionPolicy.generatedSummaryError("# 长", "OfflineFeedParam") != null,
+        )
+    }
+
+    @Test
+    fun sourceContextKeepsLatestCorrectionsAndStableIdentifiers() {
+        val messages = buildList {
+            add(message("goal", MobileAgentRole.USER, "修改缓存视频个数", 1))
+            repeat(80) { index ->
+                add(message("tool-$index", MobileAgentRole.TOOL, "noise-$index ${"x".repeat(300)}", index + 2L))
+            }
+            add(message("finding", MobileAgentRole.ASSISTANT, "找到 OfflineFeedParam 和 FeedCacheConfigItem.maxSize", 100))
+            add(message("correction", MobileAgentRole.USER, "不要重新搜索，沿 C22590py/C22600pz 的引用继续", 101))
+        }
+
+        val context = MobileAgentCompactionPolicy.buildSourceContext(messages, 8_000)
+
+        assertTrue(context.contains("不要重新搜索"))
+        assertTrue(context.contains("OfflineFeedParam"))
+        assertTrue(context.contains("FeedCacheConfigItem.maxSize"))
+        assertTrue(context.contains("C22590py/C22600pz"))
+    }
+
+    private fun assistantToolCall(callId: String): JSONObject = JSONObject()
+        .put("role", "assistant")
+        .put("content", JSONObject.NULL)
+        .put("tool_calls", JSONArray().put(toolCall(callId)))
+
+    private fun toolCall(callId: String): JSONObject = JSONObject()
+        .put("id", callId)
+        .put("type", "function")
+        .put(
+            "function",
+            JSONObject()
+                .put("name", "exec_bash")
+                .put("arguments", "{\"script\":\"pwd\"}"),
+        )
+
+    private fun toolResult(callId: String): JSONObject = JSONObject()
+        .put("role", "tool")
+        .put("tool_call_id", callId)
+        .put("content", "{\"ok\":true}")
+
     private fun message(
         id: String,
         role: MobileAgentRole,

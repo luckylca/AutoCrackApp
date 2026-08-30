@@ -33,9 +33,11 @@ class PtySessionForegroundService : Service() {
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID) ?: "unknown"
         val pid = intent?.getIntExtra(EXTRA_PID, -1) ?: -1
         val launchIntent = Intent(this, MainActivity::class.java)
+            .setAction(MainActivity.ACTION_OPEN_TERMINAL)
+            .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
+            NOTIFICATION_ID,
             launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )

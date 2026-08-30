@@ -1,0 +1,161 @@
+name: Build Android host and pcap toolpacks
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/frida-capabilities-1.0.4
+    paths:
+      - '.github/workflows/support-toolpacks.yml'
+      - 'toolpacks/android-host-shell/**'
+      - 'toolpacks/android-pcap-helper/**'
+      - 'toolpacks/pcap-analysis/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: support-toolpacks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android-host-shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build twice and verify deterministic payload
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/android-host-shell/build_toolpack.py | tee /tmp/first.txt
+          cp toolpacks/android-host-shell/dist/payload.sha256 /tmp/payload.first.sha256
+          cp toolpacks/android-host-shell/dist/payload.size /tmp/payload.first.size
+          python3 toolpacks/android-host-shell/build_toolpack.py | tee /tmp/second.txt
+          cmp /tmp/payload.first.sha256 toolpacks/android-host-shell/dist/payload.sha256
+          cmp /tmp/payload.first.size toolpacks/android-host-shell/dist/payload.size
+          unzip -t toolpacks/android-host-shell/dist/AutoCrackApp-android-host-shell-android-host-shell-1.0.2-toolpack.zip
+          toolpacks/android-host-shell/dist/payload/bin/android-shell --self-test | grep -Fx ANDROID_HOST_SHELL_CLIENT_OK
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-host-shell-toolpack
+          path: |
+            toolpacks/android-host-shell/dist/*toolpack.zip
+            toolpacks/android-host-shell/dist/*toolpack.zip.sha256
+            toolpacks/android-host-shell/dist/manifest.json
+            toolpacks/android-host-shell/dist/payload.sha256
+            toolpacks/android-host-shell/dist/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  pcap-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build twice and verify deterministic payload
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/pcap-analysis/build_toolpack.py --output-dir dist/pcap-analysis | tee /tmp/first.txt
+          cp dist/pcap-analysis/payload.sha256 /tmp/payload.first.sha256
+          cp dist/pcap-analysis/payload.size /tmp/payload.first.size
+          python3 toolpacks/pcap-analysis/build_toolpack.py --output-dir dist/pcap-analysis-rerun | tee /tmp/second.txt
+          cmp /tmp/payload.first.sha256 dist/pcap-analysis-rerun/payload.sha256
+          cmp /tmp/payload.first.size dist/pcap-analysis-rerun/payload.size
+          unzip -t dist/pcap-analysis/AutoCrackApp-rootfs-pcap-analysis-toolpack.zip
+          python3 toolpacks/pcap-analysis/bin/pcap-summary --self-test | grep -Fx PCAP_SUMMARY_SELF_TEST_OK
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-rootfs-pcap-analysis-toolpack
+          path: |
+            dist/pcap-analysis/*toolpack.zip
+            dist/pcap-analysis/*toolpack.zip.sha256
+            dist/pcap-analysis/manifest.json
+            dist/pcap-analysis/payload.sha256
+            dist/pcap-analysis/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  android-tcpdump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NDK_VERSION: 27.3.13750724
+      TCPDUMP_VERSION: 4.99.5
+      TCPDUMP_SOURCE_SHA256: d76395ab82d659d526291b013eee200201380930793531515abfc6e77b4f2ee5
+      LIBPCAP_VERSION: 1.10.5
+      LIBPCAP_SOURCE_SHA256: 84fa89ac6d303028c1c5b754abff77224f45eca0a94eb1a34ff0aa9ceece3925
+    steps:
+      - uses: actions/checkout@v4
+      - uses: android-actions/setup-android@v3
+      - name: Install pinned NDK and build tools
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "ndk;${NDK_VERSION}" cmake ninja
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends curl file jq ninja-build unzip
+      - name: Download and verify tcpdump and libpcap sources
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/source
+          curl --fail --location --retry 4 --retry-all-errors \
+            -o dist/source/tcpdump.tar.xz "https://www.tcpdump.org/release/tcpdump-${TCPDUMP_VERSION}.tar.xz"
+          curl --fail --location --retry 4 --retry-all-errors \
+            -o dist/source/libpcap.tar.xz "https://www.tcpdump.org/release/libpcap-${LIBPCAP_VERSION}.tar.xz"
+          printf '%s  %s\n' "$TCPDUMP_SOURCE_SHA256" dist/source/tcpdump.tar.xz | sha256sum -c -
+          printf '%s  %s\n' "$LIBPCAP_SOURCE_SHA256" dist/source/libpcap.tar.xz | sha256sum -c -
+          tar -xJf dist/source/tcpdump.tar.xz -C dist/source
+          tar -xJf dist/source/libpcap.tar.xz -C dist/source
+      - name: Cross-compile static Android ARM64 tcpdump
+        run: |
+          set -euxo pipefail
+          NDK="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+          cmake -S "dist/source/libpcap-${LIBPCAP_VERSION}" -B dist/build-libpcap -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=26 -DBUILD_SHARED_LIBS=OFF \
+            -DDISABLE_DBUS=ON -DDISABLE_RDMA=ON -DENABLE_REMOTE=OFF \
+            -DCMAKE_INSTALL_PREFIX="$PWD/dist/libpcap-install"
+          cmake --build dist/build-libpcap
+          cmake --install dist/build-libpcap
+          cmake -S "dist/source/tcpdump-${TCPDUMP_VERSION}" -B dist/build-tcpdump -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=26 \
+            -DPCAP_INCLUDE_DIR="$PWD/dist/libpcap-install/include" \
+            -DPCAP_LIBRARY="$PWD/dist/libpcap-install/lib/libpcap.a" \
+            -DWITH_CRYPTO=OFF
+          cmake --build dist/build-tcpdump
+          cp dist/build-tcpdump/tcpdump dist/tcpdump-android-arm64
+          chmod 0755 dist/tcpdump-android-arm64
+          file dist/tcpdump-android-arm64 | tee dist/source/tcpdump.file.txt
+          grep -Eq 'ELF 64-bit.*(ARM aarch64|ARM64|aarch64)' dist/source/tcpdump.file.txt
+          sha256sum dist/tcpdump-android-arm64 > dist/source/tcpdump.binary.sha256
+      - name: Package twice and verify deterministic payload
+        run: |
+          set -euxo pipefail
+          BINARY_SHA=$(sha256sum dist/tcpdump-android-arm64 | awk '{print $1}')
+          python3 toolpacks/android-pcap-helper/build_toolpack.py \
+            --tcpdump dist/tcpdump-android-arm64 --tcpdump-sha256 "$BINARY_SHA" \
+            --tcpdump-source-sha256 "$TCPDUMP_SOURCE_SHA256" \
+            --libpcap-source-sha256 "$LIBPCAP_SOURCE_SHA256" \
+            --output-dir dist/android-pcap | tee /tmp/first.txt
+          python3 toolpacks/android-pcap-helper/build_toolpack.py \
+            --tcpdump dist/tcpdump-android-arm64 --tcpdump-sha256 "$BINARY_SHA" \
+            --tcpdump-source-sha256 "$TCPDUMP_SOURCE_SHA256" \
+            --libpcap-source-sha256 "$LIBPCAP_SOURCE_SHA256" \
+            --output-dir dist/android-pcap-rerun | tee /tmp/second.txt
+          cmp dist/android-pcap/payload.sha256 dist/android-pcap-rerun/payload.sha256
+          cmp dist/android-pcap/payload.size dist/android-pcap-rerun/payload.size
+          unzip -t dist/android-pcap/AutoCrackApp-android-pcap-helper-toolpack.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-pcap-helper-toolpack
+          path: |
+            dist/android-pcap/*toolpack.zip
+            dist/android-pcap/*toolpack.zip.sha256
+            dist/android-pcap/manifest.json
+            dist/android-pcap/payload.sha256
+            dist/android-pcap/payload.size
+            dist/source/*.sha256
+            dist/source/*.txt
+          if-no-files-found: error
+          retention-days: 14

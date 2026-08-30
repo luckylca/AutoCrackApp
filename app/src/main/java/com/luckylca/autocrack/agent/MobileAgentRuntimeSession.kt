@@ -7,4 +7,5 @@ data class MobileAgentRuntimeSession(
     val installedToolpacks: List<InstalledToolpack>,
     val workspacePath: String,
     val cancelAllCommands: () -> Int,
+    val cleanupSessionProcesses: suspend () -> Unit = {},
 )

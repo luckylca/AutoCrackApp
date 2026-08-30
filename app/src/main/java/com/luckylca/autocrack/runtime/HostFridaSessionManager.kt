@@ -504,9 +504,10 @@ class HostFridaSessionManager(
         val parsed = parseClientResult(result.stdout)
         val detachVerified = waitForTargetDetached(session)
         val operationFailure = when {
+            parsed != null && !parsed.optBoolean("ok", false) ->
+                parsed.optString("error").ifBlank { "Frida RPC 返回失败" }
             !result.succeeded -> result.failure ?: result.stderr.ifBlank { "Frida client exit=${result.exitCode}" }
             parsed == null -> "Frida client 未返回有效 JSON"
-            !parsed.optBoolean("ok", false) -> parsed.optString("error").ifBlank { "Frida RPC 返回失败" }
             !detachVerified -> "Frida RPC 完成后目标 TracerPid 未恢复为 0"
             else -> null
         }
@@ -830,7 +831,7 @@ class HostFridaSessionManager(
 
     companion object {
         const val TOOLPACK_ID = "android-frida"
-        const val TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.0.3"
+        const val TOOLPACK_VERSION = "frida-17.17.0-autocrack-1.1.0"
         const val DEFAULT_PORT = 27042
         const val MIN_MANAGED_PORT = 10_240
         const val MAX_MANAGED_PORT = 65_535
