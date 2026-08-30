@@ -1,5 +1,8 @@
 *.iml
 .gradle/
+.gradle-simplehook/
+/dist/
+/toolpacks/simplehook/dist/
 .idea/
 local.properties
 .DS_Store

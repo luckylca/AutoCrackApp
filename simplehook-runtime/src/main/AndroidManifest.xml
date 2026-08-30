@@ -1,0 +1,28 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        tools:ignore="DataExtractionRules,MissingApplicationIcon">
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="Runtime Java method debugger for authorized test apps" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <meta-data android:name="xposedsharedprefs" android:value="true" />
+
+        <provider
+            android:name=".SimpleHookProvider"
+            android:authorities="com.luckylca.simplehook.runtime"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
+
+        <receiver
+            android:name=".RuntimeEventReceiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="com.luckylca.simplehook.runtime.EVENT" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
