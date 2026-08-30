@@ -50,6 +50,17 @@ internal fun parseInstalledToolpackRecord(
     )
 }
 
+internal fun obsoleteToolpackCommandNames(
+    previous: List<ToolpackCommand>,
+    current: List<ToolpackCommand>,
+): Set<String> {
+    val currentNames = current.map(ToolpackCommand::name).toSet()
+    return previous
+        .map(ToolpackCommand::name)
+        .filterNot(currentNames::contains)
+        .toSet()
+}
+
 class ToolpackPackageInstaller(
     context: Context,
     private val layout: RuntimeLayout,
@@ -572,10 +583,8 @@ class ToolpackPackageInstaller(
         previous: ToolpackPackageManifest?,
         current: ToolpackPackageManifest,
     ) {
-        val currentCommands = current.commands.map(ToolpackCommand::name).toSet()
-        previous?.commands.orEmpty()
-            .filterNot { command -> command.name in currentCommands }
-            .forEach { command -> removeOwnedCommandShim(current.id, command.name) }
+        obsoleteToolpackCommandNames(previous?.commands.orEmpty(), current.commands)
+            .forEach { commandName -> removeOwnedCommandShim(current.id, commandName) }
     }
 
     private fun removeOwnedCommandShim(toolpackId: String, commandName: String) {

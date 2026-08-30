@@ -18,4 +18,21 @@ class ToolpackPackageInstallerPathPolicyTest {
         assertFalse(isToolpackExecutableRequiredPath("lib/liblldb.so"))
         assertFalse(isToolpackExecutableRequiredPath("libexec/agent.js"))
     }
+
+    @Test
+    fun lldbUpgrade_marksOnlyLegacyCommandShimAsObsolete() {
+        val previous = listOf(
+            ToolpackCommand("lldb-server-android", "bin/lldb-server-android"),
+        )
+        val current = listOf(
+            ToolpackCommand("lldb", "bin/lldb"),
+            ToolpackCommand("android-lldb-server", "bin/android-lldb-server"),
+        )
+
+        val obsolete = obsoleteToolpackCommandNames(previous, current)
+
+        assertTrue("lldb-server-android" in obsolete)
+        assertFalse("lldb" in obsolete)
+        assertFalse("android-lldb-server" in obsolete)
+    }
 }
