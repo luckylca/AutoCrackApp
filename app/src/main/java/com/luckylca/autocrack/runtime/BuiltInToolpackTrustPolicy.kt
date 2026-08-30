@@ -98,6 +98,46 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "android-pcap-helper" to TrustedToolpack(
+            title = "Android host tcpdump",
+            version = "tcpdump-4.99.5_libpcap-1.10.5_autocrack-1.1.0",
+            architecture = "arm64",
+            payloadSha256 = "0090c82f039f2a61b69533eaaa9063611f6bd5bd1a71992b4794aa94bef7db9e",
+            payloadSizeBytes = 3_945_278L,
+            requiredPaths = setOf(
+                "bin/tcpdump",
+                "host-bin/tcpdump",
+            ),
+            commands = mapOf(
+                "tcpdump" to "bin/tcpdump",
+            ),
+            selfTests = mapOf(
+                "tcpdump-binary" to TrustedSelfTest(
+                    title = "Android tcpdump binary",
+                    command = "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/host-bin/tcpdump && printf 'AUTOCRACK_TCPDUMP_BINARY_OK\\n'",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_TCPDUMP_BINARY_OK"),
+                ),
+                "tcpdump-launcher" to TrustedSelfTest(
+                    title = "Standard tcpdump Android-host launcher",
+                    command = "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/bin/tcpdump && grep -F '\"$@\"' /opt/autocrack/toolpacks/active/android-pcap-helper/bin/tcpdump",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("$@"),
+                ),
+            ),
+            sources = mapOf(
+                "tcpdump" to TrustedSource(
+                    version = "4.99.5",
+                    url = "https://www.tcpdump.org/release/tcpdump-4.99.5.tar.xz",
+                    sha256 = "d76395ab82d659d526291b013eee200201380930793531515abfc6e77b4f2ee5",
+                ),
+                "libpcap" to TrustedSource(
+                    version = "1.10.5",
+                    url = "https://www.tcpdump.org/release/libpcap-1.10.5.tar.xz",
+                    sha256 = "84fa89ac6d303028c1c5b754abff77224f45eca0a94eb1a34ff0aa9ceece3925",
+                ),
+            ),
+        ),
         "apk-dex-static" to TrustedToolpack(
             title = "APK and DEX static analysis",
             version = "jadx-1.5.6_apktool-3.0.3_autocrack-1.0.1",
