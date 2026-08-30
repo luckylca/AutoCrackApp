@@ -274,10 +274,11 @@ internal object BuiltInToolpackTrustPolicy {
             title = "Android Frida dynamic instrumentation",
             version = "frida-17.17.0-autocrack-1.1.0",
             architecture = "arm64",
-            payloadSha256 = "b117c3b0e2c72f431270de1025e2f406f204fd7a7039f3520a0706d549ede15f",
-            payloadSizeBytes = 147_139_984L,
+            payloadSha256 = "c4da46d6d03a1b88d9d6031631ada4cf4ec52405e79aaf487f8ac2f5369055c9",
+            payloadSizeBytes = 147_144_577L,
             requiredPaths = setOf(
                 "bin/frida-server-android",
+                "bin/android-frida-server",
                 "bin/frida-autocrack-client",
                 "libexec/autocrack-frida-agent.js",
                 "libexec/frida_autocrack_client.py",
@@ -287,7 +288,7 @@ internal object BuiltInToolpackTrustPolicy {
                 "bin/frida-trace",
             ),
             commands = mapOf(
-                "frida-server-android" to "bin/frida-server-android",
+                "android-frida-server" to "bin/android-frida-server",
                 "frida-autocrack-client" to "bin/frida-autocrack-client",
                 "frida" to "bin/frida",
                 "frida-ls-devices" to "bin/frida-ls-devices",
@@ -310,9 +311,15 @@ internal object BuiltInToolpackTrustPolicy {
             selfTests = mapOf(
                 "frida-server-android-binary" to TrustedSelfTest(
                     title = "Official Android ARM64 Frida server payload",
-                    command = "test -x /opt/autocrack/toolpacks/packs/android-frida/frida-17.17.0-autocrack-1.1.0/bin/frida-server-android && printf \"AUTOCRACK_FRIDA_SERVER_BINARY_OK\\n\"",
+                    command = "test -x /opt/autocrack/toolpacks/active/android-frida/bin/frida-server-android && printf \"AUTOCRACK_FRIDA_SERVER_BINARY_OK\\n\"",
                     expectedExitCodes = setOf(0),
                     outputContains = listOf("AUTOCRACK_FRIDA_SERVER_BINARY_OK"),
+                ),
+                "android-frida-server-help" to TrustedSelfTest(
+                    title = "Android Frida server lifecycle helper",
+                    command = "android-frida-server 2>&1 || test $? -eq 2",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("start|status|stop"),
                 ),
                 "frida-python-import" to TrustedSelfTest(
                     title = "ARM64 Frida Python binding import",
@@ -328,7 +335,7 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
                 "frida-autocrack-client-help" to TrustedSelfTest(
                     title = "Optional AutoCrack Frida helper",
-                    command = "/opt/autocrack/toolpacks/packs/android-frida/frida-17.17.0-autocrack-1.1.0/bin/frida-autocrack-client --help",
+                    command = "/opt/autocrack/toolpacks/active/android-frida/bin/frida-autocrack-client --help",
                     expectedExitCodes = setOf(0),
                     outputContains = listOf("native-trace", "tls-trace", "java-field-write"),
                 ),
