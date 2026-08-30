@@ -66,6 +66,7 @@ def main() -> None:
     parser.add_argument("--liblldb-source-sha256", required=True)
     parser.add_argument("--libclang-cpp14-source-sha256", required=True)
     parser.add_argument("--libllvm14-source-sha256", required=True)
+    parser.add_argument("--python3-six-source-sha256", required=True)
     parser.add_argument("--output-dir", required=True)
     args = parser.parse_args()
     binary = Path(args.lldb_server).resolve()
@@ -95,7 +96,7 @@ def main() -> None:
             "payloadEntry": "payload.zip",
             "payloadSha256": "0" * 64,
             "payloadSizeBytes": 1,
-            "requiredPaths": ["bin/lldb", "bin/android-lldb-server", "host-bin/lldb-server-android", "lib/llvm-14/bin/lldb"],
+            "requiredPaths": ["bin/lldb", "bin/android-lldb-server", "host-bin/lldb-server-android", "lib/llvm-14/bin/lldb", "lib/llvm-14/lib/python3.11/dist-packages/six.py"],
             "commands": [
                 {"name": "lldb", "relativePath": "bin/lldb"},
                 {"name": "android-lldb-server", "relativePath": "bin/android-lldb-server"},
@@ -103,6 +104,7 @@ def main() -> None:
             "selfTests": [
                 {"id": "lldb-server-android-binary", "title": "Android LLDB server payload", "command": "test -x /opt/autocrack/toolpacks/active/android-lldb-server/host-bin/lldb-server-android && printf 'AUTOCRACK_LLDB_ANDROID_BINARY_OK\n'", "expectedExitCodes": [0], "outputContains": ["AUTOCRACK_LLDB_ANDROID_BINARY_OK"]},
                 {"id": "lldb-client-version", "title": "Standard Debian LLDB client", "command": "lldb --version", "expectedExitCodes": [0], "outputContains": ["lldb version 14.0.6"]},
+                {"id": "lldb-python-runtime", "title": "LLDB Python runtime", "command": "lldb --batch -o 'script import lldb, six; print(\"AUTOCRACK_LLDB_PYTHON_OK\", six.__version__)'", "expectedExitCodes": [0], "outputContains": ["AUTOCRACK_LLDB_PYTHON_OK 1.16.0"]},
             ],
             "sources": [
                 {"name": "lldb-server", "version": "android-llvm-r522817-autocrack-seize-runtime-stop", "url": "https://android.googlesource.com/toolchain/llvm-project/+/d8003a456d14a3deb8054cdaa529ffbf02d9b262", "sha256": actual},
@@ -111,6 +113,7 @@ def main() -> None:
                 {"name": "debian-liblldb-14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/liblldb-14_14.0.6-12_arm64.deb", "sha256": args.liblldb_source_sha256.lower()},
                 {"name": "debian-libclang-cpp14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/libclang-cpp14_14.0.6-12_arm64.deb", "sha256": args.libclang_cpp14_source_sha256.lower()},
                 {"name": "debian-libllvm14-arm64", "version": "1:14.0.6-12", "url": "https://deb.debian.org/debian/pool/main/l/llvm-toolchain-14/libllvm14_14.0.6-12_arm64.deb", "sha256": args.libllvm14_source_sha256.lower()},
+                {"name": "debian-python3-six", "version": "1.16.0-4", "url": "https://deb.debian.org/debian/pool/main/s/six/python3-six_1.16.0-4_all.deb", "sha256": args.python3_six_source_sha256.lower()},
             ],
         }
         executables = {"bin/lldb", "bin/android-lldb-server", "host-bin/lldb-server-android", "lib/llvm-14/bin/lldb", "lib/llvm-14/bin/lldb-argdumper"}

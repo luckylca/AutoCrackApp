@@ -33,6 +33,8 @@ jobs:
       LIBLLDB_DEB_SHA256: acdaa8e8c06b7ee643aec4326b96b45d76d26e3112bd08cadce0c7a1f54de813
       LIBCLANG_CPP14_DEB_SHA256: dc983fc6aa0c1f7ef3f51aa3a2734ea6285ad5e7a283fe32d3239c85f718872d
       LIBLLVM14_DEB_SHA256: f22c3e843b12de66d642dceddc1db0de02934a4028dd60aecc4722f8bf04e6d6
+      PYTHON3_SIX_VERSION: "1.16.0-4"
+      PYTHON3_SIX_DEB_SHA256: fd189e9cecbcf17a1fc20aec30055c8afa9c1eec00cd6e7ab385087a2ab3b0d3
 
     steps:
       - name: Check out AutoCrackApp
@@ -400,6 +402,8 @@ jobs:
             -e LIBLLDB_DEB_SHA256="$LIBLLDB_DEB_SHA256" \
             -e LIBCLANG_CPP14_DEB_SHA256="$LIBCLANG_CPP14_DEB_SHA256" \
             -e LIBLLVM14_DEB_SHA256="$LIBLLVM14_DEB_SHA256" \
+            -e PYTHON3_SIX_VERSION="$PYTHON3_SIX_VERSION" \
+            -e PYTHON3_SIX_DEB_SHA256="$PYTHON3_SIX_DEB_SHA256" \
             debian:bookworm-slim /bin/bash -euxc '
               apt-get update
               apt-get install -y --no-install-recommends pax-utils ca-certificates
@@ -410,30 +414,34 @@ jobs:
                 "python3-lldb-14=${LLDB_CLIENT_APT_VERSION}" \
                 "liblldb-14=${LLDB_CLIENT_APT_VERSION}" \
                 "libclang-cpp14=${LLDB_CLIENT_APT_VERSION}" \
-                "libllvm14=${LLDB_CLIENT_APT_VERSION}"
+                "libllvm14=${LLDB_CLIENT_APT_VERSION}" \
+                "python3-six=${PYTHON3_SIX_VERSION}"
               LLDB_DEB="lldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
               PYTHON3_LLDB_DEB="python3-lldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
               LIBLLDB_DEB="liblldb-14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
               LIBCLANG_CPP14_DEB="libclang-cpp14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
               LIBLLVM14_DEB="libllvm14_${LLDB_CLIENT_FILE_VERSION}_arm64.deb"
-              for DEB in "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB"; do
+              PYTHON3_SIX_DEB="python3-six_${PYTHON3_SIX_VERSION}_all.deb"
+              for DEB in "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB" "$PYTHON3_SIX_DEB"; do
                 test -f "$DEB"
               done
-              printf "%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n" \
+              printf "%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n%s  %s\n" \
                 "$LLDB_CLIENT_DEB_SHA256" "$LLDB_DEB" \
                 "$PYTHON3_LLDB_DEB_SHA256" "$PYTHON3_LLDB_DEB" \
                 "$LIBLLDB_DEB_SHA256" "$LIBLLDB_DEB" \
                 "$LIBCLANG_CPP14_DEB_SHA256" "$LIBCLANG_CPP14_DEB" \
                 "$LIBLLVM14_DEB_SHA256" "$LIBLLVM14_DEB" \
+                "$PYTHON3_SIX_DEB_SHA256" "$PYTHON3_SIX_DEB" \
                 | sha256sum -c -
-              sha256sum "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB" \
+              sha256sum "$LLDB_DEB" "$PYTHON3_LLDB_DEB" "$LIBLLDB_DEB" "$LIBCLANG_CPP14_DEB" "$LIBLLVM14_DEB" "$PYTHON3_SIX_DEB" \
                 > /provenance/debian-core-debs.sha256
               apt-get install -y --no-install-recommends \
                 "./$LLDB_DEB" "./$PYTHON3_LLDB_DEB" "./$LIBLLDB_DEB" \
-                "./$LIBCLANG_CPP14_DEB" "./$LIBLLVM14_DEB"
+                "./$LIBCLANG_CPP14_DEB" "./$LIBLLVM14_DEB" "./$PYTHON3_SIX_DEB"
               for PACKAGE in lldb-14 python3-lldb-14 liblldb-14 libclang-cpp14 libllvm14; do
                 test "$(dpkg-query -W -f=\"\${Version}\" "$PACKAGE")" = "$LLDB_CLIENT_APT_VERSION"
               done
+              test "$(dpkg-query -W -f=\"\${Version}\" python3-six)" = "$PYTHON3_SIX_VERSION"
               cd /
               cp -L /usr/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb
               cp -L /usr/lib/llvm-14/bin/lldb-argdumper /out/lib/llvm-14/bin/lldb-argdumper
@@ -447,6 +455,9 @@ jobs:
                 # blanket `cp -aL` fails when one of those links is dangling. Replace the two
                 # runtime links explicitly with ordinary files so the toolpack is relocatable.
                 cp -a /usr/lib/llvm-14/lib/python3.11 /out/lib/llvm-14/lib/
+                cp -L /usr/lib/python3/dist-packages/six.py \
+                  /out/lib/llvm-14/lib/python3.11/dist-packages/six.py
+                chmod 0644 /out/lib/llvm-14/lib/python3.11/dist-packages/six.py
                 PY_LLDB=/out/lib/llvm-14/lib/python3.11/dist-packages/lldb
                 if [ -d "$PY_LLDB" ]; then
                   PY_EXT=$(find "$PY_LLDB" -maxdepth 1 -name "_lldb*.so" -print -quit)
@@ -497,6 +508,7 @@ jobs:
             --liblldb-source-sha256 "$LIBLLDB_DEB_SHA256" \
             --libclang-cpp14-source-sha256 "$LIBCLANG_CPP14_DEB_SHA256" \
             --libllvm14-source-sha256 "$LIBLLVM14_DEB_SHA256" \
+            --python3-six-source-sha256 "$PYTHON3_SIX_DEB_SHA256" \
             --output-dir dist/package | tee dist/build-summary.txt
           python3 toolpacks/android-lldb-server/build_toolpack.py \
             --lldb-server dist/payload/bin/lldb-server-android \
@@ -507,6 +519,7 @@ jobs:
             --liblldb-source-sha256 "$LIBLLDB_DEB_SHA256" \
             --libclang-cpp14-source-sha256 "$LIBCLANG_CPP14_DEB_SHA256" \
             --libllvm14-source-sha256 "$LIBLLVM14_DEB_SHA256" \
+            --python3-six-source-sha256 "$PYTHON3_SIX_DEB_SHA256" \
             --output-dir dist/package-rerun | tee dist/build-summary-rerun.txt
           cmp dist/package/payload.sha256 dist/package-rerun/payload.sha256
           cmp dist/package/payload.size dist/package-rerun/payload.size
@@ -523,12 +536,18 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v "$PWD/dist/selftest-payload:/opt/autocrack/toolpacks/active/android-lldb-server:ro" \
             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3
+              python3 -c "import encodings, uuid, re; print(\"AUTOCRACK_SYSTEM_PYTHON_OK\")"
+              test ! -e /usr/lib/python3/dist-packages/six.py
               /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --version | grep -F "lldb version 14.0.6"
               /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --batch \
                 -o "target create /bin/ls" -o "image list" | grep -F "/bin/ls"
               /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --batch \
-                -o "script import lldb; print(\"AUTOCRACK_LLDB_PYTHON_OK\")" \
-                | grep -F "AUTOCRACK_LLDB_PYTHON_OK"
+                -o "script import lldb, six; print(\"AUTOCRACK_LLDB_PYTHON_OK\", six.__version__, six.__file__)" \
+                | tee /tmp/lldb-python-selftest.txt
+              grep -F "AUTOCRACK_LLDB_PYTHON_OK 1.16.0" /tmp/lldb-python-selftest.txt
+              grep -F "/opt/autocrack/toolpacks/active/android-lldb-server/lib/llvm-14/lib/python3.11/dist-packages/six.py" /tmp/lldb-python-selftest.txt
             '
 
       - name: Upload patched Android LLDB server toolpack
