@@ -54,7 +54,16 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "ndk;${NDK_VERSION}" "cmake;3.22.1"
           sudo apt-get update
-          sudo apt-get install -y ninja-build
+          sudo apt-get install -y ninja-build ccache
+
+      - name: Restore LLVM compiler cache
+        id: restore-lldb-ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ccache
+          key: lldb-ccache-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.ANDROID_LLVM_COMMIT }}-${{ hashFiles('.github/workflows/lldb-server-toolpack.yml', 'toolpacks/android-lldb-server/**') }}
+          restore-keys: |
+            lldb-ccache-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.ANDROID_LLVM_COMMIT }}-
 
       - name: Fetch Android LLVM r522817 source
         run: |
@@ -334,10 +343,16 @@ jobs:
           set -euxo pipefail
           NDK_ROOT="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
           test -f "${NDK_ROOT}/build/cmake/android.toolchain.cmake"
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size 4G
+          ccache --zero-stats
 
           cmake -S android-llvm/llvm -B llvm-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="${NDK_ROOT}/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-26 \
             -DANDROID_STL=c++_static \
@@ -359,6 +374,7 @@ jobs:
             -DLLVM_ENABLE_TERMINFO=OFF
 
           cmake --build llvm-build --target lldb-server -- -j2
+          ccache --show-stats
 
           LLDB_SERVER="$(find llvm-build -type f -name lldb-server -perm -111 | head -n 1)"
           test -n "${LLDB_SERVER}"
@@ -387,6 +403,13 @@ jobs:
           cp android-llvm.commit.txt dist/source/
           printf '%s\n' "https://android.googlesource.com/toolchain/llvm-project/+/${ANDROID_LLVM_COMMIT}" \
             > dist/source/lldb-server.source-url.txt
+
+      - name: Save LLVM compiler cache
+        if: always() && steps.restore-lldb-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ccache
+          key: lldb-ccache-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.ANDROID_LLVM_COMMIT }}-${{ hashFiles('.github/workflows/lldb-server-toolpack.yml', 'toolpacks/android-lldb-server/**') }}
 
       - name: Upload compiled Android LLDB server intermediate
         uses: actions/upload-artifact@v4
