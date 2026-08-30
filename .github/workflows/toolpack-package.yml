@@ -434,7 +434,7 @@ jobs:
           set -euxo pipefail
           docker run --rm --platform linux/arm64 \
             -v "$PWD/dist/payload:/opt/lief-toolpack:ro" \
-            debian:bookworm-slim /bin/bash -euxc '
+            python:3.11-slim-bookworm /bin/bash -euxc '
               export PATH=/opt/lief-toolpack/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
               export PYTHONPATH=/opt/lief-toolpack/python
               python3 -c "import lief; assert lief.__version__ == \"1.0.0-fe54643f\" or lief.__version__.startswith(\"1.0.0\"); print(lief.__version__)"

@@ -18,6 +18,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+private const val INSTALLED_RECORD_SCHEMA_VERSION = 1
+
 private data class ToolpackActivation(
     val target: File,
     val backup: File?,
@@ -27,6 +29,26 @@ private data class ActiveLinkActivation(
     val link: File,
     val previousTarget: Path?,
 )
+
+internal fun parseInstalledToolpackRecord(
+    text: String,
+    requireTrusted: Boolean,
+): InstalledToolpack {
+    val json = JSONObject(text)
+    require(json.getInt("schemaVersion") == INSTALLED_RECORD_SCHEMA_VERSION) {
+        "不支持的已安装工具包记录 schema"
+    }
+    val manifest = ToolpackPackageManifest.parse(json.getJSONObject("manifest").toString())
+    if (requireTrusted) BuiltInToolpackTrustPolicy.requireTrusted(manifest)
+    return InstalledToolpack(
+        manifest = manifest,
+        packagePath = json.getString("packagePath"),
+        installedPath = json.getString("installedPath"),
+        rootfsVersion = json.optString("rootfsVersion")
+            .takeIf { value -> value.isNotBlank() && value != "null" },
+        installedAtEpochMillis = json.getLong("installedAtEpochMillis"),
+    )
+}
 
 class ToolpackPackageInstaller(
     context: Context,
@@ -71,7 +93,7 @@ class ToolpackPackageInstaller(
                 payloadFile = payloadFile,
                 onProgress = onProgress,
             )
-            previousInstalled = readInstalled(manifest.id)
+            previousInstalled = readInstalled(manifest.id, requireTrusted = false)
             validateCommandConflicts(manifest)
 
             val staging = File(
@@ -153,7 +175,8 @@ class ToolpackPackageInstaller(
     ) = withContext(Dispatchers.IO) {
         require(toolpackId.matches(TOOLPACK_SAFE_ID_REGEX)) { "非法 toolpack id：$toolpackId" }
         initializeAppDirectories()
-        val installed = readInstalled(toolpackId) ?: error("工具包未安装：$toolpackId")
+        val installed = readInstalled(toolpackId, requireTrusted = false)
+            ?: error("工具包未安装：$toolpackId")
 
         onProgress("正在移除 ${installed.manifest.title}")
         installed.manifest.commands.forEach { command ->
@@ -183,7 +206,9 @@ class ToolpackPackageInstaller(
             .orEmpty()
             .filter { file -> file.isFile && file.extension == "json" }
             .mapNotNull { file ->
-                runCatching { parseInstalledRecord(file.readText(Charsets.UTF_8)) }.getOrNull()
+                runCatching {
+                    parseInstalledToolpackRecord(file.readText(Charsets.UTF_8), requireTrusted = true)
+                }.getOrNull()
             }
             .sortedBy { installed -> installed.manifest.id }
         if (layout.rootfsRoot.isDirectory) {
@@ -597,30 +622,13 @@ class ToolpackPackageInstaller(
         safeMove(temporary, destination)
     }
 
-    private fun readInstalled(toolpackId: String): InstalledToolpack? {
+    private fun readInstalled(toolpackId: String, requireTrusted: Boolean = true): InstalledToolpack? {
         val file = recordFile(toolpackId)
         return if (file.isFile) {
-            parseInstalledRecord(file.readText(Charsets.UTF_8))
+            parseInstalledToolpackRecord(file.readText(Charsets.UTF_8), requireTrusted)
         } else {
             null
         }
-    }
-
-    private fun parseInstalledRecord(text: String): InstalledToolpack {
-        val json = JSONObject(text)
-        require(json.getInt("schemaVersion") == INSTALLED_RECORD_SCHEMA_VERSION) {
-            "不支持的已安装工具包记录 schema"
-        }
-        val manifest = ToolpackPackageManifest.parse(json.getJSONObject("manifest").toString())
-        BuiltInToolpackTrustPolicy.requireTrusted(manifest)
-        return InstalledToolpack(
-            manifest = manifest,
-            packagePath = json.getString("packagePath"),
-            installedPath = json.getString("installedPath"),
-            rootfsVersion = json.optString("rootfsVersion")
-                .takeIf { value -> value.isNotBlank() && value != "null" },
-            installedAtEpochMillis = json.getLong("installedAtEpochMillis"),
-        )
     }
 
     private fun recordFile(toolpackId: String): File =
@@ -687,7 +695,6 @@ class ToolpackPackageInstaller(
     private companion object {
         val AUDIT_LOCK = Any()
         const val MANIFEST_ENTRY = "manifest.json"
-        const val INSTALLED_RECORD_SCHEMA_VERSION = 1
         const val MAX_MANIFEST_BYTES = 1_048_576L
         const val MAX_PACKAGE_BYTES = 1_600_000_000L
         const val MAX_EXTRACTED_BYTES = 2_500_000_000L

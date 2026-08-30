@@ -34,7 +34,7 @@ jobs:
           cmp /tmp/payload.first.sha256 toolpacks/android-host-shell/dist/payload.sha256
           cmp /tmp/payload.first.size toolpacks/android-host-shell/dist/payload.size
           unzip -t toolpacks/android-host-shell/dist/AutoCrackApp-android-host-shell-android-host-shell-1.0.2-toolpack.zip
-          toolpacks/android-host-shell/dist/payload/bin/android-shell --self-test | grep -Fx ANDROID_HOST_SHELL_CLIENT_OK
+          python3 toolpacks/android-host-shell/dist/payload/bin/android-shell --self-test | grep -Fx ANDROID_HOST_SHELL_CLIENT_OK
       - uses: actions/upload-artifact@v4
         with:
           name: AutoCrackApp-android-host-shell-toolpack
@@ -91,9 +91,9 @@ jobs:
         run: |
           set -euxo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "ndk;${NDK_VERSION}" cmake ninja
+          sdkmanager "ndk;${NDK_VERSION}"
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends curl file jq ninja-build unzip
+          sudo apt-get install -y --no-install-recommends cmake curl file jq ninja-build unzip
       - name: Download and verify tcpdump and libpcap sources
         run: |
           set -euxo pipefail
