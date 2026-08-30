@@ -414,7 +414,7 @@ jobs:
                 cp -L "$LIBRARY" "/out/lib/lldb-deps/$NAME"
               done < /tmp/lldb-libraries.txt
               chmod 0755 /out/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb-argdumper
-              dpkg-query -W -f="${Package}\t${Version}\t${Architecture}\n" | sort > /provenance/dpkg-packages.tsv
+              dpkg-query -W -f="\${Package}\t\${Version}\t\${Architecture}\n" | sort > /provenance/dpkg-packages.tsv
               cp /tmp/lldb-libraries.txt /provenance/lldb-libraries.txt
               sha256sum /out/lib/llvm-14/bin/lldb /out/lib/lldb-deps/* > /provenance/lldb-runtime.sha256
             '
