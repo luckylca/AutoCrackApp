@@ -34,6 +34,9 @@
             android:name="com.luckylca.autocrack.debug.DebugSharedToolpackRuntimeValidationActivity"
             android:exported="true" />
         <activity
+            android:name="com.luckylca.autocrack.debug.DebugStandardLldbValidationActivity"
+            android:exported="true" />
+        <activity
             android:name="com.luckylca.autocrack.debug.DebugFridaFixtureActivity"
             android:exported="true"
             android:process=":frida_fixture" />
