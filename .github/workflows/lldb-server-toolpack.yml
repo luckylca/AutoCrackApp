@@ -392,15 +392,30 @@ jobs:
               apt-get install -y --no-install-recommends lldb-14 python3-lldb-14 pax-utils ca-certificates
               cp -L /usr/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb
               cp -L /usr/lib/llvm-14/bin/lldb-argdumper /out/lib/llvm-14/bin/lldb-argdumper
+              LLDB_LIB=$(find /usr/lib \( -type f -o -type l \) -name "liblldb-14.so*" -print -quit)
+              test -n "$LLDB_LIB"
+              test -e "$LLDB_LIB"
               if [ -d /usr/lib/llvm-14/lib/python3.11 ]; then
                 mkdir -p /out/lib/llvm-14/lib
-                # Debian's python3-lldb package contains relative symlinks into the complete
-                # /usr/lib/llvm-14 tree. Resolve them while that tree still exists so the
-                # relocatable toolpack never contains dangling links after extraction.
-                cp -aL /usr/lib/llvm-14/lib/python3.11 /out/lib/llvm-14/lib/
+                # Preserve the Python sources first. Debian's python3-lldb package contains
+                # relative symlinks that are valid only in the distro filesystem layout; a
+                # blanket `cp -aL` fails when one of those links is dangling. Replace the two
+                # runtime links explicitly with ordinary files so the toolpack is relocatable.
+                cp -a /usr/lib/llvm-14/lib/python3.11 /out/lib/llvm-14/lib/
+                PY_LLDB=/out/lib/llvm-14/lib/python3.11/dist-packages/lldb
+                if [ -d "$PY_LLDB" ]; then
+                  PY_EXT=$(find "$PY_LLDB" -maxdepth 1 -name "_lldb*.so" -print -quit)
+                  test -n "$PY_EXT"
+                  rm -f "$PY_EXT"
+                  cp -L "$LLDB_LIB" "$PY_EXT"
+                  chmod 0644 "$PY_EXT"
+                  rm -f "$PY_LLDB/lldb-argdumper"
+                  cp -L /usr/lib/llvm-14/bin/lldb-argdumper "$PY_LLDB/lldb-argdumper"
+                  chmod 0755 "$PY_LLDB/lldb-argdumper"
+                  test ! -L "$PY_EXT"
+                  test ! -L "$PY_LLDB/lldb-argdumper"
+                fi
               fi
-              LLDB_LIB=$(find /usr/lib -type f -o -type l | grep -E "/liblldb-14\.so(\.|$)" | head -n 1)
-              test -n "$LLDB_LIB"
               {
                 lddtree -l /usr/lib/llvm-14/bin/lldb
                 lddtree -l "$LLDB_LIB"
@@ -416,7 +431,10 @@ jobs:
               chmod 0755 /out/lib/llvm-14/bin/lldb /out/lib/llvm-14/bin/lldb-argdumper
               dpkg-query -W -f="\${Package}\t\${Version}\t\${Architecture}\n" | sort > /provenance/dpkg-packages.tsv
               cp /tmp/lldb-libraries.txt /provenance/lldb-libraries.txt
-              sha256sum /out/lib/llvm-14/bin/lldb /out/lib/lldb-deps/* > /provenance/lldb-runtime.sha256
+              sha256sum /out/lib/llvm-14/bin/lldb > /provenance/lldb-runtime.sha256
+              find /out/lib/lldb-deps -maxdepth 1 -type f -print0 \
+                | sort -z \
+                | xargs -0 -r sha256sum >> /provenance/lldb-runtime.sha256
             '
           file dist/lldb-client-root/lib/llvm-14/bin/lldb | tee dist/source/debian/lldb.file.txt
           grep -Eq 'ELF 64-bit.*(ARM aarch64|ARM64|aarch64)' dist/source/debian/lldb.file.txt
@@ -455,6 +473,9 @@ jobs:
               /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --version | grep -F "lldb version 14.0.6"
               /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --batch \
                 -o "target create /bin/ls" -o "image list" | grep -F "/bin/ls"
+              /opt/autocrack/toolpacks/active/android-lldb-server/bin/lldb --batch \
+                -o "script import lldb; print(\"AUTOCRACK_LLDB_PYTHON_OK\")" \
+                | grep -F "AUTOCRACK_LLDB_PYTHON_OK"
             '
 
       - name: Upload patched Android LLDB server toolpack
