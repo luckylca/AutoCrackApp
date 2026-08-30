@@ -53,7 +53,7 @@ class AndroidPcapToolpackTrustPolicyTest {
             ToolpackSelfTest(
                 id = "tcpdump-binary",
                 title = "Android tcpdump binary",
-                command = "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/host-bin/tcpdump && printf 'AUTOCRACK_TCPDUMP_BINARY_OK\\n'",
+                command = "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/host-bin/tcpdump && printf 'AUTOCRACK_TCPDUMP_BINARY_OK\n'",
                 expectedExitCodes = setOf(0),
                 outputContains = listOf("AUTOCRACK_TCPDUMP_BINARY_OK"),
             ),

@@ -39,7 +39,9 @@ class DebugToolpackInstallActivity : Activity() {
 
     private suspend fun installAndTest(): JSONObject {
         val packageFile = File(filesDir, TOOLPACK_INPUT_PATH)
-        require(packageFile.isFile && packageFile.length() > 0L) { "Generic toolpack file is missing" }
+        require(packageFile.isFile && packageFile.length() > 0L) {
+            "Generic toolpack file is missing from private debug-validation input"
+        }
 
         val expectedId = intent.getStringExtra("expected_id")?.trim().orEmpty()
         val expectedVersion = intent.getStringExtra("expected_version")?.trim().orEmpty()
@@ -68,10 +70,9 @@ class DebugToolpackInstallActivity : Activity() {
             it.manifest.id == install.manifest.id && it.manifest.version == install.manifest.version
         }
         val selfTest = installer.runSelfTests(installed, chroot)
-        check(selfTest.passed) { "Toolpack self-test failed: ${install.manifest.id}" }
 
         return JSONObject()
-            .put("success", true)
+            .put("success", selfTest.passed)
             .put("toolpackId", install.manifest.id)
             .put("toolpackVersion", install.manifest.version)
             .put("payloadBytes", install.payloadBytes)
@@ -88,6 +89,8 @@ class DebugToolpackInstallActivity : Activity() {
                         .put("id", result.test.id)
                         .put("passed", result.passed)
                         .put("exitCode", result.commandResult.exitCode ?: JSONObject.NULL)
+                        .put("stdout", result.commandResult.stdout)
+                        .put("stderr", result.commandResult.stderr)
                         .put("failure", result.failure ?: JSONObject.NULL)
                 }),
             )

@@ -200,7 +200,6 @@ class AgentToolSessionFactory(
         val installed = ToolpackPackageInstaller(appContext, layout).listInstalled()
         val commands = installed.flatMap { it.manifest.commands }.map { it.name }.distinct().sorted()
         val workspace = WorkspaceFileService(workspaceRoot)
-        val hostWorkspace = layout.createRuntimeWorkspace()
         val hostShellBridge = installed.firstOrNull { toolpack ->
             toolpack.manifest.id == AndroidHostShellBridge.TOOLPACK_ID &&
                 toolpack.manifest.version == AndroidHostShellBridge.TOOLPACK_VERSION
@@ -209,7 +208,7 @@ class AgentToolSessionFactory(
             AndroidHostShellBridge(
                 host = host,
                 sessionId = sessionId,
-                hostWorkspacePath = hostWorkspace.path,
+                hostWorkspacePath = workspaceRoot.path,
                 dangerousOperationGate = dangerousOperationGate,
             ).start()
         }

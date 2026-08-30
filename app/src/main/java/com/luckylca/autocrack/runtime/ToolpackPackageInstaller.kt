@@ -428,6 +428,12 @@ class ToolpackPackageInstaller(
         manifest.requiredPaths.forEach { requiredPath ->
             val required = ToolpackPathPolicy.resolve(staging, requiredPath)
             require(required.exists()) { "工具包缺少必需路径：$requiredPath" }
+            // java.util.zip extraction does not preserve Unix executable mode. Toolpacks use
+            // bin/ for rootfs CLI entrypoints and host-bin/ for Android-host executables; both
+            // are executable namespaces even when a host binary is intentionally not a command.
+            if (required.isFile && isToolpackExecutableRequiredPath(requiredPath)) {
+                Os.chmod(required.path, EXECUTABLE_MODE)
+            }
         }
         manifest.commands.forEach { command ->
             val executable = ToolpackPathPolicy.resolve(staging, command.relativePath)
@@ -705,6 +711,9 @@ class ToolpackPackageInstaller(
         const val SELF_TEST_TIMEOUT_MILLIS = 120_000L
     }
 }
+
+internal fun isToolpackExecutableRequiredPath(relativePath: String): Boolean =
+    relativePath.startsWith("bin/") || relativePath.startsWith("host-bin/")
 
 private fun ByteArray.toHex(): String = joinToString(separator = "") { byte ->
     "%02x".format(byte)
