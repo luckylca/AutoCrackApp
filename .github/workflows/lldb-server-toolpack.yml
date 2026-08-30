@@ -388,6 +388,16 @@ jobs:
           printf '%s\n' "https://android.googlesource.com/toolchain/llvm-project/+/${ANDROID_LLVM_COMMIT}" \
             > dist/source/lldb-server.source-url.txt
 
+      - name: Upload compiled Android LLDB server intermediate
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-lldb-server-intermediate-${{ github.run_id }}
+          path: |
+            dist/payload/bin/lldb-server-android
+            dist/source/
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Assemble pinned Debian ARM64 LLDB client runtime
         run: |
           set -euxo pipefail
@@ -527,6 +537,21 @@ jobs:
           jq -e '.id == "android-lldb-server"' dist/package/manifest.json >/dev/null
           jq -e '.version == "android-llvm-r522817_lldb-14_autocrack-2.0.0"' dist/package/manifest.json >/dev/null
           jq -e '.commands | map(.name) == ["lldb", "android-lldb-server"]' dist/package/manifest.json >/dev/null
+
+      - name: Upload LLDB candidate package diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-android-lldb-candidate-${{ github.run_id }}
+          path: |
+            dist/package/AutoCrackApp-android-lldb-server-toolpack.zip
+            dist/package/AutoCrackApp-android-lldb-server-toolpack.zip.sha256
+            dist/package/manifest.json
+            dist/package/payload.sha256
+            dist/package/payload.size
+            dist/build-summary.txt
+            dist/source/
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Run ARM64 standard LLDB client self-test
         run: |
