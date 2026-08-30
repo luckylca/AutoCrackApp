@@ -25,6 +25,9 @@
             android:name="com.luckylca.autocrack.debug.DebugFridaToolpackInstallActivity"
             android:exported="true" />
         <activity
+            android:name="com.luckylca.autocrack.debug.DebugToolpackInstallActivity"
+            android:exported="true" />
+        <activity
             android:name="com.luckylca.autocrack.debug.DebugAgentFridaValidationActivity"
             android:exported="true" />
         <activity
