@@ -1,0 +1,145 @@
+name: Build SimpleHook toolpack and Android modules
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/simplehook.yml
+      - settings.gradle.kts
+      - gradle/libs.versions.toml
+      - simplehook-core/**
+      - simplehook-runtime/**
+      - simplehook-test-app/**
+      - xposed-api-stubs/**
+      - toolpacks/simplehook/**
+      - app/src/main/java/com/luckylca/autocrack/runtime/BuiltInToolpackTrustPolicy.kt
+      - app/src/test/java/com/luckylca/autocrack/runtime/SimpleHookToolpackTrustPolicyTest.kt
+  push:
+    branches:
+      - main
+      - codex/frida-capabilities-1.0.4
+    paths:
+      - .github/workflows/simplehook.yml
+      - settings.gradle.kts
+      - gradle/libs.versions.toml
+      - simplehook-core/**
+      - simplehook-runtime/**
+      - simplehook-test-app/**
+      - xposed-api-stubs/**
+      - toolpacks/simplehook/**
+      - app/src/main/java/com/luckylca/autocrack/runtime/BuiltInToolpackTrustPolicy.kt
+      - app/src/test/java/com/luckylca/autocrack/runtime/SimpleHookToolpackTrustPolicyTest.kt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: simplehook-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, lint, build, and package SimpleHook 0.1.0
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle 8.13
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Run SimpleHook Python tests
+        run: |
+          python3 -m py_compile \
+            toolpacks/simplehook/libexec/simplehook_cli.py \
+            toolpacks/simplehook/build_toolpack.py
+          python3 -m unittest discover -s toolpacks/simplehook/tests -v
+
+      - name: Test and build Android modules
+        run: |
+          ./gradlew --no-daemon --max-workers=1 --stacktrace \
+            :simplehook-core:testDebugUnitTest \
+            :simplehook-core:lintDebug \
+            :simplehook-runtime:testDebugUnitTest \
+            :simplehook-runtime:lintDebug \
+            :simplehook-runtime:assembleDebug \
+            :simplehook-test-app:testDebugUnitTest \
+            :simplehook-test-app:lintDebug \
+            :simplehook-test-app:assembleDebug
+          ./gradlew --no-daemon --max-workers=1 --stacktrace \
+            :app:testDebugUnitTest --tests com.luckylca.autocrack.runtime.SimpleHookToolpackTrustPolicyTest
+
+      - name: Build deterministic toolpack
+        run: |
+          python3 toolpacks/simplehook/build_toolpack.py | tee toolpacks/simplehook/dist/build-summary.txt
+          unzip -t toolpacks/simplehook/dist/simplehook-toolpack-0.1.0.zip
+          jq -e '
+            .schemaVersion == 1 and
+            .id == "simplehook" and
+            .version == "simplehook-0.1.0" and
+            .payloadSha256 == "aaafc29c328b8fcdc12833d0c479229c9c3a1b0c4746b7dfea5a88be4ef4f0d2" and
+            .payloadSizeBytes == 35447 and
+            .sources[0].sha256 == "c051b9b084b65374859e8caf7fc3d1f31476320646ed5383c7fd0023409ba213" and
+            ([.commands[].name] | index("simplehook")) != null
+          ' toolpacks/simplehook/dist/manifest.json >/dev/null
+
+      - name: Verify Android module contents
+        run: |
+          RUNTIME_APK=simplehook-runtime/build/outputs/apk/debug/simplehook-runtime-debug.apk
+          TEST_APK=simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk
+          test -s "$RUNTIME_APK"
+          test -s "$TEST_APK"
+          unzip -p "$RUNTIME_APK" assets/xposed_init | grep -Fx 'com.luckylca.simplehook.runtime.SimpleHookXposedEntry'
+          ! unzip -l "$RUNTIME_APK" | grep -F 'de/robv/android/xposed/'
+
+      - name: Assemble release artifacts and checksums
+        run: |
+          mkdir -p dist/simplehook-0.1.0
+          cp toolpacks/simplehook/dist/simplehook-toolpack-0.1.0.zip dist/simplehook-0.1.0/
+          cp toolpacks/simplehook/dist/manifest.json dist/simplehook-0.1.0/manifest.json
+          cp simplehook-runtime/build/outputs/apk/debug/simplehook-runtime-debug.apk \
+            dist/simplehook-0.1.0/simplehook-runtime-0.1.0.apk
+          cp simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk \
+            dist/simplehook-0.1.0/SimpleHookTestApp.apk
+          cd dist/simplehook-0.1.0
+          sha256sum simplehook-toolpack-0.1.0.zip simplehook-runtime-0.1.0.apk \
+            SimpleHookTestApp.apk manifest.json > SHA256SUMS
+
+      - name: Upload SimpleHook package
+        uses: actions/upload-artifact@v4
+        with:
+          name: simplehook-0.1.0
+          path: dist/simplehook-0.1.0/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simplehook-0.1.0-reports
+          path: |
+            simplehook-core/build/reports/
+            simplehook-runtime/build/reports/
+            simplehook-test-app/build/reports/
+            app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14

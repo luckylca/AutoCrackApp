@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "test_get_int",
+  "enabled": true,
+  "package": "com.luckylca.simplehook.testapp",
+  "process": null,
+  "target": {
+    "class": "com.luckylca.simplehook.testapp.HookTargets",
+    "method": "getInt",
+    "constructor": false,
+    "parameters": [],
+    "return_type": "int"
+  },
+  "action": {"type": "replace_return", "value": 100},
+  "logging": {"enabled": true, "arguments": true, "return_value": true, "stack_trace": false}
+}

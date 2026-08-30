@@ -493,6 +493,44 @@ internal object BuiltInToolpackTrustPolicy {
                 ),
             ),
         ),
+        "simplehook" to TrustedToolpack(
+            title = "SimpleHook Android Java method debugger",
+            version = "simplehook-0.1.0",
+            architecture = "all",
+            payloadSha256 = "aaafc29c328b8fcdc12833d0c479229c9c3a1b0c4746b7dfea5a88be4ef4f0d2",
+            payloadSizeBytes = 35_447L,
+            requiredPaths = setOf(
+                "bin/simplehook",
+                "libexec/simplehook_cli.py",
+                "schema/simplehook-rule-v1.schema.json",
+                "README.md",
+                "VERSION",
+            ),
+            commands = mapOf(
+                "simplehook" to "bin/simplehook",
+            ),
+            selfTests = mapOf(
+                "simplehook-help" to TrustedSelfTest(
+                    title = "SimpleHook CLI command surface",
+                    command = "/opt/autocrack/toolpacks/active/simplehook/bin/simplehook --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("rules", "inspect", "environment"),
+                ),
+                "simplehook-schema-validation" to TrustedSelfTest(
+                    title = "SimpleHook v1 example rule validation",
+                    command = "SIMPLEHOOK_HOME=/tmp/simplehook-self-test /opt/autocrack/toolpacks/active/simplehook/bin/simplehook rules validate /opt/autocrack/toolpacks/active/simplehook/examples/replace-return-int.json --json",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("\"valid\":true"),
+                ),
+            ),
+            sources = mapOf(
+                "simplehook-cli" to TrustedSource(
+                    version = "0.1.0",
+                    url = "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook",
+                    sha256 = "c051b9b084b65374859e8caf7fc3d1f31476320646ed5383c7fd0023409ba213",
+                ),
+            ),
+        ),
         "android-lldb-server" to TrustedToolpack(
             title = "Standard LLDB client and Android server",
             version = "android-llvm-r522817_lldb-14_autocrack-2.0.0",
