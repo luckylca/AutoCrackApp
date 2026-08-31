@@ -1,13 +1,18 @@
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "bin" / "simplehook"
 EXAMPLE = ROOT / "examples" / "replace-return-int.json"
+sys.path.insert(0, str(ROOT / "libexec"))
+
+from simplehook_cli import read_lsposed_module_status
 
 
 class SimpleHookCliTest(unittest.TestCase):
@@ -82,6 +87,48 @@ class SimpleHookCliTest(unittest.TestCase):
         self.assertEqual(0, completed.returncode)
         for command in ("status", "environment", "doctor", "rules", "logs", "apply", "reload", "inspect"):
             self.assertIn(command, completed.stdout)
+
+    def test_offline_status_does_not_claim_module_is_disabled(self):
+        _, status = self.run_cli("status", "--json")
+        self.assertIsNone(status["runtime"]["module_enabled"])
+        self.assertFalse(status["runtime"]["runtime_attached"])
+        self.assertEqual("unavailable", status["module"]["source"])
+
+    def test_reads_enabled_module_and_scope_from_lsposed_database(self):
+        database = Path(self.temporary.name) / "modules_config.db"
+        connection = sqlite3.connect(database)
+        connection.executescript("""
+            CREATE TABLE modules(module_pkg_name TEXT PRIMARY KEY NOT NULL, apk_path TEXT);
+            CREATE TABLE modules_state(
+                module_pkg_name TEXT NOT NULL, user_id INTEGER NOT NULL, enabled BOOLEAN DEFAULT 0,
+                scope_request_blocked BOOLEAN DEFAULT 0,
+                PRIMARY KEY(module_pkg_name, user_id)
+            );
+            CREATE TABLE scope(
+                module_pkg_name TEXT NOT NULL, app_pkg_name TEXT NOT NULL, user_id INTEGER NOT NULL,
+                PRIMARY KEY(module_pkg_name, app_pkg_name, user_id)
+            );
+            INSERT INTO modules VALUES('com.luckylca.simplehook.runtime', '/data/app/runtime/base.apk');
+            INSERT INTO modules_state VALUES('com.luckylca.simplehook.runtime', 0, 1, 0);
+            INSERT INTO scope VALUES('com.luckylca.simplehook.runtime', 'com.example.target', 0);
+        """)
+        connection.close()
+
+        result = read_lsposed_module_status(database)
+
+        self.assertTrue(result["installed"])
+        self.assertTrue(result["enabled"])
+        self.assertEqual(["com.example.target"], result["scope_packages"])
+        self.assertEqual("lsposed_database", result["source"])
+
+    def test_rejects_invalid_lsposed_database_without_guessing(self):
+        database = Path(self.temporary.name) / "invalid.db"
+        sqlite3.connect(database).close()
+
+        result = read_lsposed_module_status(database)
+
+        self.assertIsNone(result["enabled"])
+        self.assertEqual("LSPOSED_STATUS_UNAVAILABLE", result["error"]["code"])
 
 
 if __name__ == "__main__":

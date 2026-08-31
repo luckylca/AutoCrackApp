@@ -1,4 +1,4 @@
-# SimpleHook 0.1.0
+# SimpleHook 0.1.1
 
 ## Overview
 
@@ -7,7 +7,7 @@ SimpleHook is an Android Java/Kotlin runtime debugging tool for applications and
 ## Architecture
 
 - `simplehook` is the CLI installed through AutoCrackApp's existing verified toolpack mechanism.
-- `simplehook-runtime-0.1.0.apk` is a companion and Xposed-compatible module. Its root/shell provider owns persistent rules, runtime state, inspection requests, and rotated JSONL logs.
+- `simplehook-runtime-0.1.1.apk` is a companion and Xposed-compatible module. Its root/shell provider owns persistent rules, runtime state, inspection requests, and rotated JSONL logs.
 - Injected runtime code performs exact reflection matching and installs hooks through `XposedBridge.hookMethod`.
 - Target processes read rules through LSPosed/Xposed `XSharedPreferences`. Heartbeats, states, logs, and inspect results return through an explicit, token-authenticated ordered broadcast channel. Delivery uses a bounded retry queue with event IDs; Android 14 and newer also verify the shared sender identity.
 - `simplehook-core` contains schema, type coercion, condition, state, and safety-limit logic shared by the runtime tests.
@@ -17,8 +17,8 @@ The CLI talks to the Android provider through the existing `android-shell` bridg
 
 ## Installation
 
-1. Install the trusted `simplehook-toolpack-0.1.0.zip` in AutoCrackApp.
-2. Install `simplehook-runtime-0.1.0.apk` on the Android device.
+1. Install the trusted `simplehook-toolpack-0.1.1.zip` in AutoCrackApp.
+2. Install `simplehook-runtime-0.1.1.apk` on the Android device.
 3. In LSPosed or another compatible runtime, enable SimpleHook Runtime only for test packages you own.
 4. After enabling or upgrading, refresh the module in the LSPosed manager and restart selected target processes. Reboot the device only when the installed framework explicitly requires it.
 5. Run `simplehook doctor --json` and `simplehook status --json`.
@@ -104,7 +104,9 @@ The runtime starts with the package `PathClassLoader`, observes both `ClassLoade
 ## Troubleshooting
 
 - `RUNTIME_UNAVAILABLE`: install the runtime APK and verify `simplehook environment --json`.
-- `module_enabled: false`: enable the module for the test package and restart that package.
+- `module_enabled` is read from the LSPosed database by the root CLI. `null` means the configuration could not be inspected; it must never be interpreted as disabled.
+- `runtime_attached` and `heartbeat_recent` report whether a scoped target process contacted the companion recently. `false` is normal when the target process is stopped and does not imply that the module is disabled.
+- `module_scoped` and `scope_packages` report the configured LSPosed target scope independently from runtime heartbeat state.
 - `WAITING_FOR_PROCESS`: start the selected package/process.
 - `WAITING_FOR_CLASS`: trigger the feature that loads the class, then query status again.
 - `CLASS_NOT_FOUND`: the class did not load before the inspect timeout; verify package and class spelling.

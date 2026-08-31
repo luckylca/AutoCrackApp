@@ -6,13 +6,18 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 AUTHORITY = "com.luckylca.simplehook.runtime"
+MODULE_PACKAGE = "com.luckylca.simplehook.runtime"
+LSPOSED_DATABASE = "/data/adb/lspd/config/modules_config.db"
 VALID_ACTIONS = {
     "record", "replace_return", "replace_argument", "before", "after", "skip_original",
     "field_read", "field_write", "field_record",
@@ -190,7 +195,11 @@ class FileBackend:
     def call(self, method, request):
         if method == "status":
             rules = [json.loads(path.read_text(encoding="utf-8")) for path in self._files()]
-            return {"ok": True, "version": VERSION, "runtime": {"available": False, "module_enabled": False},
+            return {"ok": True, "version": VERSION, "runtime": {
+                        "available": False, "module_enabled": None,
+                        "module_enabled_source": "runtime_unavailable",
+                        "runtime_attached": False, "heartbeat_recent": False,
+                        "heartbeat_max_age_ms": 5000, "active_process_count": 0},
                     "rules": {"total": len(rules), "active": sum(item.get("enabled", True) for item in rules)}, "processes": []}
         if method == "rules_list":
             return {"ok": True, "rules": [self._with_state(json.loads(path.read_text(encoding="utf-8"))) for path in self._files()], "generation": self._generation()}
@@ -316,6 +325,117 @@ def android_value(command):
     return completed.stdout.strip() if completed.returncode == 0 else None
 
 
+def read_lsposed_module_status(database_path):
+    """Read LSPosed configuration from a copied database without changing the live database."""
+    try:
+        connection = sqlite3.connect(database_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            integrity = connection.execute("PRAGMA quick_check(1)").fetchone()[0]
+            if integrity != "ok":
+                raise sqlite3.DatabaseError(f"quick_check failed: {integrity}")
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            required = {"modules", "modules_state", "scope"}
+            if not required.issubset(tables):
+                raise sqlite3.DatabaseError("unsupported LSPosed database schema")
+            installed = connection.execute(
+                "SELECT 1 FROM modules WHERE module_pkg_name=? LIMIT 1", (MODULE_PACKAGE,)
+            ).fetchone() is not None
+            state = connection.execute(
+                "SELECT enabled FROM modules_state WHERE module_pkg_name=? AND user_id=0 LIMIT 1",
+                (MODULE_PACKAGE,),
+            ).fetchone()
+            scopes = [row[0] for row in connection.execute(
+                "SELECT app_pkg_name FROM scope WHERE module_pkg_name=? AND user_id=0 ORDER BY app_pkg_name",
+                (MODULE_PACKAGE,),
+            )]
+            return {
+                "package": MODULE_PACKAGE,
+                "installed": installed,
+                "enabled": bool(state[0]) if state is not None else False,
+                "scope_count": len(scopes),
+                "scope_packages": scopes,
+                "source": "lsposed_database",
+            }
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error) as error:
+        return {
+            "package": MODULE_PACKAGE,
+            "installed": None,
+            "enabled": None,
+            "scope_count": None,
+            "scope_packages": [],
+            "source": "unavailable",
+            "error": {"code": "LSPOSED_STATUS_UNAVAILABLE", "message": str(error)},
+        }
+
+
+def lsposed_module_status():
+    base = provider_command()
+    workspace = Path("/workspace")
+    if not base or not workspace.is_dir():
+        return {
+            "package": MODULE_PACKAGE, "installed": None, "enabled": None,
+            "scope_count": None, "scope_packages": [], "source": "unavailable",
+            "error": {"code": "LSPOSED_STATUS_UNAVAILABLE",
+                      "message": "Android root bridge or shared workspace is unavailable"},
+        }
+
+    source_files = [LSPOSED_DATABASE, LSPOSED_DATABASE + "-wal", LSPOSED_DATABASE + "-shm"]
+    hash_script = "; ".join(
+        f'if test -e {shlex.quote(item)}; then sha256sum {shlex.quote(item)}; '
+        f'else echo MISSING:{shlex.quote(item)}; fi' for item in source_files
+    )
+    last_error = "LSPosed database changed while it was being copied"
+    for _ in range(3):
+        with tempfile.TemporaryDirectory(prefix=".simplehook-lsposed-", dir=workspace) as temporary:
+            destination = "/workspace/" + Path(temporary).name
+            copy_parts = [
+                f'cp {shlex.quote(LSPOSED_DATABASE)} {shlex.quote(destination + "/modules_config.db")}'
+            ]
+            for suffix in ("-wal", "-shm"):
+                source = LSPOSED_DATABASE + suffix
+                target = destination + "/modules_config.db" + suffix
+                copy_parts.append(
+                    f'if test -e {shlex.quote(source)}; then cp {shlex.quote(source)} {shlex.quote(target)}; fi'
+                )
+            before = android_value(["sh", "-c", hash_script])
+            copied = subprocess.run(base + ["sh", "-c", "; ".join(copy_parts)],
+                                    text=True, capture_output=True, timeout=8)
+            after = android_value(["sh", "-c", hash_script])
+            if copied.returncode != 0:
+                last_error = (copied.stderr or copied.stdout).strip() or "Unable to copy LSPosed database"
+                continue
+            if before is None or before != after:
+                continue
+            result = read_lsposed_module_status(Path(temporary) / "modules_config.db")
+            if result["source"] == "lsposed_database":
+                return result
+            last_error = result.get("error", {}).get("message", last_error)
+    return {
+        "package": MODULE_PACKAGE, "installed": None, "enabled": None,
+        "scope_count": None, "scope_packages": [], "source": "unavailable",
+        "error": {"code": "LSPOSED_STATUS_UNAVAILABLE", "message": last_error},
+    }
+
+
+def status_result(store):
+    result = call_checked(store, "status")
+    module = lsposed_module_status()
+    runtime = result.setdefault("runtime", {})
+    runtime.setdefault("runtime_attached", False)
+    runtime.setdefault("heartbeat_recent", runtime["runtime_attached"])
+    runtime["module_enabled"] = module["enabled"]
+    runtime["module_enabled_source"] = module["source"]
+    runtime["module_scoped"] = module["scope_count"] > 0 if module["scope_count"] is not None else None
+    runtime["scope_packages"] = module["scope_packages"]
+    result["module"] = module
+    return result
+
+
 def environment_result(store):
     sdk = android_value(["getprop", "ro.build.version.sdk"])
     release = android_value(["getprop", "ro.build.version.release"])
@@ -323,12 +443,19 @@ def environment_result(store):
     identity = android_value(["id"])
     selinux = android_value(["getenforce"])
     framework = android_value(["sh", "-c", "test -e /system/framework/XposedBridge.jar -o -d /data/adb/lspd && echo yes || echo no"])
-    status = store.call("status", {})
+    status = status_result(store)
+    runtime = status.get("runtime", {})
+    module = status.get("module", {})
     return {"ok": True, "android": {"version": release, "api_level": int(sdk) if sdk and sdk.isdigit() else None,
             "abi": abi, "root": bool(identity and "uid=0" in identity), "selinux": selinux},
             "xposed_compatible_runtime": framework == "yes",
-            "module_enabled": bool(status.get("runtime", {}).get("module_enabled")),
-            "runtime_available": bool(status.get("runtime", {}).get("available"))}
+            "module_enabled": module.get("enabled"),
+            "module_scoped": runtime.get("module_scoped"),
+            "scope_packages": module.get("scope_packages", []),
+            "runtime_attached": bool(runtime.get("runtime_attached")),
+            "heartbeat_recent": bool(runtime.get("heartbeat_recent")),
+            "runtime_available": bool(runtime.get("available")),
+            "module": module}
 
 
 def resolve_package(store, class_name, explicit):
@@ -387,17 +514,21 @@ def make_parser():
 
 def execute(args, store):
     if args.command == "status":
-        return call_checked(store, "status")
+        return status_result(store)
     if args.command == "environment":
         return environment_result(store)
     if args.command == "doctor":
         environment = environment_result(store)
-        checks = [{"id": "android", "ok": environment["android"]["api_level"] is not None},
-                  {"id": "root", "ok": environment["android"]["root"]},
-                  {"id": "xposed_runtime", "ok": environment["xposed_compatible_runtime"]},
-                  {"id": "module_enabled", "ok": environment["module_enabled"]}]
-        return {"ok": all(item["ok"] for item in checks), "checks": checks, "environment": environment,
-                "guidance": "Install and enable an Xposed-compatible runtime manually if checks fail; simplehook never changes the system."}
+        checks = [{"id": "android", "ok": environment["android"]["api_level"] is not None, "required": True},
+                  {"id": "root", "ok": environment["android"]["root"], "required": True},
+                  {"id": "xposed_runtime", "ok": environment["xposed_compatible_runtime"], "required": True},
+                  {"id": "module_enabled", "ok": environment["module_enabled"] is True, "required": True,
+                   "source": environment["module"].get("source")},
+                  {"id": "runtime_attached", "ok": environment["runtime_attached"], "required": False,
+                   "detail": "No recent heartbeat is expected when no scoped target process is active"}]
+        required_ok = all(item["ok"] for item in checks if item["required"])
+        return {"ok": required_ok, "checks": checks, "environment": environment,
+                "guidance": "A missing heartbeat never means the LSPosed module is disabled. SimpleHook diagnostics are read-only and never change LSPosed configuration."}
     if args.command in {"apply", "reload"}:
         return call_checked(store, "reload")
     if args.command == "rules":

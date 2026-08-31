@@ -7,8 +7,8 @@ import stat
 import zipfile
 
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-VERSION = "simplehook-0.1.0"
-OUTPUT_NAME = "simplehook-toolpack-0.1.0.zip"
+VERSION = "simplehook-0.1.1"
+OUTPUT_NAME = "simplehook-toolpack-0.1.1.zip"
 EXECUTABLES = {"bin/simplehook", "libexec/simplehook_cli.py"}
 
 
@@ -60,7 +60,7 @@ def main():
             {"id": "simplehook-help", "title": "SimpleHook CLI command surface", "command": f"{pack_root}/bin/simplehook --help", "expectedExitCodes": [0], "outputContains": ["rules", "inspect", "environment"]},
             {"id": "simplehook-schema-validation", "title": "SimpleHook v1 example rule validation", "command": f"SIMPLEHOOK_HOME=/tmp/simplehook-self-test {pack_root}/bin/simplehook rules validate {pack_root}/examples/replace-return-int.json --json", "expectedExitCodes": [0], "outputContains": ["\"valid\":true"]},
         ],
-        "sources": [{"name": "simplehook-cli", "version": "0.1.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook", "sha256": sha256(root / "libexec/simplehook_cli.py")}],
+        "sources": [{"name": "simplehook-cli", "version": "0.1.1", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook", "sha256": sha256(root / "libexec/simplehook_cli.py")}],
     }
     manifest = dist / "manifest.json"
     manifest.write_text(json.dumps(manifest_data, indent=2) + "\n", encoding="utf-8")

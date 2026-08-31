@@ -39,7 +39,7 @@ concurrency:
 
 jobs:
   build:
-    name: Test, lint, build, and package SimpleHook 0.1.0
+    name: Test, lint, build, and package SimpleHook 0.1.1
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -91,14 +91,14 @@ jobs:
         run: |
           python3 toolpacks/simplehook/build_toolpack.py | tee /tmp/simplehook-build-summary.txt
           cp /tmp/simplehook-build-summary.txt toolpacks/simplehook/dist/build-summary.txt
-          unzip -t toolpacks/simplehook/dist/simplehook-toolpack-0.1.0.zip
+          unzip -t toolpacks/simplehook/dist/simplehook-toolpack-0.1.1.zip
           jq -e '
             .schemaVersion == 1 and
             .id == "simplehook" and
-            .version == "simplehook-0.1.0" and
-            .payloadSha256 == "8a9539f7cc496843df92e23304b636bbe83e65eee1012447517d055d5fbb7ecd" and
-            .payloadSizeBytes == 35962 and
-            .sources[0].sha256 == "c051b9b084b65374859e8caf7fc3d1f31476320646ed5383c7fd0023409ba213" and
+            .version == "simplehook-0.1.1" and
+            .payloadSha256 == "f4aaf2f32899e1ba2023dd21e7342cd0c3c5ac5550d80a63d64785f27a348d7d" and
+            .payloadSizeBytes == 42763 and
+            .sources[0].sha256 == "1c7fcc4e36f4500af7a7d7c0ff4bb0add2481433847204b8c7ab47512e8285ae" and
             ([.commands[].name] | index("simplehook")) != null
           ' toolpacks/simplehook/dist/manifest.json >/dev/null
 
@@ -113,22 +113,22 @@ jobs:
 
       - name: Assemble release artifacts and checksums
         run: |
-          mkdir -p dist/simplehook-0.1.0
-          cp toolpacks/simplehook/dist/simplehook-toolpack-0.1.0.zip dist/simplehook-0.1.0/
-          cp toolpacks/simplehook/dist/manifest.json dist/simplehook-0.1.0/manifest.json
+          mkdir -p dist/simplehook-0.1.1
+          cp toolpacks/simplehook/dist/simplehook-toolpack-0.1.1.zip dist/simplehook-0.1.1/
+          cp toolpacks/simplehook/dist/manifest.json dist/simplehook-0.1.1/manifest.json
           cp simplehook-runtime/build/outputs/apk/debug/simplehook-runtime-debug.apk \
-            dist/simplehook-0.1.0/simplehook-runtime-0.1.0.apk
+            dist/simplehook-0.1.1/simplehook-runtime-0.1.1.apk
           cp simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk \
-            dist/simplehook-0.1.0/SimpleHookTestApp.apk
-          cd dist/simplehook-0.1.0
-          sha256sum simplehook-toolpack-0.1.0.zip simplehook-runtime-0.1.0.apk \
+            dist/simplehook-0.1.1/SimpleHookTestApp.apk
+          cd dist/simplehook-0.1.1
+          sha256sum simplehook-toolpack-0.1.1.zip simplehook-runtime-0.1.1.apk \
             SimpleHookTestApp.apk manifest.json > SHA256SUMS
 
       - name: Upload SimpleHook package
         uses: actions/upload-artifact@v4
         with:
-          name: simplehook-0.1.0
-          path: dist/simplehook-0.1.0/
+          name: simplehook-0.1.1
+          path: dist/simplehook-0.1.1/
           if-no-files-found: error
           retention-days: 30
 
@@ -136,7 +136,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: simplehook-0.1.0-reports
+          name: simplehook-0.1.1-reports
           path: |
             simplehook-core/build/reports/
             simplehook-runtime/build/reports/

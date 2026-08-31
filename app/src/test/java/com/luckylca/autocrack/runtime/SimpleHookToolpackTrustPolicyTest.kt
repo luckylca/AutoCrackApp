@@ -22,11 +22,11 @@ class SimpleHookToolpackTrustPolicyTest {
         schemaVersion = 1,
         id = "simplehook",
         title = "SimpleHook Android Java method debugger",
-        version = "simplehook-0.1.0",
+        version = "simplehook-0.1.1",
         architecture = "all",
         payloadEntry = "payload.zip",
-        payloadSha256 = "8a9539f7cc496843df92e23304b636bbe83e65eee1012447517d055d5fbb7ecd",
-        payloadSizeBytes = 35_962L,
+        payloadSha256 = "f4aaf2f32899e1ba2023dd21e7342cd0c3c5ac5550d80a63d64785f27a348d7d",
+        payloadSizeBytes = 42_763L,
         requiredPaths = listOf(
             "bin/simplehook",
             "libexec/simplehook_cli.py",
@@ -60,9 +60,9 @@ class SimpleHookToolpackTrustPolicyTest {
         sources = listOf(
             ToolpackSourceArtifact(
                 name = "simplehook-cli",
-                version = "0.1.0",
+                version = "0.1.1",
                 url = "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook",
-                sha256 = "c051b9b084b65374859e8caf7fc3d1f31476320646ed5383c7fd0023409ba213",
+                sha256 = "1c7fcc4e36f4500af7a7d7c0ff4bb0add2481433847204b8c7ab47512e8285ae",
             ),
         ),
         description = "Manage precise, persistent LSPosed/Xposed Java method debugging rules and structured logs for authorized Android test applications.",

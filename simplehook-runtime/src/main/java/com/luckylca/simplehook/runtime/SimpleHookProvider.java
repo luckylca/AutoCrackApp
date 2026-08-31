@@ -107,8 +107,16 @@ public final class SimpleHookProvider extends ContentProvider {
         JSONArray all = rules.rules();
         int enabled = 0;
         for (int i = 0; i < all.length(); i++) if (all.getJSONObject(i).optBoolean("enabled", true)) enabled++;
-        return ok().put("version", "0.1.0")
-                .put("runtime", new JSONObject().put("available", true).put("module_enabled", !HEARTBEATS.isEmpty()))
+        boolean heartbeatRecent = !HEARTBEATS.isEmpty();
+        return ok().put("version", "0.1.1")
+                .put("runtime", new JSONObject()
+                        .put("available", true)
+                        .put("module_enabled", JSONObject.NULL)
+                        .put("module_enabled_source", "unavailable_to_app_uid")
+                        .put("runtime_attached", heartbeatRecent)
+                        .put("heartbeat_recent", heartbeatRecent)
+                        .put("heartbeat_max_age_ms", HEARTBEAT_MAX_AGE_MS)
+                        .put("active_process_count", HEARTBEATS.size()))
                 .put("rules", new JSONObject().put("total", all.length()).put("active", enabled))
                 .put("processes", active);
     }
