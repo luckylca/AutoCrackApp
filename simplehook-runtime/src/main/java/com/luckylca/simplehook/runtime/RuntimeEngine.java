@@ -38,10 +38,12 @@ final class RuntimeEngine {
     private final Set<ClassLoader> classLoaders = ConcurrentHashMap.newKeySet();
     private final Map<String, HookRule> activeRules = new ConcurrentHashMap<>();
     private final Set<String> installed = ConcurrentHashMap.newKeySet();
+    private final Set<String> waitingForClass = ConcurrentHashMap.newKeySet();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AtomicInteger hookedMembers = new AtomicInteger();
     private final AtomicLong rateSecond = new AtomicLong();
     private final AtomicInteger rateCount = new AtomicInteger();
+    private final AtomicLong stateOrder = new AtomicLong(System.currentTimeMillis() * 1_000L);
     private volatile long generation = -1L;
 
     RuntimeEngine(Context context, String packageName, String processName, ClassLoader classLoader) {
@@ -74,6 +76,7 @@ final class RuntimeEngine {
         if (!response.optBoolean("ok")) return;
         long nextGeneration = response.optLong("generation", 0L);
         if (nextGeneration == generation) {
+            retryWaitingRules();
             heartbeat();
             return;
         }
@@ -85,6 +88,7 @@ final class RuntimeEngine {
         }
         activeRules.clear();
         activeRules.putAll(next);
+        waitingForClass.retainAll(next.keySet());
         generation = nextGeneration;
         for (HookRule rule : next.values()) install(rule);
         heartbeat();
@@ -106,6 +110,7 @@ final class RuntimeEngine {
                 Class<?> target = findAlreadyLoadedClass(loader, rule.target.className);
                 if (target == null) throw new ClassNotFoundException(rule.target.className);
                 installOnClass(rule, target);
+                waitingForClass.remove(rule.id);
                 loaded = true;
                 break;
             } catch (ClassNotFoundException error) {
@@ -116,8 +121,17 @@ final class RuntimeEngine {
             }
         }
         if (!loaded) {
-            state(rule.id, lastError instanceof ClassNotFoundException ? RuleState.WAITING_FOR_CLASS : RuleState.FAILED,
+            boolean waiting = lastError instanceof ClassNotFoundException;
+            if (waiting) waitingForClass.add(rule.id); else waitingForClass.remove(rule.id);
+            state(rule.id, waiting ? RuleState.WAITING_FOR_CLASS : RuleState.FAILED,
                     lastError == null ? null : lastError.toString());
+        }
+    }
+
+    private void retryWaitingRules() {
+        for (String id : waitingForClass.toArray(new String[0])) {
+            HookRule rule = activeRules.get(id);
+            if (rule == null) waitingForClass.remove(id); else install(rule);
         }
     }
 
@@ -361,15 +375,34 @@ final class RuntimeEngine {
     }
 
     private void installClassLoaderObserver() throws Throwable {
-        Method loadClass = ClassLoader.class.getDeclaredMethod("loadClass", String.class);
-        XposedBridge.hookMethod(loadClass, new XC_MethodHook(10) {
+        observeClassLoaderMethod(ClassLoader.class.getDeclaredMethod("loadClass", String.class));
+        observeClassLoaderMethod(ClassLoader.class.getDeclaredMethod("loadClass", String.class, boolean.class));
+        Class<?> baseDexClassLoader = Class.forName("dalvik.system.BaseDexClassLoader");
+        observeClassLoaderMethod(baseDexClassLoader.getDeclaredMethod("findClass", String.class));
+        for (Constructor<?> constructor : baseDexClassLoader.getDeclaredConstructors()) {
+            XposedBridge.hookMethod(constructor, new XC_MethodHook(10) {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (param.thisObject instanceof ClassLoader loader) classLoaders.add(loader);
+                }
+            });
+        }
+    }
+
+    private void observeClassLoaderMethod(Method method) {
+        XposedBridge.hookMethod(method, new XC_MethodHook(10) {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 if (param.hasThrowable() || !(param.getResult() instanceof Class<?> loaded)) return;
                 classLoaders.add(loaded.getClassLoader() == null ? initialClassLoader : loaded.getClassLoader());
-                String name = (String) param.args[0];
                 for (HookRule rule : activeRules.values()) {
-                    if (rule.target.className.equals(name)) install(rule);
+                    if (!rule.target.className.equals(loaded.getName())) continue;
+                    try {
+                        installOnClass(rule, loaded);
+                        waitingForClass.remove(rule.id);
+                    } catch (Throwable error) {
+                        state(rule.id, RuleState.FAILED, error.toString());
+                    }
                 }
             }
         });
@@ -449,6 +482,7 @@ final class RuntimeEngine {
     private void state(String id, RuleState state, String detail) {
         try {
             JSONObject request = new JSONObject().put("id", id).put("state", state.name()).put("package", packageName);
+            request.put("event_order", stateOrder.incrementAndGet()).put("generation", generation);
             if (detail != null) request.put("detail", detail);
             channel.send("state", request);
         } catch (JSONException error) {

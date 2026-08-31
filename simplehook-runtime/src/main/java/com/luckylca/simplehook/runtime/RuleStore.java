@@ -11,28 +11,38 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-@SuppressLint("ApplySharedPref") // XSharedPreferences readers must observe committed generations immediately.
+@SuppressLint({"ApplySharedPref", "WorldReadableFiles"})
 final class RuleStore {
     private static final String PREFS = "simplehook_rules";
     private static final String RULES = "rules";
     private static final String GENERATION = "generation";
     private static final String STATES = "states";
+    private static final String STATE_ORDERS = "state_orders";
     private static final String INSPECTION_REQUESTS = "inspection_requests";
     private static final String INSPECTION_RESULTS = "inspection_results";
+    private static final String WORLD_READABLE_MIGRATED = "world_readable_migrated_v1";
     static final String CHANNEL_TOKEN = "channel_token";
     private final SharedPreferences preferences;
 
     RuleStore(Context context) {
         Context credentialContext = context;
         Context deviceContext = context.createDeviceProtectedStorageContext();
-        SharedPreferences credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        SharedPreferences devicePreferences = deviceContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        // LSPosed API 93 redirects this file into its protected preference bridge. The legacy
+        // world-readable mode is the signal that permits XSharedPreferences readers in scoped apps.
+        SharedPreferences credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
+        SharedPreferences devicePreferences = deviceContext.getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
         if (!credentialPreferences.contains(RULES) && devicePreferences.contains(RULES)) {
             credentialContext.moveSharedPreferencesFrom(deviceContext, PREFS);
-            credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
         }
-        if (!credentialPreferences.contains(CHANNEL_TOKEN)) {
-            credentialPreferences.edit().putString(CHANNEL_TOKEN, UUID.randomUUID().toString()).commit();
+        if (!credentialPreferences.getBoolean(WORLD_READABLE_MIGRATED, false)
+                || !credentialPreferences.contains(CHANNEL_TOKEN)) {
+            SharedPreferences.Editor migration = credentialPreferences.edit()
+                    .putBoolean(WORLD_READABLE_MIGRATED, true);
+            if (!credentialPreferences.contains(CHANNEL_TOKEN)) {
+                migration.putString(CHANNEL_TOKEN, UUID.randomUUID().toString());
+            }
+            migration.commit();
         }
         preferences = credentialPreferences;
     }
@@ -116,12 +126,32 @@ final class RuleStore {
 
     synchronized void setState(String id, RuleState state, String detail) throws JSONException {
         JSONObject states = new JSONObject(preferences.getString(STATES, "{}"));
-        JSONObject value = new JSONObject()
-                .put("state", state.name())
-                .put("updated_at", System.currentTimeMillis());
-        if (detail != null) value.put("detail", detail);
-        states.put(id, value);
-        preferences.edit().putString(STATES, states.toString()).commit();
+        JSONObject orders = objectPreference(STATE_ORDERS);
+        states.put(id, stateValue(state, detail));
+        orders.remove(id);
+        preferences.edit()
+                .putString(STATES, states.toString())
+                .putString(STATE_ORDERS, orders.toString())
+                .commit();
+    }
+
+    synchronized boolean setRuntimeState(String id, RuleState state, String detail, long eventOrder,
+            long eventGeneration) throws JSONException {
+        if (eventGeneration > 0L && eventGeneration != generation()) return false;
+        if (eventOrder <= 0L) {
+            setState(id, state, detail);
+            return true;
+        }
+        JSONObject orders = objectPreference(STATE_ORDERS);
+        if (eventOrder <= orders.optLong(id, -1L)) return false;
+        JSONObject states = new JSONObject(preferences.getString(STATES, "{}"));
+        states.put(id, stateValue(state, detail));
+        orders.put(id, eventOrder);
+        preferences.edit()
+                .putString(STATES, states.toString())
+                .putString(STATE_ORDERS, orders.toString())
+                .commit();
+        return true;
     }
 
     synchronized JSONObject state(String id) throws JSONException {
@@ -186,6 +216,14 @@ final class RuleStore {
 
     private JSONObject objectPreference(String key) throws JSONException {
         return new JSONObject(preferences.getString(key, "{}"));
+    }
+
+    private static JSONObject stateValue(RuleState state, String detail) throws JSONException {
+        JSONObject value = new JSONObject()
+                .put("state", state.name())
+                .put("updated_at", System.currentTimeMillis());
+        if (detail != null) value.put("detail", detail);
+        return value;
     }
 
     private void save(JSONArray rules) {

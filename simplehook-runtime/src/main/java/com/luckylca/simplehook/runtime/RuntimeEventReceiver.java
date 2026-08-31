@@ -1,5 +1,6 @@
 package com.luckylca.simplehook.runtime;
 
+import android.app.Activity;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -7,12 +8,25 @@ import android.os.Build;
 import com.luckylca.simplehook.core.RuleState;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import org.json.JSONObject;
 
 public final class RuntimeEventReceiver extends BroadcastReceiver {
+    private static final int MAX_RECENT_EVENTS = 512;
+    private static final Set<String> RECENT_EVENTS = ConcurrentHashMap.newKeySet();
+    private static final Queue<String> RECENT_ORDER = new ConcurrentLinkedQueue<>();
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (!RuntimeChannel.ACTION.equals(intent.getAction())) return;
+        String eventId = intent.getStringExtra(RuntimeChannel.EVENT_ID);
+        if (eventId != null && !RECENT_EVENTS.add(eventId)) {
+            acknowledge(true);
+            return;
+        }
         try {
             JSONObject payload = new JSONObject(intent.getStringExtra(RuntimeChannel.JSON));
             RuleStore rules = new RuleStore(context);
@@ -24,8 +38,9 @@ public final class RuntimeEventReceiver extends BroadcastReceiver {
                 case "state" -> {
                     JSONObject rule = rules.find(payload.getString("id"));
                     requirePackage(rule, payload.getString("package"), "rule");
-                    rules.setState(payload.getString("id"), RuleState.valueOf(payload.getString("state")),
-                            payload.isNull("detail") ? null : payload.optString("detail", null));
+                    rules.setRuntimeState(payload.getString("id"), RuleState.valueOf(payload.getString("state")),
+                            payload.isNull("detail") ? null : payload.optString("detail", null),
+                            payload.optLong("event_order", 0L), payload.optLong("generation", 0L));
                 }
                 case "log" -> {
                     JSONObject entry = payload.getJSONObject("entry");
@@ -39,9 +54,26 @@ public final class RuntimeEventReceiver extends BroadcastReceiver {
                 }
                 default -> throw new IllegalArgumentException("Unknown runtime event: " + event);
             }
+            remember(eventId);
+            acknowledge(true);
         } catch (Throwable error) {
+            if (eventId != null) RECENT_EVENTS.remove(eventId);
+            acknowledge(false);
             android.util.Log.e("SimpleHook", "Runtime event rejected", error);
         }
+    }
+
+    private void remember(String eventId) {
+        if (eventId == null) return;
+        RECENT_ORDER.add(eventId);
+        while (RECENT_ORDER.size() > MAX_RECENT_EVENTS) {
+            String expired = RECENT_ORDER.poll();
+            if (expired != null) RECENT_EVENTS.remove(expired);
+        }
+    }
+
+    private void acknowledge(boolean accepted) {
+        if (isOrderedBroadcast()) setResultCode(accepted ? Activity.RESULT_OK : Activity.RESULT_CANCELED);
     }
 
     private static void verifyToken(String expected, String actual) {

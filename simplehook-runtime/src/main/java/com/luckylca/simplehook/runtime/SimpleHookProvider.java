@@ -138,10 +138,12 @@ public final class SimpleHookProvider extends ContentProvider {
     }
 
     private JSONObject updateState(JSONObject request) throws JSONException {
-        rules.setState(
+        rules.setRuntimeState(
                 request.getString("id"),
                 com.luckylca.simplehook.core.RuleState.valueOf(request.getString("state")),
-                nullable(request, "detail"));
+                nullable(request, "detail"),
+                request.optLong("event_order", 0L),
+                request.optLong("generation", 0L));
         return ok();
     }
 

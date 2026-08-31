@@ -497,8 +497,8 @@ internal object BuiltInToolpackTrustPolicy {
             title = "SimpleHook Android Java method debugger",
             version = "simplehook-0.1.0",
             architecture = "all",
-            payloadSha256 = "aaafc29c328b8fcdc12833d0c479229c9c3a1b0c4746b7dfea5a88be4ef4f0d2",
-            payloadSizeBytes = 35_447L,
+            payloadSha256 = "8a9539f7cc496843df92e23304b636bbe83e65eee1012447517d055d5fbb7ecd",
+            payloadSizeBytes = 35_962L,
             requiredPaths = setOf(
                 "bin/simplehook",
                 "libexec/simplehook_cli.py",

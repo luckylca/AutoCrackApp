@@ -7,10 +7,16 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Process;
+import dalvik.system.DexClassLoader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import org.json.JSONObject;
 
 public final class SimpleHookTestProvider extends ContentProvider {
+    private static volatile Class<?> delayedType;
+
     @Override
     public boolean onCreate() {
         return true;
@@ -45,6 +51,7 @@ public final class SimpleHookTestProvider extends ContentProvider {
             case "fields" -> response.put("static_field", HookTargets.staticField)
                     .put("instance_field", target.instanceField);
             case "exception" -> invokeException(response, target);
+            case "load_delayed_class" -> response.put("value", loadDelayedClass().getName());
             case "load_delayed" -> invokeDelayed(response);
             case "reset_fields" -> {
                 HookTargets.staticField = 7;
@@ -65,10 +72,30 @@ public final class SimpleHookTestProvider extends ContentProvider {
         }
     }
 
-    private static JSONObject invokeDelayed(JSONObject response) throws Exception {
-        Class<?> type = Class.forName("com.luckylca.simplehook.testapp.DelayedTarget");
-        Method method = type.getDeclaredMethod("loaded");
+    private JSONObject invokeDelayed(JSONObject response) throws Exception {
+        Method method = loadDelayedClass().getDeclaredMethod("loaded");
         return response.put("value", method.invoke(null));
+    }
+
+    private Class<?> loadDelayedClass() throws Exception {
+        if (delayedType != null) return delayedType;
+        File directory = new File(getContext().getCodeCacheDir(), "simplehook-delayed");
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new IllegalStateException("Cannot create delayed dex directory");
+        }
+        File dex = new File(directory, "classes.dex");
+        if (dex.exists() && !dex.delete()) throw new IllegalStateException("Cannot replace delayed dex");
+        try (InputStream input = getContext().getAssets().open("delayed/classes.dex");
+             FileOutputStream output = new FileOutputStream(dex)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) >= 0) output.write(buffer, 0, read);
+        }
+        if (!dex.setReadOnly()) throw new IllegalStateException("Cannot protect delayed dex");
+        ClassLoader loader = new DexClassLoader(dex.getAbsolutePath(), directory.getAbsolutePath(),
+                null, getClass().getClassLoader());
+        delayedType = Class.forName("com.luckylca.simplehook.delayed.DelayedTarget", true, loader);
+        return delayedType;
     }
 
     private static JSONObject error(String code, String message) {

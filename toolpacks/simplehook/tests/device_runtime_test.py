@@ -172,11 +172,13 @@ class DeviceTest:
 
         delayed = self.rule("delayed", "loaded", {"type": "replace_return", "value": "loaded-hook"},
                             return_type="java.lang.String")
-        delayed["target"]["class"] = "com.luckylca.simplehook.testapp.DelayedTarget"
+        delayed["target"]["class"] = "com.luckylca.simplehook.delayed.DelayedTarget"
         self.stop_target(); self.add(delayed); self.target("get_int")
-        waiting = bool(self.wait(lambda: self._state(delayed["id"]) == "WAITING_FOR_CLASS"))
+        waiting = bool(self.wait(lambda: self._state(delayed["id"]) == "WAITING_FOR_CLASS", timeout=10))
+        class_loaded = self.target("load_delayed_class").get("value") == delayed["target"]["class"]
+        active = bool(self.wait(lambda: self._state(delayed["id"]) == "ACTIVE", timeout=10))
         loaded = self.target("load_delayed").get("value") == "loaded-hook"
-        self.results["class_not_loaded"] = waiting and loaded
+        self.results["class_not_loaded"] = waiting and class_loaded and active and loaded
         self.remove(delayed["id"])
 
         invalid = self.rule("invalid", "*", {"type": "record"})

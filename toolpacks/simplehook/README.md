@@ -9,7 +9,7 @@ SimpleHook is an Android Java/Kotlin runtime debugging tool for applications and
 - `simplehook` is the CLI installed through AutoCrackApp's existing verified toolpack mechanism.
 - `simplehook-runtime-0.1.0.apk` is a companion and Xposed-compatible module. Its root/shell provider owns persistent rules, runtime state, inspection requests, and rotated JSONL logs.
 - Injected runtime code performs exact reflection matching and installs hooks through `XposedBridge.hookMethod`.
-- Target processes read rules through LSPosed/Xposed `XSharedPreferences`. Heartbeats, states, logs, and inspect results return through an explicit, token-authenticated broadcast channel; Android 14 and newer also verify the shared sender identity.
+- Target processes read rules through LSPosed/Xposed `XSharedPreferences`. Heartbeats, states, logs, and inspect results return through an explicit, token-authenticated ordered broadcast channel. Delivery uses a bounded retry queue with event IDs; Android 14 and newer also verify the shared sender identity.
 - `simplehook-core` contains schema, type coercion, condition, state, and safety-limit logic shared by the runtime tests.
 - `SimpleHookTestApp.apk` provides stable, owned targets for device validation.
 
@@ -20,7 +20,7 @@ The CLI talks to the Android provider through the existing `android-shell` bridg
 1. Install the trusted `simplehook-toolpack-0.1.0.zip` in AutoCrackApp.
 2. Install `simplehook-runtime-0.1.0.apk` on the Android device.
 3. In LSPosed or another compatible runtime, enable SimpleHook Runtime only for test packages you own.
-4. Reboot the device after first enabling or upgrading the module so the framework refreshes module metadata, then restart selected target processes after scope changes.
+4. After enabling or upgrading, refresh the module in the LSPosed manager and restart selected target processes. Reboot the device only when the installed framework explicitly requires it.
 5. Run `simplehook doctor --json` and `simplehook status --json`.
 
 The module does not install root, LSPosed, Xposed, or any other system component.
@@ -99,7 +99,7 @@ The companion stores JSONL under its device-protected app data. Entries include 
 
 ## ClassLoader
 
-The runtime starts with the package `PathClassLoader`, observes `ClassLoader.loadClass`, records additional loaders, and retries waiting rules when their target class appears. This covers secondary DEX, split APK loaders, `DexClassLoader`, and common dynamic-loading flows. A missing class is `WAITING_FOR_CLASS`, not a permanent failure.
+The runtime starts with the package `PathClassLoader`, observes both `ClassLoader.loadClass` variants plus `BaseDexClassLoader.findClass` and constructor events, records additional loaders, and retries only waiting rules when their target class appears. This covers secondary DEX, split APK loaders, `DexClassLoader`, and common dynamic-loading flows. A missing class is `WAITING_FOR_CLASS`, not a permanent failure. A method that itself triggers the first class load may complete before installation; subsequent calls are hooked after the rule reaches `ACTIVE`.
 
 ## Troubleshooting
 
@@ -109,13 +109,13 @@ The runtime starts with the package `PathClassLoader`, observes `ClassLoader.loa
 - `WAITING_FOR_CLASS`: trigger the feature that loads the class, then query status again.
 - `CLASS_NOT_FOUND`: the class did not load before the inspect timeout; verify package and class spelling.
 - `FAILED`: inspect the rule's `runtime.detail` and JSONL logs.
-- Missing heartbeats or logs on Xiaomi/other restricted ROMs: allow the companion APK to receive explicit background broadcasts (often named AutoStart) or keep a CLI/provider query active. Rule loading and hook execution use XSharedPreferences and do not depend on the companion process being awake.
+- Missing heartbeats or logs on a restricted ROM: query `simplehook status --json`, then check whether the ROM blocks explicit foreground broadcasts. SimpleHook retries unacknowledged events with a bounded queue; it never changes AutoStart or other system settings automatically. Rule loading and hook execution use XSharedPreferences and do not depend on the companion process being awake.
 
 ## Test App
 
-`SimpleHookTestApp.apk` exposes integer, boolean, String, argument, overload, constructor, static field, instance field, exception, and delayed-class fixtures under `com.luckylca.simplehook.testapp`.
+`SimpleHookTestApp.apk` exposes integer, boolean, String, argument, overload, constructor, static field, instance field, exception, and delayed-class fixtures. The delayed fixture is built into a separate dex asset and loaded with `DexClassLoader` so `WAITING_FOR_CLASS` behavior is tested deterministically.
 
-After installing both APKs, enabling the LSPosed scope, rebooting, and unlocking the test device, run the repeatable runtime matrix from the repository:
+After installing both APKs, enabling the LSPosed scope, refreshing the module, and unlocking the test device, run the repeatable runtime matrix from the repository:
 
 ```bash
 python3 toolpacks/simplehook/tests/device_runtime_test.py --serial SERIAL --json
