@@ -84,3 +84,5 @@ Dump/pull commands that return inline base64 now accept `--output PATH`. Single-
 `memory-dump elf-dynamic --package PKG --entry lib/arm64-v8a/libfoo.so --json` parses bounded ELF dynamic table metadata including `DT_NEEDED`, `DT_SONAME`, `DT_RPATH`, `DT_RUNPATH`, and linker table addresses. It reads file-backed metadata only.
 
 `memory-dump xml-axml-decode --package PKG --entry res/xml/file.xml --json` decodes a file-backed Android binary XML string pool and start/end/text node stream. It is a readable AXML decoder, not native `XmlBlock` memory recovery.
+
+`memory-dump xml-axml-text --package PKG --entry res/xml/file.xml --output out.xml` renders decoded file-backed AXML into readable XML text, including namespace declarations and typed attribute values when available. This is still APK-backed decoding, not native `XmlBlock` memory recovery.

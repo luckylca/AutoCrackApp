@@ -558,3 +558,23 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This is file-backed AXML chunk decoding, not native in-memory `XmlBlock` / `ResXMLTree` recovery. It closes the practical readable XML path for APK-backed resources while keeping the native-memory gap explicit.
+## 23. Stage 19 AXML namespace events and readable XML rendering
+
+`memory.xml.axml_decode` was extended to expose namespace start/end events, and `memory.xml.axml_text` was added to render decoded file-backed Android binary XML into readable XML text. This turns the prior AXML node decoder into a practical extraction workflow for APK-backed resources.
+
+Implemented coverage:
+
+- Runtime capability: `memory.xml.axml_text`.
+- Toolpack command: `memory-dump xml-axml-text`.
+- Namespace chunks: `RES_XML_START_NAMESPACE_TYPE` and `RES_XML_END_NAMESPACE_TYPE`.
+- Rendered XML output includes XML declaration, namespace declarations, qualified names, and typed attribute values.
+- CLI `--output` writes rendered XML text to a local file.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.xml.axml_decode, entry=res/xml/autocrack_runtime_probe.xml)` returned node events `[start_namespace, start_tag, end_tag, end_namespace]`.
+- `runtime_execute_self(memory.xml.axml_text, entry=res/xml/autocrack_runtime_probe.xml)` rendered readable XML containing `xmlns:android`, `android:name="autocrack_runtime_probe"`, and `android:version="1"`.
+
+Boundary:
+
+- This is still file-backed AXML decoding/rendering. It does not recover an in-memory `XmlBlock` pointer or native `ResXMLTree` object.

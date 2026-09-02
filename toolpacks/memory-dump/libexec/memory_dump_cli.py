@@ -33,6 +33,7 @@ def parser():
     xp=sub.add_parser("xml-pull"); add_target(xp); xp.add_argument("resource_id", type=int); add_output(xp)
     xb=sub.add_parser("xml-binary"); add_target(xb); xb.add_argument("--resource-id", type=lambda x:int(x,0), default=0); xb.add_argument("--entry", default=""); xb.add_argument("--apk-package", default=""); xb.add_argument("--apk-path", default=""); xb.add_argument("--max-bytes", type=int, default=4194304); add_output(xb)
     xd=sub.add_parser("xml-axml-decode"); add_target(xd); xd.add_argument("--resource-id", type=lambda x:int(x,0), default=0); xd.add_argument("--entry", default=""); xd.add_argument("--apk-package", default=""); xd.add_argument("--apk-path", default=""); xd.add_argument("--max-bytes", type=int, default=4194304); xd.add_argument("--max-nodes", type=int, default=1024); xd.add_argument("--max-attributes", type=int, default=256)
+    xt=sub.add_parser("xml-axml-text"); add_target(xt); xt.add_argument("--resource-id", type=lambda x:int(x,0), default=0); xt.add_argument("--entry", default=""); xt.add_argument("--apk-package", default=""); xt.add_argument("--apk-path", default=""); xt.add_argument("--max-bytes", type=int, default=4194304); xt.add_argument("--max-nodes", type=int, default=1024); xt.add_argument("--max-attributes", type=int, default=256); xt.add_argument("--no-declaration", action="store_true"); add_output(xt)
     ae=sub.add_parser("apk-entries"); add_target(ae); ae.add_argument("--prefix", default=""); ae.add_argument("--apk-package", default=""); ae.add_argument("--apk-path", default=""); ae.add_argument("--max-entries", type=int, default=5000)
     apkp=sub.add_parser("apk-pull"); add_target(apkp); apkp.add_argument("entry"); apkp.add_argument("--source", default="base"); apkp.add_argument("--apk-package", default=""); apkp.add_argument("--apk-path", default=""); apkp.add_argument("--max-bytes", type=int, default=4194304); add_output(apkp)
     return p
@@ -60,6 +61,7 @@ def execute(a):
     if a.command=="xml-pull": return runtime_request(target_payload(a,"memory.xml.pull", resource_id=a.resource_id), a.timeout)
     if a.command=="xml-binary": return runtime_request(target_payload(a,"memory.xml.binary", resource_id=a.resource_id, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
     if a.command=="xml-axml-decode": return runtime_request(target_payload(a,"memory.xml.axml_decode", resource_id=a.resource_id, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes, max_nodes=a.max_nodes, max_attributes=a.max_attributes), a.timeout)
+    if a.command=="xml-axml-text": return runtime_request(target_payload(a,"memory.xml.axml_text", resource_id=a.resource_id, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes, max_nodes=a.max_nodes, max_attributes=a.max_attributes, include_declaration=not a.no_declaration), a.timeout)
     if a.command=="apk-entries": return runtime_request(target_payload(a,"memory.apk.entries", prefix=a.prefix, apk_package=a.apk_package, apk_path=a.apk_path, max_entries=a.max_entries), a.timeout)
     if a.command=="apk-pull": return runtime_request(target_payload(a,"memory.apk.pull", entry=a.entry, source=a.source, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
     raise CliError("INVALID_COMMAND", a.command)
@@ -173,7 +175,7 @@ def write_output_if_requested(args, result):
         return _write_module_segments(result, output)
     if getattr(args, "command", "") == "dex-scan":
         return _write_dex_scan_candidates(result, output)
-    if getattr(args, "command", "") == "xml-pull":
+    if getattr(args, "command", "") in ("xml-pull", "xml-axml-text"):
         return _write_xml_text(result, output)
     return _write_single_data(result, output)
 

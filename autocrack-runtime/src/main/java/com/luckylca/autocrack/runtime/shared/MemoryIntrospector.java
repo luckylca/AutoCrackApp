@@ -42,7 +42,7 @@ public final class MemoryIntrospector {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
                 "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
-                "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
+                "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
     public static JSONObject execute(Context context, JSONObject request) throws Exception {
@@ -68,6 +68,7 @@ public final class MemoryIntrospector {
             case "memory.xml.pull" -> xmlPull(context, request);
             case "memory.xml.binary" -> xmlBinary(context, request);
             case "memory.xml.axml_decode" -> xmlAxmlDecode(context, request);
+            case "memory.xml.axml_text" -> xmlAxmlText(context, request);
             case "memory.apk.entries" -> apkEntries(context, request);
             case "memory.apk.pull" -> apkPull(context, request);
             case "memory.capabilities" -> capabilities(context);
@@ -552,6 +553,7 @@ public final class MemoryIntrospector {
                 .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
                 .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"))
                 .put("xml_axml_decode",status(true,"file-backed Android binary XML chunk/string-pool decode"))
+                .put("xml_axml_text",status(true,"file-backed Android binary XML readable text rendering"))
                 .put("apk_entries",status(true,"base/split APK ZipFile entry enumeration and bounded entry pull"));
     }
 
@@ -573,6 +575,20 @@ public final class MemoryIntrospector {
                 .put("binary_axml", true)
                 .put("memory_reconstruction", false)
                 .put("strategy", "file-backed Android binary XML chunk/string-pool decode; not native XmlBlock memory recovery");
+    }
+
+    private static JSONObject xmlAxmlText(Context context, JSONObject request) throws Exception {
+        JSONObject decodedResult = xmlAxmlDecode(context, request);
+        if (!decodedResult.optBoolean("ok", false)) return decodedResult;
+        JSONObject decoded = decodedResult.getJSONObject("decoded");
+        boolean includeDeclaration = request.optBoolean("include_declaration", true);
+        String xml = renderAxmlText(decoded, includeDeclaration);
+        return ok().put("source", decodedResult.optJSONObject("source"))
+                .put("xml", xml)
+                .put("decoded", decoded)
+                .put("binary_axml", true)
+                .put("memory_reconstruction", false)
+                .put("strategy", "rendered text from file-backed Android binary XML decode; not native XmlBlock memory recovery");
     }
 
     private static JSONObject apkEntries(Context context, JSONObject request) throws Exception {
@@ -1058,6 +1074,14 @@ public final class MemoryIntrospector {
                 int count = Math.max(0, (size - headerSize) / 4);
                 resourceMap = new int[count];
                 for (int i=0;i<count;i++) resourceMap[i] = u32leInt(bytes, pos + headerSize + i*4);
+            } else if (type == 0x0100 && nodes.length() < maxNodes) {
+                nodes.put(new JSONObject().put("event", "start_namespace").put("depth", depth).put("line", u32leInt(bytes, pos + 8))
+                        .put("prefix", axmlStringOrNull(strings, u32leInt(bytes, pos + 16)))
+                        .put("uri", axmlStringOrNull(strings, u32leInt(bytes, pos + 20))));
+            } else if (type == 0x0101 && nodes.length() < maxNodes) {
+                nodes.put(new JSONObject().put("event", "end_namespace").put("depth", depth).put("line", u32leInt(bytes, pos + 8))
+                        .put("prefix", axmlStringOrNull(strings, u32leInt(bytes, pos + 16)))
+                        .put("uri", axmlStringOrNull(strings, u32leInt(bytes, pos + 20))));
             } else if (type == 0x0102 && nodes.length() < maxNodes) {
                 int line = u32leInt(bytes, pos + 8);
                 int ns = u32leInt(bytes, pos + 16);
@@ -1093,7 +1117,7 @@ public final class MemoryIntrospector {
             } else if (type == 0x0104 && nodes.length() < maxNodes) {
                 nodes.put(new JSONObject().put("event", "text").put("depth", depth).put("line", u32leInt(bytes, pos + 8))
                         .put("text", axmlString(strings, u32leInt(bytes, pos + 16))));
-            } else if ((type == 0x0102 || type == 0x0103 || type == 0x0104) && nodes.length() >= maxNodes) truncated = true;
+            } else if ((type == 0x0100 || type == 0x0101 || type == 0x0102 || type == 0x0103 || type == 0x0104) && nodes.length() >= maxNodes) truncated = true;
             pos += size;
         }
         return ok().put("root_type", hex(rootType)).put("root_size", rootSize)
@@ -1139,6 +1163,63 @@ public final class MemoryIntrospector {
     private static int u16le(byte[] bytes, int off) { return ((bytes[off] & 0xff) | ((bytes[off+1] & 0xff) << 8)); }
     private static int u32leInt(byte[] bytes, int off) { return (bytes[off] & 0xff) | ((bytes[off+1] & 0xff) << 8) | ((bytes[off+2] & 0xff) << 16) | ((bytes[off+3] & 0xff) << 24); }
     private static String axmlChunkName(int type) { return switch (type) { case 0x0001 -> "RES_STRING_POOL_TYPE"; case 0x0003 -> "RES_XML_TYPE"; case 0x0180 -> "RES_XML_RESOURCE_MAP_TYPE"; case 0x0100 -> "RES_XML_START_NAMESPACE_TYPE"; case 0x0101 -> "RES_XML_END_NAMESPACE_TYPE"; case 0x0102 -> "RES_XML_START_ELEMENT_TYPE"; case 0x0103 -> "RES_XML_END_ELEMENT_TYPE"; case 0x0104 -> "RES_XML_CDATA_TYPE"; default -> "AXML_CHUNK_" + type; }; }
+
+    private static String renderAxmlText(JSONObject decoded, boolean includeDeclaration) throws Exception {
+        JSONArray nodes = decoded.optJSONArray("nodes");
+        if (nodes == null) return "";
+        StringBuilder out = new StringBuilder();
+        if (includeDeclaration) out.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+        java.util.LinkedHashMap<String, String> uriToPrefix = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, String> pendingNamespaces = new java.util.LinkedHashMap<>();
+        for (int i=0; i<nodes.length(); i++) {
+            JSONObject node = nodes.getJSONObject(i);
+            String event = node.optString("event", "");
+            if ("start_namespace".equals(event)) {
+                String prefix = jsonString(node.opt("prefix"));
+                String uri = jsonString(node.opt("uri"));
+                if (uri != null && !uri.isEmpty()) {
+                    uriToPrefix.put(uri, prefix == null ? "" : prefix);
+                    pendingNamespaces.put(prefix == null ? "" : prefix, uri);
+                }
+            } else if ("end_namespace".equals(event)) {
+                String uri = jsonString(node.opt("uri"));
+                if (uri != null) uriToPrefix.remove(uri);
+            } else if ("start_tag".equals(event)) {
+                int depth = Math.max(0, node.optInt("depth", 0));
+                indent(out, depth);
+                out.append('<').append(qName(jsonString(node.opt("namespace")), node.optString("name", ""), uriToPrefix));
+                JSONArray attrs = node.optJSONArray("attributes");
+                for (Map.Entry<String,String> ns : pendingNamespaces.entrySet()) {
+                    out.append(' ');
+                    if (ns.getKey() == null || ns.getKey().isEmpty()) out.append("xmlns");
+                    else out.append("xmlns:").append(ns.getKey());
+                    out.append("=\"").append(escapeXml(ns.getValue())).append('"');
+                }
+                pendingNamespaces.clear();
+                if (attrs != null) for (int a=0; a<attrs.length(); a++) {
+                    JSONObject attr = attrs.getJSONObject(a);
+                    out.append(' ').append(qName(jsonString(attr.opt("namespace")), attr.optString("name", ""), uriToPrefix))
+                            .append("=\"").append(escapeXml(String.valueOf(attr.opt("value")))).append('"');
+                }
+                out.append(">\n");
+            } else if ("end_tag".equals(event)) {
+                int depth = Math.max(0, node.optInt("depth", 0));
+                indent(out, depth);
+                out.append("</").append(qName(jsonString(node.opt("namespace")), node.optString("name", ""), uriToPrefix)).append(">\n");
+            } else if ("text".equals(event)) {
+                indent(out, Math.max(0, node.optInt("depth", 0)));
+                out.append(escapeXml(node.optString("text", ""))).append('\n');
+            }
+        }
+        return out.toString();
+    }
+    private static String jsonString(Object value) { return value == null || value == JSONObject.NULL ? null : String.valueOf(value); }
+    private static String qName(String uri, String name, Map<String,String> uriToPrefix) {
+        if (uri == null || uri.isEmpty()) return name;
+        String prefix = uriToPrefix.get(uri);
+        return prefix == null || prefix.isEmpty() ? name : prefix + ":" + name;
+    }
+    private static void indent(StringBuilder out, int depth) { for (int i=0; i<depth; i++) out.append("  "); }
 
     private static byte[] readFile(File file,int max)throws Exception{try(InputStream in=new FileInputStream(file)){return readLimited(in,max);}}
     private static byte[] readLimited(InputStream in,int max)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream(Math.min(max,65536));byte[] buffer=new byte[16384];while(out.size()<max){int n=in.read(buffer,0,Math.min(buffer.length,max-out.size()));if(n<0)break;out.write(buffer,0,n);}return out.toByteArray();}
