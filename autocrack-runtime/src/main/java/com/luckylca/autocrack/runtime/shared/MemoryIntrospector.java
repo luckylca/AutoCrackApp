@@ -19,6 +19,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
@@ -36,7 +38,7 @@ public final class MemoryIntrospector {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.read", "memory.module.dump",
                 "memory.dex.list", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
-                "memory.xml.pull", "memory.capabilities").contains(kind);
+                "memory.xml.pull", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
     public static JSONObject execute(Context context, JSONObject request) throws Exception {
@@ -50,6 +52,8 @@ public final class MemoryIntrospector {
             case "memory.assets.list" -> assetsList(context, request);
             case "memory.assets.pull" -> assetsPull(context, request);
             case "memory.xml.pull" -> xmlPull(context, request);
+            case "memory.apk.entries" -> apkEntries(context, request);
+            case "memory.apk.pull" -> apkPull(context, request);
             case "memory.capabilities" -> capabilities();
             default -> error("UNSUPPORTED_KIND", request.optString("kind"));
         };
@@ -212,7 +216,81 @@ public final class MemoryIntrospector {
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
-                .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"));
+                .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"))
+                .put("apk_entries",status(true,"base/split APK ZipFile entry enumeration and bounded entry pull"));
+    }
+
+
+    private static JSONObject apkEntries(Context context, JSONObject request) throws Exception {
+        String prefix = normalizeZipEntry(request.optString("prefix", ""));
+        int max = clamp(request.optInt("max_entries", 5000), 1, 50000);
+        JSONArray sources = new JSONArray();
+        JSONArray entries = new JSONArray();
+        boolean truncated = false;
+        for (ApkSource source : apkSources(context)) {
+            sources.put(source.json());
+            try (ZipFile zip = new ZipFile(source.path)) {
+                java.util.Enumeration<? extends ZipEntry> all = zip.entries();
+                while (all.hasMoreElements()) {
+                    ZipEntry entry = all.nextElement();
+                    if (entry.isDirectory()) continue;
+                    String name = entry.getName();
+                    if (!prefix.isEmpty() && !name.startsWith(prefix)) continue;
+                    if (entries.length() >= max) { truncated = true; break; }
+                    entries.put(new JSONObject()
+                            .put("source", source.label)
+                            .put("apk_path", source.path)
+                            .put("name", name)
+                            .put("size", entry.getSize())
+                            .put("compressed_size", entry.getCompressedSize())
+                            .put("crc", entry.getCrc())
+                            .put("method", entry.getMethod()));
+                }
+            }
+            if (truncated) break;
+        }
+        return ok().put("sources", sources).put("prefix", prefix).put("count", entries.length())
+                .put("entries", entries).put("truncated", truncated)
+                .put("strategy", "runtime ApplicationInfo sourceDir/splitSourceDirs + ZipFile");
+    }
+
+    private static JSONObject apkPull(Context context, JSONObject request) throws Exception {
+        String sourceLabel = request.optString("source", "base");
+        String name = normalizeZipEntry(request.getString("entry"));
+        if (name.isBlank()) return error("ENTRY_REQUIRED", "entry is required");
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
+        for (ApkSource source : apkSources(context)) {
+            if (!source.label.equals(sourceLabel) && !source.path.equals(sourceLabel)) continue;
+            try (ZipFile zip = new ZipFile(source.path)) {
+                ZipEntry entry = zip.getEntry(name);
+                if (entry == null || entry.isDirectory()) return error("ENTRY_NOT_FOUND", sourceLabel + ":" + name);
+                if (entry.getSize() > max) return error("ENTRY_TOO_LARGE", "entry exceeds inline max_bytes: " + entry.getSize());
+                try (InputStream in = zip.getInputStream(entry)) {
+                    byte[] bytes = readLimited(in, max + 1);
+                    if (bytes.length > max) return error("ENTRY_TOO_LARGE", "entry exceeds inline max_bytes");
+                    return ok().put("source", source.label).put("apk_path", source.path).put("entry", name)
+                            .put("size", bytes.length).put("encoding", "base64")
+                            .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                            .put("strategy", "ZipFile entry pull from target APK file");
+                }
+            }
+        }
+        return error("APK_SOURCE_NOT_FOUND", sourceLabel);
+    }
+
+    private static List<ApkSource> apkSources(Context context) {
+        ArrayList<ApkSource> out = new ArrayList<>();
+        if (context.getApplicationInfo().sourceDir != null) out.add(new ApkSource("base", context.getApplicationInfo().sourceDir));
+        String[] splits = context.getApplicationInfo().splitSourceDirs;
+        if (splits != null) for (int i = 0; i < splits.length; i++) if (splits[i] != null) out.add(new ApkSource("split_" + i, splits[i]));
+        return out;
+    }
+
+    private static String normalizeZipEntry(String entry) {
+        String v = entry == null ? "" : entry.trim();
+        while (v.startsWith("/")) v = v.substring(1);
+        if (v.contains("..") || v.contains("\\")) throw new IllegalArgumentException("zip entry may not contain .. or backslash");
+        return v;
     }
 
     private static List<MapEntry> readMaps(int max) throws Exception {
@@ -259,6 +337,8 @@ public final class MemoryIntrospector {
     private static JSONObject status(boolean supported,String reason)throws Exception{return new JSONObject().put("supported",supported).put("reason",reason);}
     private static JSONObject unsupported(String capability,String reason,JSONArray strategies)throws Exception{return ok().put("supported",false).put("capability",capability).put("reason",reason).put("strategies",strategies);}
     private static JSONObject ok()throws Exception{return new JSONObject().put("ok",true);}private static JSONObject error(String c,String m)throws Exception{return new JSONObject().put("ok",false).put("error",new JSONObject().put("code",c).put("message",m));}
+
+    private record ApkSource(String label,String path){JSONObject json()throws Exception{return new JSONObject().put("label",label).put("path",path);}}
 
     private record MapEntry(long start,long end,String permissions,long offset,String device,long inode,String path,String raw){
         long size(){return end-start;} JSONObject json()throws Exception{return new JSONObject().put("start",hex(start)).put("end",hex(end)).put("size",size()).put("permissions",permissions).put("offset",hex(offset)).put("device",device).put("inode",inode).put("pathname",path==null||path.isEmpty()?JSONObject.NULL:path);}

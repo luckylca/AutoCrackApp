@@ -37,3 +37,8 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 ## Dump controls
 
 `module-dump`, `dex-dump`, and `assets-pull` expose `--max-bytes` so large outputs fail deterministically instead of flooding stdout. `dex-list --class-count` asks the target runtime to enumerate Dex entries up to its safety cap, which is useful when choosing the correct loader/Dex before dumping.
+
+
+## APK entries
+
+`memory-dump apk-entries --package PKG --prefix res/` enumerates base and split APK zip entries from the target runtime's `ApplicationInfo`. `memory-dump apk-pull --package PKG res/layout/example.xml --source base --max-bytes N` returns the raw APK entry bytes. This is useful for classes.dex, native libs, resources, and binary XML entries; it is not mislabeled as decoded XML.
