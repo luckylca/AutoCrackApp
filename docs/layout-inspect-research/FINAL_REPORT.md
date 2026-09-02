@@ -161,6 +161,11 @@ This supports the required loop: `ui-inspect at -> View handle -> runtime-inspec
 - CLI command surfaces and JSON envelopes.
 - SimpleHook authority migration to shared runtime.
 - Legacy Runtime Inspector compatibility authority migration.
+- UI relationship/search/control expansion: `ui.find`, `ui.parent`, `ui.children`, `ui.siblings`, expanded `ui.props`, expanded `ui.action`.
+- Runtime object control expansion: `control.object.field.set`, `control.object.method.call`.
+- Runtime Activity lifecycle metadata expansion.
+- Memory/APK file-backed expansion: `memory.apk.entries`, `memory.apk.pull`, `memory.module.file_dump`.
+- WebView navigation/control expansion: `webview.load_url`, `webview.reload`, `webview.go_back`, `webview.go_forward`, `webview.clear_cache`.
 
 ### Partially implemented / needs device proof
 
@@ -169,10 +174,10 @@ This supports the required loop: `ui-inspect at -> View handle -> runtime-inspec
 - Running Activity and ActivityThread snapshot.
 - ClassLoader and DexFile class search.
 - Object handle cross-tool loop.
-- WebView list/debug/eval.
+- WebView list/debug/eval/navigation/control needs device proof.
 - FLAG_SECURE clear.
-- Maps/modules/module dump.
-- Dex dump via file-backed strategy.
+- Maps/modules/process-memory segment dump needs device proof.
+- Dex dump via file-backed/runtime strategy needs device proof.
 - Runtime assets/XML logical pull.
 - SystemUI target contract.
 
@@ -190,7 +195,13 @@ This supports the required loop: `ui-inspect at -> View handle -> runtime-inspec
 
 - Consolidation start HEAD: `e46c3e2e678edd380c62c3c23f21faea6ddf4238`.
 - Branch: `codex/frida-capabilities-1.0.4`.
-- Consolidation commit: `feat: introduce shared layout inspect runtime toolpacks`; exact hash is intentionally not embedded because amending this file changes the hash. Use `git log -1` as source of truth.
+- Stage 1: `5bfaeede7d31d934b3b5a7f9917c85e32c230f0f` — `feat: introduce shared layout inspect runtime toolpacks`.
+- Stage 2: `458c6c6` — `feat: expand layout inspect runtime controls`.
+- Stage 3: `c2a4912` — `feat: enrich runtime activity records`.
+- Stage 4: `949e92a` — `feat: add apk entry extraction for memory dump`.
+- Stage 5: `79644f3` — `feat: extend webview runtime controls`.
+- Stage 6: `cb479e2` — `feat: add file-backed module dumps`.
+- Use `git log --oneline` for exact current short hashes after later amendments or rebases.
 
 ## 9. Remaining issues
 

@@ -17,7 +17,7 @@ where only a native declaration is observable.
 |---|---|---:|---|
 | Process list/info/kill | `module_window_app_process.xml`; runtime Xposed scope | CONFIRMED surface | runtime info in-process; host `/proc` and `am force-stop` control |
 | All windows | capture layouts; injected process; window package | CONFIRMED surface, STRONG mechanism | `WindowManagerGlobal.mViews` plus one shared add/remove observer |
-| View tree and pick | `hook/window/capture_layout/*`; parent/child/previous/next UI | CONFIRMED surface | transform-aware traversal over every root, ordered by window and draw order |
+| View tree and pick | `hook/window/capture_layout/*`; parent/child/previous/next UI | CONFIRMED surface | transform-aware traversal, hit-test, text/resource/class find, parent/children/siblings handles |
 | View properties | `object/visualization/C1151t` overloads and typed editors | CONFIRMED typed object surface | public getters first, bounded reflection second |
 | Listeners | menu/member browser plus listener-related classes | CONFIRMED surface | `View.mListenerInfo`, AdapterView and TextWatcher strategies |
 | Creation stack | `C1103g.m2479a(Throwable, View)` | CONFIRMED association | optional constructor/inflate/add tracker with weak keys and bounded stacks |
@@ -29,12 +29,12 @@ where only a native declaration is observable.
 | Class search/preview | class/member UI and object operation menu | CONFIRMED surface | bounded DexFile entries plus registered loaders and reflection |
 | Object preview/dump | generic object visualization and class member window | CONFIRMED surface | shared weak `ObjectRegistry`, cycle-safe JSON serializer |
 | SO inject | absolute-path input | CONFIRMED surface | target `System.load`; linker namespace failure reported, never hidden |
-| SO/maps dump | `MemoryUtil`, `/proc/self/maps` native string | CONFIRMED low-level primitives | structured maps parser and exact segment dump strategies |
+| SO/maps dump | `MemoryUtil`, `/proc/self/maps` native string | CONFIRMED low-level primitives | structured maps parser, exact segment dump strategy, and separate file-backed module copy with SHA-256 |
 | Dex dump | mCookie/mInternalCookie/DexCaches modes and `C1187N` offsets | CONFIRMED strategies | Java cookie strategy with API capability matrix; file-backed fallback is labeled |
-| Runtime XML | XML path UI | CONFIRMED surface | runtime `Resources`/`AssetManager`; binary XML native strategy explicitly gated |
+| Runtime XML | XML path UI | CONFIRMED surface | logical `Resources.getXml`, raw APK entry pull for `res/*.xml`; binary XmlBlock/ResXMLTree decode remains gated |
 | Runtime assets | `C1289p(AssetManager, String)` | CONFIRMED mechanism | recursive `AssetManager.list/open`, preserving runtime-readable bytes |
 | FLAG_SECURE | secure removal UI | CONFIRMED surface | enumerate roots/windows and call `Window.clearFlags`; surface limits reported |
-| WebView | JS UI and `C1292s.setTarget(WebView)` | CONFIRMED | list/info/debug/eval on main looper; optional DevTools socket discovery |
+| WebView | JS UI and `C1292s.setTarget(WebView)` | CONFIRMED | list/info/debug/eval/result plus load/reload/back/forward/cache controls; DevTools socket forwarding remains host-gated |
 | SystemUI | Xposed dynamic scope and system-server flag | CONFIRMED scope design | package/process is never hard-coded; `com.android.systemui` supported by contract |
 | Compose | no proven original Compose semantics support | NOT PROVEN | identify `AndroidComposeView`; semantics capability reported separately |
 
