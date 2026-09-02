@@ -40,7 +40,7 @@ public final class WebControlIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result",
+                "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
                 "control.secure.status", "control.secure.disable", "control.so.inject",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
@@ -52,6 +52,11 @@ public final class WebControlIntrospector {
             case "webview.debug" -> webviewDebug(request);
             case "webview.eval" -> webviewEval(request);
             case "webview.eval.result" -> webviewEvalResult(request);
+            case "webview.load_url" -> webviewLoadUrl(request);
+            case "webview.reload" -> webviewReload(request);
+            case "webview.go_back" -> webviewGo(request, true);
+            case "webview.go_forward" -> webviewGo(request, false);
+            case "webview.clear_cache" -> webviewClearCache(request);
             case "control.secure.status" -> secureStatus();
             case "control.secure.disable" -> secureDisable();
             case "control.so.inject" -> injectSo(request);
@@ -81,7 +86,10 @@ public final class WebControlIntrospector {
                 .put("class", web.getClass().getName())
                 .put("url", nullable(safe(() -> web.getUrl())))
                 .put("original_url", nullable(safe(() -> web.getOriginalUrl())))
-                .put("title", nullable(safe(() -> web.getTitle())));
+                .put("title", nullable(safe(() -> web.getTitle())))
+                .put("progress", web.getProgress())
+                .put("can_go_back", web.canGoBack())
+                .put("can_go_forward", web.canGoForward());
         try {
             WebSettings settings = web.getSettings();
             value.put("user_agent", settings.getUserAgentString())
@@ -125,6 +133,48 @@ public final class WebControlIntrospector {
         JSONObject out = ok().put("token", token).put("pending", false);
         if (value.error != null) return out.put("error_text", value.error);
         return out.put("value", value.value == null ? JSONObject.NULL : value.value);
+    }
+
+
+    private static JSONObject webviewLoadUrl(JSONObject request) throws Exception {
+        WebView web = requireWebView(request.optString("handle", ""));
+        if (web == null) return error("WEBVIEW_NOT_FOUND", request.optString("handle", ""));
+        String url = request.optString("url", "");
+        if (url.isBlank()) return error("URL_REQUIRED", "url is required");
+        web.loadUrl(url);
+        return ok().put("handle", ObjectRegistry.get().put(web, false, "webview"))
+                .put("loaded", true).put("url", url).put("persistent", false)
+                .put("strategy", "WebView.loadUrl");
+    }
+
+    private static JSONObject webviewReload(JSONObject request) throws Exception {
+        WebView web = requireWebView(request.optString("handle", ""));
+        if (web == null) return error("WEBVIEW_NOT_FOUND", request.optString("handle", ""));
+        web.reload();
+        return ok().put("handle", ObjectRegistry.get().put(web, false, "webview"))
+                .put("reloaded", true).put("url", nullable(safe(() -> web.getUrl())))
+                .put("persistent", false).put("strategy", "WebView.reload");
+    }
+
+    private static JSONObject webviewGo(JSONObject request, boolean back) throws Exception {
+        WebView web = requireWebView(request.optString("handle", ""));
+        if (web == null) return error("WEBVIEW_NOT_FOUND", request.optString("handle", ""));
+        boolean can = back ? web.canGoBack() : web.canGoForward();
+        if (!can) return error(back ? "CANNOT_GO_BACK" : "CANNOT_GO_FORWARD", "WebView has no matching history entry");
+        if (back) web.goBack(); else web.goForward();
+        return ok().put("handle", ObjectRegistry.get().put(web, false, "webview"))
+                .put("direction", back ? "back" : "forward").put("moved", true)
+                .put("persistent", false).put("strategy", back ? "WebView.goBack" : "WebView.goForward");
+    }
+
+    private static JSONObject webviewClearCache(JSONObject request) throws Exception {
+        WebView web = requireWebView(request.optString("handle", ""));
+        if (web == null) return error("WEBVIEW_NOT_FOUND", request.optString("handle", ""));
+        boolean includeDisk = request.optBoolean("include_disk_files", false);
+        web.clearCache(includeDisk);
+        return ok().put("handle", ObjectRegistry.get().put(web, false, "webview"))
+                .put("cleared", true).put("include_disk_files", includeDisk)
+                .put("persistent", false).put("strategy", "WebView.clearCache");
     }
 
     private static JSONObject secureStatus() throws Exception {

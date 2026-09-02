@@ -61,7 +61,7 @@ public final class RuntimeDispatcher {
                 "runtime.process","runtime.activities","runtime.declared_activities","runtime.classloaders","runtime.class.search","runtime.class.describe",
                 "object.describe","object.fields","object.dump","object.pin","object.release","object.clear_session",
                 "memory.maps","memory.modules","memory.read","memory.module.dump","memory.dex.list","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull",
-                "webview.list","webview.info","webview.debug","webview.eval",
+                "webview.list","webview.info","webview.debug","webview.eval","webview.eval.result","webview.load_url","webview.reload","webview.go_back","webview.go_forward","webview.clear_cache",
                 "control.secure.status","control.secure.disable","control.so.inject","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
                 "hook.reload","hook.inspect")) supported.put(capability);
         JSONArray partial = new JSONArray()

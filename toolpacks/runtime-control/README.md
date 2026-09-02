@@ -19,6 +19,11 @@ runtime-control webview-debug --package com.example.app --json
 runtime-control webview-debug --package com.example.app --disable --json
 runtime-control webview-eval --package com.example.app obj_webview 'document.title' --json
 runtime-control webview-eval-result --package com.example.app js_token --json
+runtime-control webview-load-url --package com.example.app obj_webview https://example.com --json
+runtime-control webview-reload --package com.example.app obj_webview --json
+runtime-control webview-go-back --package com.example.app obj_webview --json
+runtime-control webview-go-forward --package com.example.app obj_webview --json
+runtime-control webview-clear-cache --package com.example.app --handle obj_webview --include-disk --json
 runtime-control secure-status --package com.example.app --json
 runtime-control secure-disable --package com.example.app --json
 runtime-control so-inject --package com.example.app /data/local/tmp/libfoo.so --json
