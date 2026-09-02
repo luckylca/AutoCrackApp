@@ -12,6 +12,7 @@ import java.io.FileReader;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.lang.reflect.Field;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -36,7 +37,7 @@ public final class MemoryIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "memory.maps", "memory.modules", "memory.read", "memory.module.dump",
+                "memory.maps", "memory.modules", "memory.read", "memory.module.dump", "memory.module.file_dump",
                 "memory.dex.list", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
@@ -47,6 +48,7 @@ public final class MemoryIntrospector {
             case "memory.modules" -> modules(request);
             case "memory.read" -> memoryRead(request);
             case "memory.module.dump" -> moduleDump(request);
+            case "memory.module.file_dump" -> moduleFileDump(request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.dump" -> dexDump(request);
             case "memory.assets.list" -> assetsList(context, request);
@@ -123,6 +125,20 @@ public final class MemoryIntrospector {
         return ok().put("path", path).put("segment_count", segments.length()).put("segments", segments)
                 .put("total_bytes", total).put("truncated", truncated)
                 .put("note", "Segments remain separate; non-contiguous mappings are never concatenated into one fake address range.");
+    }
+
+
+    private static JSONObject moduleFileDump(JSONObject request) throws Exception {
+        String path = request.optString("path", "");
+        if (path.isBlank() || !path.startsWith("/")) return error("ABSOLUTE_PATH_REQUIRED", "absolute module path is required");
+        File file = new File(path);
+        if (!file.isFile() || !file.canRead()) return error("MODULE_FILE_NOT_READABLE", path);
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
+        if (file.length() > max) return error("MODULE_FILE_TOO_LARGE", "file exceeds inline max_bytes: " + file.length());
+        byte[] bytes = readFile(file, max);
+        return ok().put("path", path).put("size", bytes.length).put("sha256", sha256(bytes))
+                .put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                .put("strategy", "file-backed module copy; not an in-memory relocated image dump");
     }
 
     private static JSONObject dexList(JSONObject request) throws Exception {
@@ -211,6 +227,7 @@ public final class MemoryIntrospector {
         return ok().put("api_level",android.os.Build.VERSION.SDK_INT)
                 .put("maps",status(true,"/proc/self/maps"))
                 .put("modules",status(true,"maps grouping; split mappings preserved"))
+                .put("module_file_dump",status(true,"readable file-backed module copy with sha256"))
                 .put("memory_read",status(canReadSelfMem(),"/proc/self/mem; native fallback not embedded"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
@@ -285,6 +302,8 @@ public final class MemoryIntrospector {
         if (splits != null) for (int i = 0; i < splits.length; i++) if (splits[i] != null) out.add(new ApkSource("split_" + i, splits[i]));
         return out;
     }
+
+    private static String sha256(byte[] bytes) throws Exception {MessageDigest d=MessageDigest.getInstance("SHA-256");byte[] h=d.digest(bytes);StringBuilder out=new StringBuilder();for(byte b:h)out.append(String.format("%02x",b&0xff));return out.toString();}
 
     private static String normalizeZipEntry(String entry) {
         String v = entry == null ? "" : entry.trim();

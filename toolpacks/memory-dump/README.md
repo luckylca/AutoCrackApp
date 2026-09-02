@@ -42,3 +42,8 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 ## APK entries
 
 `memory-dump apk-entries --package PKG --prefix res/` enumerates base and split APK zip entries from the target runtime's `ApplicationInfo`. `memory-dump apk-pull --package PKG res/layout/example.xml --source base --max-bytes N` returns the raw APK entry bytes. This is useful for classes.dex, native libs, resources, and binary XML entries; it is not mislabeled as decoded XML.
+
+
+## Module file copy
+
+`memory-dump module-file-dump --package PKG /path/to/libfoo.so --max-bytes N` returns a readable file-backed module copy with SHA-256. This is deliberately distinct from `module-dump`, which attempts process memory segments and preserves mapping boundaries.

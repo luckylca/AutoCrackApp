@@ -218,5 +218,6 @@ After the first consolidation commit, the UI/runtime-control surface was extende
 - `runtime.activities` now includes lifecycle timing/order metadata from the shared ActivityRegistry, improving Activity Records parity.
 - `memory.apk.entries` and `memory.apk.pull` enumerate and extract base/split APK raw entries, covering file-backed classes.dex, res/*.xml, lib/*.so, and other packaged resources without falsely claiming decoded binary XML.
 - `webview.load_url`, `webview.reload`, `webview.go_back`, `webview.go_forward`, and `webview.clear_cache` extend WebView control beyond eval/debug toggles.
+- `memory.module.file_dump` adds an explicit file-backed SO/module copy path with SHA-256, kept separate from process-memory `memory.module.dump`.
 
 These additions improve the rootfs CLI replacement path, but they are still not a complete native clone of Layout Inspect. ART Dex reconstruction, binary XmlBlock/ResXMLTree recovery, linker namespace bypass/dlopen internals, and Compose Semantics extraction remain explicitly version-gated or unsupported until implemented and verified on a real device.
