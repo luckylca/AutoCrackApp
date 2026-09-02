@@ -63,6 +63,21 @@ public final class NativeBridge {
                 .put("symbol_address", parts.length > 3 ? parts[3] : JSONObject.NULL);
     }
 
+    public static JSONObject dlsym(Context context, String handle, String symbol) throws Exception {
+        if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("resolved", false).put("reason", loadError);
+        String raw = nativeDlsym(handle == null ? "" : handle, symbol == null ? "" : symbol);
+        if (raw != null && raw.startsWith("OK:")) {
+            return new JSONObject().put("ok", true).put("resolved", true)
+                    .put("handle", handle == null || handle.isBlank() ? "RTLD_DEFAULT" : handle)
+                    .put("symbol", symbol)
+                    .put("address", raw.substring(3));
+        }
+        return new JSONObject().put("ok", false).put("resolved", false)
+                .put("handle", handle == null || handle.isBlank() ? "RTLD_DEFAULT" : handle)
+                .put("symbol", symbol)
+                .put("reason", raw == null ? "native returned null" : raw.substring(Math.min(4, raw.length())));
+    }
+
     public static JSONObject probe(Context context) throws Exception {
         if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("supported", false).put("reason", loadError);
         return new JSONObject(nativeProbe());
@@ -77,6 +92,7 @@ public final class NativeBridge {
     private static native byte[] nativeReadMemory(long address, int size) throws Exception;
     private static native String nativeDlopen(String path, int flags);
     private static native String nativeDladdr(long address);
+    private static native String nativeDlsym(String handle, String symbol);
     private static native String nativeModules(int maxModules, String filter);
     private static native String nativeProbe();
 }

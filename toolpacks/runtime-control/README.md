@@ -42,3 +42,5 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 `runtime-control object-field-set --package PKG HANDLE FIELD --value-json JSON` writes a scalar field through a runtime object handle. Supported field types are String/CharSequence, primitive/boxed numeric types, boolean, char, enum names, and null for non-primitive fields. Complex object construction is intentionally rejected.
 
 `runtime-control object-method-call --package PKG HANDLE METHOD --arg-types-json JSON --args-json JSON` invokes an explicitly named reflected method with at most 16 scalar arguments. The caller must provide exact parameter type names. This is a bounded runtime-control feature and returns a summarized result or object handle.
+
+`runtime-control so-dlsym --package PKG symbolName --json` resolves a native symbol through `dlsym`. Use `--handle 0x...` with a handle returned by `so-dlopen`, or omit it for `RTLD_DEFAULT`. This only returns the address and does not call the function.

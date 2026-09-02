@@ -41,7 +41,7 @@ public final class WebControlIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
-                "control.secure.status", "control.secure.disable", "control.so.inject", "control.so.dlopen",
+                "control.secure.status", "control.secure.disable", "control.so.inject", "control.so.dlopen", "control.so.dlsym",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
 
@@ -61,6 +61,7 @@ public final class WebControlIntrospector {
             case "control.secure.disable" -> secureDisable();
             case "control.so.inject" -> injectSo(request);
             case "control.so.dlopen" -> dlopenSo(context, request);
+            case "control.so.dlsym" -> dlsymSo(context, request);
             case "control.activity.start" -> startActivity(context, request);
             case "control.process.kill" -> killProcess(request);
             case "control.object.field.set" -> objectFieldSet(request);
@@ -236,6 +237,20 @@ public final class WebControlIntrospector {
         return ok().put("supported", false).put("path", path).put("loaded", false)
                 .put("reason", result.optString("reason", "native dlopen failed"))
                 .put("strategies", new JSONArray().put("native dlopen absolute path").put("System.load fallback via control.so.inject"));
+    }
+
+    private static JSONObject dlsymSo(Context context, JSONObject request) throws Exception {
+        String symbol = request.optString("symbol", "");
+        if (symbol.isBlank()) return error("SYMBOL_REQUIRED", "symbol is required");
+        String handle = request.optString("handle", "");
+        JSONObject result = NativeBridge.dlsym(context, handle, symbol);
+        if (result.optBoolean("ok", false)) {
+            return result.put("strategy", "native dlsym").put("callable", false)
+                    .put("note", "This resolves a symbol address only; it does not call the function.");
+        }
+        return ok().put("supported", false).put("capability", "control.so.dlsym")
+                .put("reason", result.optString("reason", "native dlsym failed"))
+                .put("strategies", new JSONArray().put("RTLD_DEFAULT/global lookup").put("explicit dlopen handle lookup"));
     }
 
     private static JSONObject startActivity(Context context, JSONObject request) throws Exception {

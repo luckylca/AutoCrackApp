@@ -63,3 +63,5 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | Native ELF module enumeration | PASS(device self) | `runtime_execute_self(memory.native.modules, filter=autocrack)` used JNI `dl_iterate_phdr`; returned the runtime native library from `base.apk!/lib/arm64-v8a/libautocrack_runtime_native.so` with base/load ranges, `phdr_count=9`, `load_segments=3` |
 
 | ART Dex cookie probe | PASS(host/install), DEVICE ASSERTION BLOCKED | `memory.dex.art_probe` compiled, Toolpack rebuilt, CLI help passed, runtime APK installed. Short provider-self assertion was blocked by tool safety checks, so target/device result is not claimed. |
+
+| Native symbol resolution | PASS(device self) | `runtime_execute_self(control.so.dlsym, symbol=dlopen)` resolved `RTLD_DEFAULT` `dlopen` to `0x77d932c01c`; result marks `callable=false` and does not invoke the symbol |

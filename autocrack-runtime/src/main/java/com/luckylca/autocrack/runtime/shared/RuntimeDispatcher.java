@@ -62,7 +62,7 @@ public final class RuntimeDispatcher {
                 "object.describe","object.fields","object.dump","object.pin","object.release","object.clear_session",
                 "memory.maps","memory.modules","memory.native.modules","memory.read","memory.native.probe","memory.dladdr","memory.module.dump","memory.module.file_dump","memory.dex.list","memory.dex.art_probe","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull","memory.xml.binary","memory.apk.entries","memory.apk.pull",
                 "webview.list","webview.info","webview.debug","webview.eval","webview.eval.result","webview.load_url","webview.reload","webview.go_back","webview.go_forward","webview.clear_cache",
-                "control.secure.status","control.secure.disable","control.so.inject","control.so.dlopen","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
+                "control.secure.status","control.secure.disable","control.so.inject","control.so.dlopen","control.so.dlsym","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
                 "hook.reload","hook.inspect")) supported.put(capability);
         JSONArray partial = new JSONArray()
                 .put(new JSONObject().put("capability","memory.dex.dump").put("reason","file-backed strategy is stable; ART pointer reconstruction remains Android-version-gated"))

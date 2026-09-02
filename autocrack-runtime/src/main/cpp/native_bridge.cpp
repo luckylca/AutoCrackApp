@@ -6,6 +6,7 @@
 #include <inttypes.h>
 #include <link.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <vector>
@@ -98,6 +99,33 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeDlopen(
         snprintf(buf, sizeof(buf), "ERR:%s", err ? err : "unknown dlopen failure");
     }
     __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "dlopen(%s) => %s", p.c_str(), buf);
+    return env->NewStringUTF(buf);
+}
+
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeDlsym(
+        JNIEnv* env, jclass, jstring handle_text, jstring symbol) {
+    std::string h = jstr(env, handle_text);
+    std::string sym = jstr(env, symbol);
+    if (sym.empty()) return env->NewStringUTF("ERR:symbol required");
+    void* handle = RTLD_DEFAULT;
+    if (!h.empty() && h != "default" && h != "RTLD_DEFAULT") {
+        const char* raw = h.c_str();
+        if (strncmp(raw, "0x", 2) == 0 || strncmp(raw, "0X", 2) == 0) raw += 2;
+        uintptr_t value = static_cast<uintptr_t>(strtoull(raw, nullptr, 16));
+        handle = reinterpret_cast<void*>(value);
+    }
+    dlerror();
+    void* addr = dlsym(handle, sym.c_str());
+    const char* err = dlerror();
+    char buf[1024];
+    if (addr) {
+        snprintf(buf, sizeof(buf), "OK:%p", addr);
+    } else {
+        snprintf(buf, sizeof(buf), "ERR:%s", err ? err : "unknown dlsym failure");
+    }
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "dlsym(%s,%s) => %s", h.empty() ? "RTLD_DEFAULT" : h.c_str(), sym.c_str(), buf);
     return env->NewStringUTF(buf);
 }
 

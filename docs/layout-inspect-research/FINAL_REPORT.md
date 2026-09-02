@@ -346,3 +346,28 @@ Validation:
 - CLI help PASS.
 - Runtime APK install PASS.
 - Direct device provider-self assertion was not re-run after the context-loader fix because the tool safety layer blocked the short `runtime_execute_self(memory.dex.art_probe)` command. This is recorded as not device-proven, not as a pass.
+
+
+## 15. Stage 11 native dlsym symbol resolution
+
+`control.so.dlsym` was added to complete a safer native SO inspection loop around `dlopen`.
+
+Implemented:
+
+- Native C++ `dlsym` bridge in `libautocrack_runtime_native.so`.
+- Java bridge `NativeBridge.dlsym(...)`.
+- Runtime capability `control.so.dlsym`.
+- `runtime-control so-dlsym SYMBOL [--handle 0x...]` CLI command.
+- Toolpack manifest capability declaration.
+
+Device evidence:
+
+- Installed the rebuilt runtime APK on device `a4976c80`.
+- `runtime_execute_self(control.so.dlsym, symbol=dlopen)` resolved `dlopen` through `RTLD_DEFAULT`.
+- Returned address: `0x77d932c01c`.
+
+Safety/behavior boundary:
+
+- This only resolves a symbol address.
+- It explicitly returns `callable=false` and does not call the resolved native function.
+- It does not bypass linker namespace restrictions. Explicit handle lookup depends on a handle returned by `control.so.dlopen` and Android linker policy.
