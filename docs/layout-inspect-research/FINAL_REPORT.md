@@ -539,3 +539,22 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This reads file-backed dynamic table metadata only. It does not alter linker state, load libraries, or bypass Android linker namespace policy.
+## 22. Stage 18 file-backed Android binary XML decode
+
+`memory.xml.axml_decode` was added to decode file-backed Android binary XML into a readable chunk and node stream. This builds on `memory.xml.binary`: the runtime can now pull raw AXML bytes from an APK and decode the string pool, resource map, start/end/text events, and typed attributes.
+
+Implemented coverage:
+
+- Runtime capability: `memory.xml.axml_decode`.
+- Toolpack command: `memory-dump xml-axml-decode`.
+- Input sources match `memory.xml.binary`: `resource_id`, direct APK entry, installed APK package, or explicit APK path.
+- Decodes AXML string pool, resource map, chunk list, start tags, end tags, text nodes, attribute names, namespaces, resource IDs, raw values, typed string/int/boolean values, and bounded node/attribute counts.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.xml.axml_decode, entry=res/xml/autocrack_runtime_probe.xml)` decoded the installed runtime APK probe resource.
+- Result: `string_count=6`, `resource_count=2`, `chunk_count=6`, `node_count=2`, root tag `autocrack-probe`, `android:name=autocrack_runtime_probe`, and `android:version=1`.
+
+Boundary:
+
+- This is file-backed AXML chunk decoding, not native in-memory `XmlBlock` / `ResXMLTree` recovery. It closes the practical readable XML path for APK-backed resources while keeping the native-memory gap explicit.

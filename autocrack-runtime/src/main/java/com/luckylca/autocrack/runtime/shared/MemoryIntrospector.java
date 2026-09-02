@@ -42,7 +42,7 @@ public final class MemoryIntrospector {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
                 "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
-                "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
+                "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
     public static JSONObject execute(Context context, JSONObject request) throws Exception {
@@ -67,6 +67,7 @@ public final class MemoryIntrospector {
             case "memory.assets.pull" -> assetsPull(context, request);
             case "memory.xml.pull" -> xmlPull(context, request);
             case "memory.xml.binary" -> xmlBinary(context, request);
+            case "memory.xml.axml_decode" -> xmlAxmlDecode(context, request);
             case "memory.apk.entries" -> apkEntries(context, request);
             case "memory.apk.pull" -> apkPull(context, request);
             case "memory.capabilities" -> capabilities(context);
@@ -550,9 +551,29 @@ public final class MemoryIntrospector {
                 .put("xml_logical",status(true,"Resources.getXml"))
                 .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
                 .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"))
+                .put("xml_axml_decode",status(true,"file-backed Android binary XML chunk/string-pool decode"))
                 .put("apk_entries",status(true,"base/split APK ZipFile entry enumeration and bounded entry pull"));
     }
 
+
+    private static JSONObject xmlAxmlDecode(Context context, JSONObject request) throws Exception {
+        JSONObject binary = xmlBinary(context, request);
+        if (!binary.optBoolean("ok", false)) return binary;
+        byte[] bytes = Base64.decode(binary.getString("data"), Base64.NO_WRAP);
+        int maxNodes = clamp(request.optInt("max_nodes", 1024), 1, 20_000);
+        int maxAttributes = clamp(request.optInt("max_attributes", 256), 0, 4096);
+        JSONObject decoded = decodeAxml(bytes, maxNodes, maxAttributes);
+        return ok().put("source", new JSONObject()
+                        .put("entry", binary.optString("entry", ""))
+                        .put("apk_path", binary.optString("apk_path", ""))
+                        .put("source", binary.optString("source", "")))
+                .put("size", bytes.length)
+                .put("sha256", sha256(bytes))
+                .put("decoded", decoded)
+                .put("binary_axml", true)
+                .put("memory_reconstruction", false)
+                .put("strategy", "file-backed Android binary XML chunk/string-pool decode; not native XmlBlock memory recovery");
+    }
 
     private static JSONObject apkEntries(Context context, JSONObject request) throws Exception {
         Context apkContext = apkContext(context, request);
@@ -1014,6 +1035,110 @@ public final class MemoryIntrospector {
     private static String machineName(int machine) { return switch (machine) { case 3 -> "EM_386"; case 40 -> "EM_ARM"; case 62 -> "EM_X86_64"; case 183 -> "EM_AARCH64"; default -> "EM_" + machine; }; }
     private static String phdrTypeName(long type) { return switch ((int)type) { case 0 -> "PT_NULL"; case 1 -> "PT_LOAD"; case 2 -> "PT_DYNAMIC"; case 3 -> "PT_INTERP"; case 4 -> "PT_NOTE"; case 5 -> "PT_SHLIB"; case 6 -> "PT_PHDR"; case 7 -> "PT_TLS"; case 0x6474e550 -> "PT_GNU_EH_FRAME"; case 0x6474e551 -> "PT_GNU_STACK"; case 0x6474e552 -> "PT_GNU_RELRO"; case 0x6474e553 -> "PT_GNU_PROPERTY"; default -> "PT_" + type; }; }
     private static String phdrFlags(long flags) { StringBuilder out = new StringBuilder(3); out.append((flags & 4) != 0 ? 'r' : '-'); out.append((flags & 2) != 0 ? 'w' : '-'); out.append((flags & 1) != 0 ? 'x' : '-'); return out.toString(); }
+
+    private static JSONObject decodeAxml(byte[] bytes, int maxNodes, int maxAttributes) throws Exception {
+        if (bytes.length < 8) return error("AXML_TOO_SHORT", String.valueOf(bytes.length));
+        JSONArray chunks = new JSONArray();
+        JSONArray nodes = new JSONArray();
+        List<String> strings = new ArrayList<>();
+        int[] resourceMap = new int[0];
+        int rootType = u16le(bytes, 0);
+        int rootSize = u32leInt(bytes, 4);
+        int pos = rootType == 0x0003 ? 8 : 0;
+        int depth = 0;
+        boolean truncated = false;
+        while (pos + 8 <= bytes.length) {
+            int type = u16le(bytes, pos);
+            int headerSize = u16le(bytes, pos + 2);
+            int size = u32leInt(bytes, pos + 4);
+            if (size < 8 || pos + size > bytes.length) break;
+            chunks.put(new JSONObject().put("offset", pos).put("type", hex(type)).put("type_name", axmlChunkName(type)).put("size", size));
+            if (type == 0x0001) strings = parseAxmlStringPool(bytes, pos, size);
+            else if (type == 0x0180) {
+                int count = Math.max(0, (size - headerSize) / 4);
+                resourceMap = new int[count];
+                for (int i=0;i<count;i++) resourceMap[i] = u32leInt(bytes, pos + headerSize + i*4);
+            } else if (type == 0x0102 && nodes.length() < maxNodes) {
+                int line = u32leInt(bytes, pos + 8);
+                int ns = u32leInt(bytes, pos + 16);
+                int nameIdx = u32leInt(bytes, pos + 20);
+                int attrStart = u16le(bytes, pos + 24);
+                int attrSize = u16le(bytes, pos + 26);
+                int attrCount = u16le(bytes, pos + 28);
+                JSONArray attrs = new JSONArray();
+                int attrBase = pos + 16 + attrStart;
+                for (int i=0; i<attrCount && i<maxAttributes; i++) {
+                    int ao = attrBase + i * attrSize;
+                    if (ao + 20 > pos + size || ao + 20 > bytes.length) break;
+                    int attrNs = u32leInt(bytes, ao);
+                    int attrName = u32leInt(bytes, ao + 4);
+                    int rawValue = u32leInt(bytes, ao + 8);
+                    int dataType = bytes[ao + 15] & 0xff;
+                    int data = u32leInt(bytes, ao + 16);
+                    JSONObject attr = new JSONObject().put("name", axmlString(strings, attrName)).put("namespace", axmlStringOrNull(strings, attrNs))
+                            .put("resource_id", attrName >= 0 && attrName < resourceMap.length ? hex(resourceMap[attrName]) : JSONObject.NULL)
+                            .put("raw", axmlStringOrNull(strings, rawValue)).put("data_type", dataType)
+                            .put("data", hex(data)).put("value", axmlValue(strings, rawValue, dataType, data));
+                    attrs.put(attr);
+                }
+                nodes.put(new JSONObject().put("event", "start_tag").put("depth", depth).put("line", line)
+                        .put("name", axmlString(strings, nameIdx)).put("namespace", axmlStringOrNull(strings, ns))
+                        .put("attribute_count", attrCount).put("attributes", attrs)
+                        .put("attributes_truncated", attrCount > maxAttributes));
+                depth++;
+            } else if (type == 0x0103 && nodes.length() < maxNodes) {
+                depth = Math.max(0, depth - 1);
+                nodes.put(new JSONObject().put("event", "end_tag").put("depth", depth).put("line", u32leInt(bytes, pos + 8))
+                        .put("name", axmlString(strings, u32leInt(bytes, pos + 20))));
+            } else if (type == 0x0104 && nodes.length() < maxNodes) {
+                nodes.put(new JSONObject().put("event", "text").put("depth", depth).put("line", u32leInt(bytes, pos + 8))
+                        .put("text", axmlString(strings, u32leInt(bytes, pos + 16))));
+            } else if ((type == 0x0102 || type == 0x0103 || type == 0x0104) && nodes.length() >= maxNodes) truncated = true;
+            pos += size;
+        }
+        return ok().put("root_type", hex(rootType)).put("root_size", rootSize)
+                .put("string_count", strings.size()).put("strings_preview", axmlStringPreview(strings, 32)).put("resource_count", resourceMap.length)
+                .put("chunk_count", chunks.length()).put("chunks", chunks)
+                .put("node_count", nodes.length()).put("nodes", nodes).put("nodes_truncated", truncated);
+    }
+
+    private static List<String> parseAxmlStringPool(byte[] bytes, int offset, int size) {
+        ArrayList<String> out = new ArrayList<>();
+        try {
+            int stringCount = u32leInt(bytes, offset + 8);
+            int flags = u32leInt(bytes, offset + 16);
+            int stringsStart = u32leInt(bytes, offset + 20);
+            boolean utf8 = (flags & 0x00000100) != 0;
+            int offsetsBase = offset + 28;
+            int stringsBase = offset + stringsStart;
+            for (int i=0; i<stringCount && offsetsBase + i*4 + 4 <= offset + size; i++) {
+                int strOff = u32leInt(bytes, offsetsBase + i*4);
+                out.add(utf8 ? decodeAxmlUtf8(bytes, stringsBase + strOff, offset + size) : decodeAxmlUtf16(bytes, stringsBase + strOff, offset + size));
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+    private static String decodeAxmlUtf8(byte[] bytes, int pos, int end) {
+        int[] a = axmlLen8(bytes, pos, end); int p = a[1]; int[] b = axmlLen8(bytes, p, end); p = b[1]; int len = b[0];
+        if (p < 0 || len < 0 || p + len > end || p + len > bytes.length) return "";
+        return new String(bytes, p, len, java.nio.charset.StandardCharsets.UTF_8);
+    }
+    private static int[] axmlLen8(byte[] bytes, int pos, int end) { if (pos >= end) return new int[]{0,-1}; int v = bytes[pos++] & 0xff; if ((v & 0x80) != 0 && pos < end) v = ((v & 0x7f) << 8) | (bytes[pos++] & 0xff); return new int[]{v,pos}; }
+    private static String decodeAxmlUtf16(byte[] bytes, int pos, int end) {
+        if (pos + 2 > end) return ""; int len = u16le(bytes,pos); pos += 2; if ((len & 0x8000) != 0 && pos + 2 <= end) { len = ((len & 0x7fff) << 16) | u16le(bytes,pos); pos += 2; }
+        int n = Math.max(0, Math.min(len * 2, end - pos));
+        return new String(bytes, pos, n, java.nio.charset.StandardCharsets.UTF_16LE);
+    }
+    private static JSONArray axmlStringPreview(List<String> strings, int max) { JSONArray out = new JSONArray(); for (int i=0;i<strings.size() && i<max;i++) out.put(strings.get(i)); return out; }
+    private static String axmlString(List<String> strings, int idx) { return idx >= 0 && idx < strings.size() ? strings.get(idx) : "#" + idx; }
+    private static Object axmlStringOrNull(List<String> strings, int idx) { return idx >= 0 && idx < strings.size() ? strings.get(idx) : JSONObject.NULL; }
+    private static Object axmlValue(List<String> strings, int raw, int type, int data) {
+        if (raw >= 0 && raw < strings.size()) return strings.get(raw);
+        return switch (type) { case 0x03 -> axmlString(strings, data); case 0x10 -> data; case 0x12 -> data != 0; default -> hex(data); };
+    }
+    private static int u16le(byte[] bytes, int off) { return ((bytes[off] & 0xff) | ((bytes[off+1] & 0xff) << 8)); }
+    private static int u32leInt(byte[] bytes, int off) { return (bytes[off] & 0xff) | ((bytes[off+1] & 0xff) << 8) | ((bytes[off+2] & 0xff) << 16) | ((bytes[off+3] & 0xff) << 24); }
+    private static String axmlChunkName(int type) { return switch (type) { case 0x0001 -> "RES_STRING_POOL_TYPE"; case 0x0003 -> "RES_XML_TYPE"; case 0x0180 -> "RES_XML_RESOURCE_MAP_TYPE"; case 0x0100 -> "RES_XML_START_NAMESPACE_TYPE"; case 0x0101 -> "RES_XML_END_NAMESPACE_TYPE"; case 0x0102 -> "RES_XML_START_ELEMENT_TYPE"; case 0x0103 -> "RES_XML_END_ELEMENT_TYPE"; case 0x0104 -> "RES_XML_CDATA_TYPE"; default -> "AXML_CHUNK_" + type; }; }
 
     private static byte[] readFile(File file,int max)throws Exception{try(InputStream in=new FileInputStream(file)){return readLimited(in,max);}}
     private static byte[] readLimited(InputStream in,int max)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream(Math.min(max,65536));byte[] buffer=new byte[16384];while(out.size()<max){int n=in.read(buffer,0,Math.min(buffer.length,max-out.size()));if(n<0)break;out.write(buffer,0,n);}return out.toByteArray();}

@@ -61,3 +61,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | File-backed ELF symbols | Complete for bounded dynsym/symtab metadata | `memory.elf.symbols`, `memory-dump elf-symbols`; device self-test PASS on JNI exports from runtime native library |
 | File-backed ELF relocations | Complete for bounded REL/RELA metadata | `memory.elf.relocations`, `memory-dump elf-relocations`; device self-test PASS on AArch64 RELA records |
 | File-backed ELF dynamic table | Complete for bounded dynamic metadata | `memory.elf.dynamic`, `memory-dump elf-dynamic`; device self-test PASS with `DT_NEEDED` and SONAME from runtime native library |
+| File-backed Android binary XML decode | Complete for bounded APK-backed AXML chunk/node decode | `memory.xml.axml_decode`, `memory-dump xml-axml-decode`; device self-test PASS on runtime probe XML |
