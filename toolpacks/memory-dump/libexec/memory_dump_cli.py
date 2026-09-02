@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-import argparse, os, sys
+import argparse, os, sys, base64, copy, json
 sys.path.insert(0, os.path.dirname(__file__))
 from autocrack_runtime_client import *
+
+def add_output(parser):
+    parser.add_argument("--output", help="write returned bytes/text to a local file; module-dump writes a directory")
+
 
 def parser():
     p=argparse.ArgumentParser(prog="memory-dump", description="Dump bounded maps, modules, Dex, assets and XML through AutoCrack Runtime")
@@ -11,21 +15,21 @@ def parser():
     maps=sub.add_parser("maps"); add_target(maps); maps.add_argument("--max-maps", type=int, default=4096); maps.add_argument("--path-contains", default=""); maps.add_argument("--permissions-contains", default="")
     mods=sub.add_parser("modules"); add_target(mods); mods.add_argument("--filter", default=""); mods.add_argument("--max-modules", type=int, default=1024)
     nmods=sub.add_parser("native-modules"); add_target(nmods); nmods.add_argument("--filter", default=""); nmods.add_argument("--max-modules", type=int, default=1024)
-    rd=sub.add_parser("read"); add_target(rd); rd.add_argument("address"); rd.add_argument("size", type=int)
+    rd=sub.add_parser("read"); add_target(rd); rd.add_argument("address"); rd.add_argument("size", type=int); add_output(rd)
     np=sub.add_parser("native-probe"); add_target(np)
     da=sub.add_parser("dladdr"); add_target(da); da.add_argument("address")
-    md=sub.add_parser("module-dump"); add_target(md); md.add_argument("path"); md.add_argument("--max-bytes", type=int, default=4194304)
-    mfd=sub.add_parser("module-file-dump"); add_target(mfd); mfd.add_argument("path"); mfd.add_argument("--max-bytes", type=int, default=4194304)
+    md=sub.add_parser("module-dump"); add_target(md); md.add_argument("path"); md.add_argument("--max-bytes", type=int, default=4194304); add_output(md)
+    mfd=sub.add_parser("module-file-dump"); add_target(mfd); mfd.add_argument("path"); mfd.add_argument("--max-bytes", type=int, default=4194304); add_output(mfd)
     ei=sub.add_parser("elf-info"); add_target(ei); ei.add_argument("--path", default=""); ei.add_argument("--entry", default=""); ei.add_argument("--apk-package", default=""); ei.add_argument("--apk-path", default=""); ei.add_argument("--max-bytes", type=int, default=4194304)
     dl=sub.add_parser("dex-list"); add_target(dl); dl.add_argument("--loader", default="", help="optional ClassLoader handle returned by runtime-inspect classloaders"); dl.add_argument("--class-count", action="store_true", help="count dex class entries up to the runtime safety cap")
     dap=sub.add_parser("dex-art-probe"); add_target(dap); dap.add_argument("--loader", default="", help="optional ClassLoader handle"); dap.add_argument("--class-count", action="store_true"); dap.add_argument("--max-dex", type=int, default=256); dap.add_argument("--no-context-loader", action="store_true")
-    dd=sub.add_parser("dex-dump"); add_target(dd); dd.add_argument("dex_handle"); dd.add_argument("--max-bytes", type=int, default=4194304)
+    dd=sub.add_parser("dex-dump"); add_target(dd); dd.add_argument("dex_handle"); dd.add_argument("--max-bytes", type=int, default=4194304); add_output(dd)
     al=sub.add_parser("assets-list"); add_target(al); al.add_argument("path", nargs="?", default=""); al.add_argument("--max-assets", type=int, default=20000)
-    ap=sub.add_parser("assets-pull"); add_target(ap); ap.add_argument("path"); ap.add_argument("--max-bytes", type=int, default=4194304)
-    xp=sub.add_parser("xml-pull"); add_target(xp); xp.add_argument("resource_id", type=int)
-    xb=sub.add_parser("xml-binary"); add_target(xb); xb.add_argument("--resource-id", type=lambda x:int(x,0), default=0); xb.add_argument("--entry", default=""); xb.add_argument("--apk-package", default=""); xb.add_argument("--apk-path", default=""); xb.add_argument("--max-bytes", type=int, default=4194304)
+    ap=sub.add_parser("assets-pull"); add_target(ap); ap.add_argument("path"); ap.add_argument("--max-bytes", type=int, default=4194304); add_output(ap)
+    xp=sub.add_parser("xml-pull"); add_target(xp); xp.add_argument("resource_id", type=int); add_output(xp)
+    xb=sub.add_parser("xml-binary"); add_target(xb); xb.add_argument("--resource-id", type=lambda x:int(x,0), default=0); xb.add_argument("--entry", default=""); xb.add_argument("--apk-package", default=""); xb.add_argument("--apk-path", default=""); xb.add_argument("--max-bytes", type=int, default=4194304); add_output(xb)
     ae=sub.add_parser("apk-entries"); add_target(ae); ae.add_argument("--prefix", default=""); ae.add_argument("--apk-package", default=""); ae.add_argument("--apk-path", default=""); ae.add_argument("--max-entries", type=int, default=5000)
-    apkp=sub.add_parser("apk-pull"); add_target(apkp); apkp.add_argument("entry"); apkp.add_argument("--source", default="base"); apkp.add_argument("--apk-package", default=""); apkp.add_argument("--apk-path", default=""); apkp.add_argument("--max-bytes", type=int, default=4194304)
+    apkp=sub.add_parser("apk-pull"); add_target(apkp); apkp.add_argument("entry"); apkp.add_argument("--source", default="base"); apkp.add_argument("--apk-package", default=""); apkp.add_argument("--apk-path", default=""); apkp.add_argument("--max-bytes", type=int, default=4194304); add_output(apkp)
     return p
 
 def execute(a):
@@ -50,8 +54,91 @@ def execute(a):
     if a.command=="apk-pull": return runtime_request(target_payload(a,"memory.apk.pull", entry=a.entry, source=a.source, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
     raise CliError("INVALID_COMMAND", a.command)
 
+def _safe_output_path(path):
+    if not path:
+        raise CliError("OUTPUT_REQUIRED", "--output path is required")
+    return os.path.abspath(path)
+
+def _write_single_data(result, output_path):
+    if "data" not in result:
+        raise CliError("NO_INLINE_DATA", "runtime result has no base64 data field to write")
+    encoding = result.get("encoding")
+    if encoding != "base64":
+        raise CliError("UNSUPPORTED_ENCODING", f"expected base64 data, got {encoding!r}")
+    data = base64.b64decode(result["data"])
+    target = _safe_output_path(output_path)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    with open(target, "wb") as f:
+        f.write(data)
+    out = copy.deepcopy(result)
+    out.pop("data", None)
+    out["output_path"] = target
+    out["output_bytes"] = len(data)
+    out["data_omitted"] = True
+    return out
+
+def _write_xml_text(result, output_path):
+    if "xml" not in result:
+        raise CliError("NO_XML_TEXT", "runtime result has no xml field to write")
+    target = _safe_output_path(output_path)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    data = result["xml"].encode("utf-8")
+    with open(target, "wb") as f:
+        f.write(data)
+    out = copy.deepcopy(result)
+    out["output_path"] = target
+    out["output_bytes"] = len(data)
+    return out
+
+def _write_module_segments(result, output_path):
+    segments = result.get("segments")
+    if not isinstance(segments, list):
+        raise CliError("NO_SEGMENTS", "runtime result has no segments array to write")
+    out_dir = _safe_output_path(output_path)
+    os.makedirs(out_dir, exist_ok=True)
+    out = copy.deepcopy(result)
+    written = []
+    total = 0
+    for i, seg in enumerate(out.get("segments", [])):
+        data = seg.pop("data", None)
+        if not data:
+            continue
+        if seg.get("encoding") != "base64":
+            raise CliError("UNSUPPORTED_ENCODING", f"segment {i} is not base64")
+        raw = base64.b64decode(data)
+        start = str(seg.get("start", f"{i}" )).replace("0x", "")
+        path = os.path.join(out_dir, f"segment_{i:03d}_{start}.bin")
+        with open(path, "wb") as f:
+            f.write(raw)
+        seg["output_path"] = path
+        seg["output_bytes"] = len(raw)
+        seg["data_omitted"] = True
+        written.append(path)
+        total += len(raw)
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    out["output_dir"] = out_dir
+    out["manifest_path"] = manifest_path
+    out["written_segments"] = len(written)
+    out["output_bytes"] = total
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    return out
+
+def write_output_if_requested(args, result):
+    output = getattr(args, "output", None)
+    if not output:
+        return result
+    if getattr(args, "command", "") == "module-dump":
+        return _write_module_segments(result, output)
+    if getattr(args, "command", "") == "xml-pull":
+        return _write_xml_text(result, output)
+    return _write_single_data(result, output)
+
 def main(argv=None):
     raw=list(sys.argv[1:] if argv is None else argv); json_output="--json" in raw; raw=[x for x in raw if x!="--json"]
-    try: emit_result(execute(parser().parse_args(raw)), json_output); return 0
+    try:
+        args = parser().parse_args(raw)
+        emit_result(write_output_if_requested(args, execute(args)), json_output)
+        return 0
     except CliError as e: emit_error(e, json_output); return 1
 if __name__=="__main__": raise SystemExit(main())

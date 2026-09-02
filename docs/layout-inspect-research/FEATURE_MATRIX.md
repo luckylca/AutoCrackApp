@@ -54,3 +54,5 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | android_dlopen_ext loader | Host-complete; device assertion blocked | `control.so.android_dlopen_ext`, `runtime-control so-android-dlopen-ext`; explicit `namespace_bypass=false` until a real `android_namespace_t` strategy exists |
 
 | ELF metadata / Build-ID | Complete for file-backed ELF/APK-entry parsing | `memory.elf.info`, `memory-dump elf-info`; parses headers, PT_LOAD, PT_NOTE GNU Build-ID without executing code; device self-test PASS |
+
+| Dump output files | Complete for current base64/text dump commands | `memory-dump --output` writes single blobs, logical XML text, and module segment directories; prevents large base64-only workflows |

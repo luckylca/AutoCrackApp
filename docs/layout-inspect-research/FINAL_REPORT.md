@@ -412,3 +412,26 @@ Validation:
 - `memory-dump` Toolpack rebuild passed.
 - CLI help and manifest checks passed.
 - Device provider-self test parsed the installed runtime APK entry `lib/arm64-v8a/libautocrack_runtime_native.so`: `ELF64`, `EM_AARCH64`, `phnum=9`, `load_segments=3`, Build-ID `89d021ea6f492c3cbca67001f0d1f97d4541e0a9`, `bytes_read=412664`, `truncated=false`.
+
+
+## 18. Stage 14 host output materialization for dump commands
+
+`memory-dump` dump/pull commands now support `--output`, so extracted bytes are written to files instead of forcing large base64 blobs to remain in stdout.
+
+Implemented:
+
+- `read --output FILE`
+- `module-file-dump --output FILE`
+- `dex-dump --output FILE`
+- `assets-pull --output FILE`
+- `xml-binary --output FILE`
+- `apk-pull --output FILE`
+- `xml-pull --output FILE` writes logical XML text as UTF-8.
+- `module-dump --output DIR` writes one file per segment plus `manifest.json`.
+
+Validation:
+
+- Python compile check passed.
+- Help assertions passed for all output-enabled commands.
+- Local unit checks verified base64 byte output, XML text output, and segmented module output.
+- `memory-dump` Toolpack rebuild passed.

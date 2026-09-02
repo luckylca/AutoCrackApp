@@ -72,3 +72,5 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 `dex-art-probe` includes the current `Context.getClassLoader()` by default so provider-side self diagnostics work even before the Xposed target-process registry is populated. Use `--no-context-loader` to restrict results to registered target classloaders only.
 
 `memory-dump elf-info --package PKG --path /data/app/.../base.apk!/lib/arm64-v8a/libfoo.so --json` parses a bounded ELF header/program-header view and GNU build-id from a file-backed ELF or APK-embedded native library. It does not execute native code and does not replace runtime loader enumeration.
+
+Dump/pull commands that return inline base64 now accept `--output PATH`. Single-object commands write bytes to `PATH` and omit the base64 blob from the printed result; `module-dump --output DIR` writes per-segment `.bin` files plus `manifest.json`. `xml-pull --output PATH` writes the logical XML text as UTF-8.
