@@ -76,3 +76,5 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 Dump/pull commands that return inline base64 now accept `--output PATH`. Single-object commands write bytes to `PATH` and omit the base64 blob from the printed result; `module-dump --output DIR` writes per-segment `.bin` files plus `manifest.json`. `xml-pull --output PATH` writes the logical XML text as UTF-8.
 
 `memory-dump dex-scan --package PKG --path-contains base.apk --max-candidates 16 --json` performs a bounded readable-map scan for valid DEX magic/header candidates. It is a discovery probe only: by default it returns candidate metadata, not byte dumps, and it explicitly reports `art_memory_reconstruction=false`. Use `--dump-bytes N --output FILE_OR_DIR` only for controlled diagnostics.
+
+`memory-dump elf-symbols --package PKG --entry lib/arm64-v8a/libfoo.so --filter JNI --json` parses bounded ELF `.dynsym` entries, and `.symtab` when `--include-symtab` is supplied. It reads file-backed metadata only and does not invoke resolved symbols.

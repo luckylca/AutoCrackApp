@@ -477,3 +477,24 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This is not ART `mCookie` / `DexCaches` reconstruction. On modern Android, app Dex may be represented through oat/vdex/art structures rather than a direct readable DEX mapping, so zero candidates is a valid result rather than proof that no classes exist.
+## 19. Stage 15 file-backed ELF dynamic symbol parsing
+
+`memory.elf.symbols` was added to parse bounded ELF symbol metadata from file-backed ELF inputs and APK-embedded native libraries. This complements runtime `control.so.dlsym` by exposing the static/dynamic symbol table view without resolving or invoking symbols in the target process.
+
+Implemented coverage:
+
+- Runtime capability: `memory.elf.symbols`.
+- Toolpack command: `memory-dump elf-symbols`.
+- Input sources match `memory.elf.info`: file path, `base.apk!/entry`, `apk_path + entry`, and installed APK source selection.
+- Parses `.dynsym` by default, with optional `.symtab` through `--include-symtab`.
+- Emits symbol name, table, section index, value, size, binding, type, visibility/other, and shndx.
+- Supports `--filter` and `--max-symbols` for bounded output.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.elf.symbols, filter=Java_com_luckylca)` parsed the APK-embedded `lib/arm64-v8a/libautocrack_runtime_native.so`.
+- Result: `.dynsym` available, `count=7`, including JNI exports such as `NativeBridge_nativeDlopen`, `NativeBridge_nativeDladdr`, `NativeBridge_nativeProbe`, `NativeBridge_nativeModules`, and `NativeBridge_nativeAndroidDlopenExt`.
+
+Boundary:
+
+- This is file-backed symbol metadata parsing only. It does not call function pointers and does not defeat stripped symbols if neither dynsym nor symtab names are present.

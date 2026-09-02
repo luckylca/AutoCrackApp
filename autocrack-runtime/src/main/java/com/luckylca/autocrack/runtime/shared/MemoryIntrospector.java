@@ -40,7 +40,7 @@ public final class MemoryIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info",
+                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols",
                 "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
@@ -56,6 +56,7 @@ public final class MemoryIntrospector {
             case "memory.module.dump" -> moduleDump(context, request);
             case "memory.module.file_dump" -> moduleFileDump(request);
             case "memory.elf.info" -> elfInfo(context, request);
+            case "memory.elf.symbols" -> elfSymbols(context, request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.scan" -> dexScan(context, request);
@@ -203,16 +204,39 @@ public final class MemoryIntrospector {
     }
 
     private static JSONObject elfInfo(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        ElfBytes loaded;
+        try { loaded = loadElfBytes(context, request, max); }
+        catch (IllegalArgumentException error) { return error("ELF_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseElfInfo(loaded.bytes);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("elf", parsed)
+                .put("strategy", "bounded ELF header/program-header/note parsing; no native code execution");
+    }
+
+    private static JSONObject elfSymbols(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxSymbols = clamp(request.optInt("max_symbols", 1024), 1, 20_000);
+        boolean includeSymtab = request.optBoolean("include_symtab", false);
+        String filter = request.optString("filter", "");
+        ElfBytes loaded = loadElfBytes(context, request, max);
+        JSONObject parsed = parseElfSymbols(loaded.bytes, maxSymbols, includeSymtab, filter);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("symbols", parsed)
+                .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
+                .put("strategy", "bounded ELF dynsym/symtab parsing; no native code execution");
+    }
+
+    private static ElfBytes loadElfBytes(Context context, JSONObject request, int max) throws Exception {
         String path = request.optString("path", "").trim();
         String entry = request.optString("entry", "").trim();
-        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
         byte[] bytes;
         JSONObject source = new JSONObject();
         boolean truncated = false;
         if (!entry.isBlank()) {
             entry = normalizeZipEntry(entry);
             JSONObject pulled = pullApkEntryAnySource(apkContext(context, request), entry, max);
-            if (!pulled.optBoolean("ok", false)) return pulled;
+            if (!pulled.optBoolean("ok", false)) throw new IllegalArgumentException(pulled.toString());
             bytes = Base64.decode(pulled.getString("data"), Base64.NO_WRAP);
             source.put("kind", "apk_entry").put("apk_path", pulled.optString("apk_path", "")).put("entry", entry).put("source", pulled.optString("source", ""));
             truncated = pulled.optInt("size", bytes.length) >= max;
@@ -224,17 +248,14 @@ public final class MemoryIntrospector {
             source.put("kind", "apk_embedded_path").put("apk_path", apkPath).put("entry", zipEntry);
             truncated = bytes.length >= max;
         } else {
-            if (path.isBlank() || !path.startsWith("/")) return error("ELF_PATH_REQUIRED", "absolute file path, APK embedded path, or entry is required");
+            if (path.isBlank() || !path.startsWith("/")) throw new IllegalArgumentException("absolute file path, APK embedded path, or entry is required");
             File file = new File(path);
-            if (!file.isFile() || !file.canRead()) return error("ELF_FILE_NOT_READABLE", path);
+            if (!file.isFile() || !file.canRead()) throw new IllegalArgumentException("ELF file not readable: " + path);
             bytes = readFile(file, max);
             source.put("kind", "file").put("path", path).put("file_size", file.length());
             truncated = file.length() > bytes.length;
         }
-        JSONObject parsed = parseElfInfo(bytes);
-        return ok().put("source", source).put("bytes_read", bytes.length).put("truncated", truncated)
-                .put("sha256_prefix", sha256(bytes)).put("elf", parsed)
-                .put("strategy", "bounded ELF header/program-header/note parsing; no native code execution");
+        return new ElfBytes(bytes, source, truncated);
     }
 
     private static JSONObject dexList(JSONObject request) throws Exception {
@@ -737,6 +758,61 @@ public final class MemoryIntrospector {
                 .put("program_headers_truncated", phTruncated);
     }
 
+    private static JSONObject parseElfSymbols(byte[] bytes, int maxSymbols, boolean includeSymtab, String filter) throws Exception {
+        if (bytes.length < 64 || bytes[0] != 0x7f || bytes[1] != 'E' || bytes[2] != 'L' || bytes[3] != 'F') return error("NOT_ELF", "missing ELF magic");
+        int elfClass = bytes[4] & 0xff;
+        int data = bytes[5] & 0xff;
+        ByteOrder order = data == 2 ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+        ByteBuffer b = ByteBuffer.wrap(bytes).order(order);
+        boolean is64 = elfClass == 2;
+        long shoff = is64 ? u64(b,40) : u32(b,32);
+        int shentsize = u16(b, is64 ? 58 : 46);
+        int shnum = u16(b, is64 ? 60 : 48);
+        JSONArray symbols = new JSONArray();
+        JSONArray sections = new JSONArray();
+        boolean truncated = false;
+        if (shoff <= 0 || shentsize <= 0 || shnum <= 0 || shoff + (long)shentsize * shnum > bytes.length) {
+            return ok().put("count", 0).put("symbols", symbols).put("sections", sections).put("section_headers_available", false);
+        }
+        for (int i = 0; i < shnum; i++) {
+            int sh = (int)(shoff + (long)i * shentsize);
+            long type = u32(b, sh + 4);
+            if (type != 11 && !(includeSymtab && type == 2)) continue;
+            long sectionOffset, sectionSize, entsize;
+            int link;
+            if (is64) { sectionOffset = u64(b, sh + 24); sectionSize = u64(b, sh + 32); link = (int)u32(b, sh + 40); entsize = u64(b, sh + 56); }
+            else { sectionOffset = u32(b, sh + 16); sectionSize = u32(b, sh + 20); link = (int)u32(b, sh + 24); entsize = u32(b, sh + 36); }
+            if (entsize <= 0) entsize = is64 ? 24 : 16;
+            if (sectionOffset < 0 || sectionSize < 0 || sectionOffset + sectionSize > bytes.length) continue;
+            long strOffset = 0, strSize = 0;
+            if (link >= 0 && link < shnum) {
+                int st = (int)(shoff + (long)link * shentsize);
+                if (is64) { strOffset = u64(b, st + 24); strSize = u64(b, st + 32); }
+                else { strOffset = u32(b, st + 16); strSize = u32(b, st + 20); }
+            }
+            sections.put(new JSONObject().put("index", i).put("type", type).put("type_name", type == 11 ? "SHT_DYNSYM" : "SHT_SYMTAB")
+                    .put("offset", sectionOffset).put("size", sectionSize).put("entry_size", entsize).put("string_section", link));
+            int count = (int)Math.min(sectionSize / entsize, 100000);
+            for (int n = 0; n < count; n++) {
+                if (symbols.length() >= maxSymbols) { truncated = true; break; }
+                int so = (int)(sectionOffset + (long)n * entsize);
+                int nameOff = (int)u32(b, so);
+                long value, size; int info, other, shndx;
+                if (is64) { info = bytes[so+4] & 0xff; other = bytes[so+5] & 0xff; shndx = u16(b, so+6); value = u64(b, so+8); size = u64(b, so+16); }
+                else { value = u32(b, so+4); size = u32(b, so+8); info = bytes[so+12] & 0xff; other = bytes[so+13] & 0xff; shndx = u16(b, so+14); }
+                String name = strz(bytes, (int)strOffset, (int)Math.min(strSize, Integer.MAX_VALUE), nameOff);
+                if (name.isEmpty()) continue;
+                if (filter != null && !filter.isEmpty() && !name.contains(filter)) continue;
+                symbols.put(new JSONObject().put("section", i).put("index", n).put("name", name)
+                        .put("value", hex(value)).put("size", size).put("bind", symBind(info)).put("type", symType(info))
+                        .put("other", other).put("shndx", shndx).put("table", type == 11 ? "dynsym" : "symtab"));
+            }
+            if (truncated) break;
+        }
+        return ok().put("count", symbols.length()).put("symbols", symbols).put("sections", sections)
+                .put("truncated", truncated).put("include_symtab", includeSymtab).put("section_headers_available", true);
+    }
+
     private static String parseBuildIdNote(byte[] bytes, int offset, int size, ByteOrder order) {
         try {
             if (offset < 0 || size <= 0 || offset >= bytes.length) return null;
@@ -760,6 +836,10 @@ public final class MemoryIntrospector {
     private static long u32(ByteBuffer b, int off) { return b.getInt(off) & 0xffffffffL; }
     private static long u64(ByteBuffer b, int off) { return b.getLong(off); }
     private static String hexBytes(byte[] bytes, int off, int len) { StringBuilder out = new StringBuilder(len * 2); for (int i=0;i<len && off+i<bytes.length;i++) out.append(String.format("%02x", bytes[off+i] & 0xff)); return out.toString(); }
+    private static String strz(byte[] bytes, int start, int size, int off) { if (off < 0 || start < 0 || size <= 0 || start + off >= bytes.length) return ""; int pos=start+off, end=Math.min(bytes.length, start+size); while(pos<end && bytes[pos]!=0) pos++; return new String(bytes, start+off, Math.max(0,pos-(start+off)), java.nio.charset.StandardCharsets.UTF_8); }
+    private static String symBind(int info) { return switch ((info >>> 4) & 0xf) { case 0 -> "LOCAL"; case 1 -> "GLOBAL"; case 2 -> "WEAK"; case 10 -> "GNU_UNIQUE"; default -> "BIND_" + ((info >>> 4) & 0xf); }; }
+    private static String symType(int info) { return switch (info & 0xf) { case 0 -> "NOTYPE"; case 1 -> "OBJECT"; case 2 -> "FUNC"; case 3 -> "SECTION"; case 4 -> "FILE"; case 5 -> "COMMON"; case 6 -> "TLS"; case 10 -> "GNU_IFUNC"; default -> "TYPE_" + (info & 0xf); }; }
+
     private static String machineName(int machine) { return switch (machine) { case 3 -> "EM_386"; case 40 -> "EM_ARM"; case 62 -> "EM_X86_64"; case 183 -> "EM_AARCH64"; default -> "EM_" + machine; }; }
     private static String phdrTypeName(long type) { return switch ((int)type) { case 0 -> "PT_NULL"; case 1 -> "PT_LOAD"; case 2 -> "PT_DYNAMIC"; case 3 -> "PT_INTERP"; case 4 -> "PT_NOTE"; case 5 -> "PT_SHLIB"; case 6 -> "PT_PHDR"; case 7 -> "PT_TLS"; case 0x6474e550 -> "PT_GNU_EH_FRAME"; case 0x6474e551 -> "PT_GNU_STACK"; case 0x6474e552 -> "PT_GNU_RELRO"; case 0x6474e553 -> "PT_GNU_PROPERTY"; default -> "PT_" + type; }; }
     private static String phdrFlags(long flags) { StringBuilder out = new StringBuilder(3); out.append((flags & 4) != 0 ? 'r' : '-'); out.append((flags & 2) != 0 ? 'w' : '-'); out.append((flags & 1) != 0 ? 'x' : '-'); return out.toString(); }
@@ -808,6 +888,7 @@ public final class MemoryIntrospector {
     private static JSONObject unsupported(String capability,String reason,JSONArray strategies)throws Exception{return ok().put("supported",false).put("capability",capability).put("reason",reason).put("strategies",strategies);}
     private static JSONObject ok()throws Exception{return new JSONObject().put("ok",true);}private static JSONObject error(String c,String m)throws Exception{return new JSONObject().put("ok",false).put("error",new JSONObject().put("code",c).put("message",m));}
 
+    private record ElfBytes(byte[] bytes, JSONObject source, boolean truncated){}
     private record ApkSource(String label,String path){JSONObject json()throws Exception{return new JSONObject().put("label",label).put("path",path);}}
 
     private record MapEntry(long start,long end,String permissions,long offset,String device,long inode,String path,String raw){
