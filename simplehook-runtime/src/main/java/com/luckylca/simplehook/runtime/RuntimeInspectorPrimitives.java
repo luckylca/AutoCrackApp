@@ -23,8 +23,8 @@ import org.json.JSONObject;
  * Clean-room Android runtime-inspector primitives.
  *
  * <p>This class intentionally does not depend on Layout Inspect internals. It implements the public
- * idea with Android View APIs plus bounded reflection. RuntimeEngine dispatches selected inspect
- * requests here through the same request/result channel used by class inspection.</p>
+ * idea with Android View APIs plus bounded reflection. It is not wired into the runtime yet; the next
+ * step is to call it from an InspectorEngine that shares RuntimeChannel with RuntimeEngine.</p>
  */
 @SuppressLint({"DiscouragedPrivateApi", "PrivateApi"})
 final class RuntimeInspectorPrimitives {
@@ -40,30 +40,6 @@ final class RuntimeInspectorPrimitives {
     };
 
     private RuntimeInspectorPrimitives() {}
-
-    static boolean supports(String kind) {
-        return "windows".equals(kind)
-                || "view_tree".equals(kind)
-                || "view_at".equals(kind)
-                || "view_action".equals(kind);
-    }
-
-    static JSONObject executeRequest(JSONObject request) throws JSONException {
-        String kind = request.getString("kind");
-        return switch (kind) {
-            case "windows" -> inspectWindows(request.optInt("max_roots", DEFAULT_MAX_ROOTS));
-            case "view_tree" -> inspectViewTree(
-                    request.optInt("max_nodes", DEFAULT_MAX_NODES),
-                    request.optBoolean("include_listeners", false));
-            case "view_at" -> inspectViewAt(
-                    request.getInt("x"),
-                    request.getInt("y"),
-                    request.optInt("max_nodes", DEFAULT_MAX_NODES),
-                    request.optBoolean("include_listeners", true));
-            case "view_action" -> applyViewAction(selectTargetView(request), request.getJSONObject("action"));
-            default -> throw new JSONException("Unsupported inspector kind: " + kind);
-        };
-    }
 
     static JSONObject inspectWindows(int maxRoots) throws JSONException {
         List<View> roots = rootViews(Math.min(Math.max(maxRoots, 1), DEFAULT_MAX_ROOTS));
@@ -145,8 +121,8 @@ final class RuntimeInspectorPrimitives {
             }
             case "set_padding" -> view.setPadding(action.optInt("left"), action.optInt("top"),
                     action.optInt("right"), action.optInt("bottom"));
-            case "set_size" -> setSize(view, action.optInt("width", layoutWidth(view)),
-                    action.optInt("height", layoutHeight(view)));
+            case "set_size" -> setSize(view, action.optInt("width", view.getLayoutParams().width),
+                    action.optInt("height", view.getLayoutParams().height));
             case "set_margin" -> setMargin(view, action.optInt("left"), action.optInt("top"),
                     action.optInt("right"), action.optInt("bottom"));
             case "webview_eval_js" -> {
@@ -306,70 +282,6 @@ final class RuntimeInspectorPrimitives {
                 collectHitCandidates(group.getChildAt(i), id, i, depth + 1, x, y, out, budget, ids);
             }
         }
-    }
-
-    private static View selectTargetView(JSONObject request) throws JSONException {
-        String nodeId = request.optString("node_id", null);
-        int maxNodes = request.optInt("max_nodes", DEFAULT_MAX_NODES);
-        if (nodeId != null && !nodeId.isBlank()) {
-            View byNode = findViewByNodeId(nodeId, maxNodes);
-            if (byNode != null) return byNode;
-            throw new JSONException("View node not found: " + nodeId);
-        }
-        if (request.has("x") && request.has("y")) {
-            View byPoint = topHitView(request.getInt("x"), request.getInt("y"), maxNodes);
-            if (byPoint != null) return byPoint;
-            throw new JSONException("No visible View hit at requested coordinates");
-        }
-        throw new JSONException("view_action requires node_id or x/y");
-    }
-
-    private static View findViewByNodeId(String nodeId, int maxNodes) {
-        NodeBudget budget = new NodeBudget(Math.min(Math.max(maxNodes, 1), DEFAULT_MAX_NODES));
-        for (View root : rootViews(DEFAULT_MAX_ROOTS)) {
-            View found = findViewByNodeId(root, nodeId, budget);
-            if (found != null || !budget.hasRoom()) return found;
-        }
-        return null;
-    }
-
-    private static View findViewByNodeId(View view, String nodeId, NodeBudget budget) {
-        if (!budget.hasRoom()) return null;
-        budget.take();
-        if (nodeId.equals(nodeId(view))) return view;
-        if (view instanceof ViewGroup group) {
-            for (int i = 0; i < group.getChildCount() && budget.hasRoom(); i++) {
-                View found = findViewByNodeId(group.getChildAt(i), nodeId, budget);
-                if (found != null) return found;
-            }
-        }
-        return null;
-    }
-
-    private static View topHitView(int x, int y, int maxNodes) {
-        List<Candidate> candidates = new ArrayList<>();
-        NodeBudget budget = new NodeBudget(Math.min(Math.max(maxNodes, 1), DEFAULT_MAX_NODES));
-        Map<View, String> ids = new IdentityHashMap<>();
-        List<View> roots = rootViews(DEFAULT_MAX_ROOTS);
-        for (int i = 0; i < roots.size() && budget.hasRoom(); i++) {
-            collectHitCandidates(roots.get(i), null, i, 0, x, y, candidates, budget, ids);
-        }
-        Collections.sort(candidates, (left, right) -> {
-            int depth = Integer.compare(right.depth, left.depth);
-            if (depth != 0) return depth;
-            return Integer.compare(right.drawOrder, left.drawOrder);
-        });
-        return candidates.isEmpty() ? null : candidates.get(0).view;
-    }
-
-    private static int layoutWidth(View view) {
-        ViewGroup.LayoutParams params = view.getLayoutParams();
-        return params == null ? view.getWidth() : params.width;
-    }
-
-    private static int layoutHeight(View view) {
-        ViewGroup.LayoutParams params = view.getLayoutParams();
-        return params == null ? view.getHeight() : params.height;
     }
 
     private static List<View> rootViews(int maxRoots) {

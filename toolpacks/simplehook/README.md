@@ -52,15 +52,9 @@ simplehook reload [--json]
 simplehook inspect class CLASS [--package PACKAGE] [--timeout SEC] [--json]
 simplehook inspect methods CLASS [--package PACKAGE] [--timeout SEC] [--json]
 simplehook inspect fields CLASS [--package PACKAGE] [--timeout SEC] [--json]
-simplehook inspect windows --package PACKAGE [--max-roots N] [--timeout SEC] [--json]
-simplehook inspect view-tree --package PACKAGE [--max-nodes N] [--listeners] [--timeout SEC] [--json]
-simplehook inspect view-at X Y --package PACKAGE [--max-nodes N] [--listeners] [--timeout SEC] [--json]
-simplehook inspect view-action --package PACKAGE (--node-id ID | --x X --y Y) --action-json JSON [--timeout SEC] [--json]
 ```
 
 `--json` may appear before or after a subcommand. Non-follow log output is JSONL by default and a JSON object with `--json`.
-
-Runtime UI inspection commands use the existing inspect request/result channel. The scoped target process must be running and recently attached through LSPosed. `view-action` currently supports bounded clean-room View operations such as `set_visibility`, `remove_view`, `set_text`, `set_text_color`, `set_text_size_sp`, `set_padding`, `set_size`, `set_margin`, `webview_eval_js`, and `webview_load_url`.
 
 ## Rule Schema
 

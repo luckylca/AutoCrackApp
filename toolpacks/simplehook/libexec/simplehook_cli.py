@@ -468,17 +468,9 @@ def resolve_package(store, class_name, explicit):
     return packages[0]
 
 
-def inspect_class(store, kind, class_name, package_name, timeout):
+def inspect(store, kind, class_name, package_name, timeout):
     package_name = resolve_package(store, class_name, package_name)
-    return inspect_request(store, {"kind": kind, "class": class_name}, package_name, timeout)
-
-
-def inspect_request(store, request, package_name, timeout):
-    if not package_name:
-        raise CliError("PACKAGE_REQUIRED", "Runtime inspection requires --package")
-    payload = dict(request)
-    payload["package"] = package_name
-    submitted = call_checked(store, "inspect_submit", payload)
+    submitted = call_checked(store, "inspect_submit", {"kind": kind, "class": class_name, "package": package_name})
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = call_checked(store, "inspect_result", {"request_id": submitted["request_id"]})
@@ -514,17 +506,9 @@ def make_parser():
     logs = commands.add_parser("logs", help="Read structured runtime logs")
     logs.add_argument("--follow", action="store_true"); logs.add_argument("--rule"); logs.add_argument("--package"); logs.add_argument("--limit", type=int, default=500)
 
-    inspect_parser = commands.add_parser("inspect", help="Inspect loaded Java classes and runtime UI state").add_subparsers(dest="inspect_command", required=True)
+    inspect_parser = commands.add_parser("inspect", help="Inspect a loaded Java class").add_subparsers(dest="inspect_command", required=True)
     for name in ("class", "methods", "fields"):
         item = inspect_parser.add_parser(name); item.add_argument("class_name"); item.add_argument("--package"); item.add_argument("--timeout", type=float, default=5.0)
-    windows = inspect_parser.add_parser("windows", help="List current target-process root windows")
-    windows.add_argument("--package", required=True); windows.add_argument("--timeout", type=float, default=5.0); windows.add_argument("--max-roots", type=int, default=64)
-    tree = inspect_parser.add_parser("view-tree", help="Dump current target-process View tree")
-    tree.add_argument("--package", required=True); tree.add_argument("--timeout", type=float, default=5.0); tree.add_argument("--max-nodes", type=int, default=3000); tree.add_argument("--listeners", action="store_true")
-    at = inspect_parser.add_parser("view-at", help="Find visible Views hit by screen coordinates")
-    at.add_argument("x", type=int); at.add_argument("y", type=int); at.add_argument("--package", required=True); at.add_argument("--timeout", type=float, default=5.0); at.add_argument("--max-nodes", type=int, default=3000); at.add_argument("--listeners", action="store_true")
-    action = inspect_parser.add_parser("view-action", help="Apply one bounded View action by node id or coordinates")
-    action.add_argument("--package", required=True); action.add_argument("--timeout", type=float, default=5.0); action.add_argument("--node-id"); action.add_argument("--x", type=int); action.add_argument("--y", type=int); action.add_argument("--action-json", required=True)
     return parser
 
 
@@ -571,24 +555,7 @@ def execute(args, store):
                     seen.add(key); print(json.dumps(item, separators=(",", ":")), flush=True)
             time.sleep(1)
     if args.command == "inspect":
-        if args.inspect_command in {"class", "methods", "fields"}:
-            return inspect_class(store, args.inspect_command, args.class_name, args.package, args.timeout)
-        if args.inspect_command == "windows":
-            return inspect_request(store, {"kind": "windows", "max_roots": args.max_roots}, args.package, args.timeout)
-        if args.inspect_command == "view-tree":
-            return inspect_request(store, {"kind": "view_tree", "max_nodes": args.max_nodes, "include_listeners": args.listeners}, args.package, args.timeout)
-        if args.inspect_command == "view-at":
-            return inspect_request(store, {"kind": "view_at", "x": args.x, "y": args.y, "max_nodes": args.max_nodes, "include_listeners": args.listeners}, args.package, args.timeout)
-        if args.inspect_command == "view-action":
-            try:
-                action = json.loads(args.action_json)
-            except json.JSONDecodeError as error:
-                raise CliError("INVALID_ACTION_JSON", str(error))
-            request = {"kind": "view_action", "action": action}
-            if args.node_id: request["node_id"] = args.node_id
-            if args.x is not None: request["x"] = args.x
-            if args.y is not None: request["y"] = args.y
-            return inspect_request(store, request, args.package, args.timeout)
+        return inspect(store, args.inspect_command, args.class_name, args.package, args.timeout)
     raise CliError("INVALID_COMMAND", "No command selected")
 
 
