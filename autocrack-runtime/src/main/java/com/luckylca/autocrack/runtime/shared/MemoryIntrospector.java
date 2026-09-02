@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -58,6 +58,7 @@ public final class MemoryIntrospector {
             case "memory.elf.info" -> elfInfo(context, request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
+            case "memory.dex.scan" -> dexScan(context, request);
             case "memory.dex.dump" -> dexDump(request);
             case "memory.assets.list" -> assetsList(context, request);
             case "memory.assets.pull" -> assetsPull(context, request);
@@ -324,6 +325,69 @@ public final class MemoryIntrospector {
                 .put("warning", "This exposes ART cookie shape for research. It does not reconstruct DexFile memory by native ART offsets.");
     }
 
+    private static JSONObject dexScan(Context context, JSONObject request) throws Exception {
+        int maxMaps = clamp(request.optInt("max_maps", 256), 1, MAX_MAPS);
+        int maxCandidates = clamp(request.optInt("max_candidates", 64), 1, 1024);
+        int maxScanBytes = clamp(request.optInt("max_scan_bytes_per_map", 2 * 1024 * 1024), 4096, MAX_INLINE_BYTES);
+        int dumpBytes = clamp(request.optInt("dump_bytes", 0), 0, MAX_INLINE_BYTES);
+        String pathContains = request.optString("path_contains", "");
+        boolean includeAnonymous = request.optBoolean("include_anonymous", false);
+        boolean includeData = request.optBoolean("include_data", false) && dumpBytes > 0;
+        JSONArray candidates = new JSONArray();
+        int scannedMaps = 0;
+        int skippedMaps = 0;
+        int truncatedMaps = 0;
+        for (MapEntry entry : readMaps(MAX_MAPS)) {
+            if (!entry.permissions.startsWith("r")) continue;
+            if (!includeAnonymous && (entry.path == null || entry.path.isBlank() || entry.path.startsWith("["))) { skippedMaps++; continue; }
+            if (!pathContains.isEmpty() && (entry.path == null || !entry.path.contains(pathContains))) continue;
+            if (scannedMaps >= maxMaps || candidates.length() >= maxCandidates) break;
+            int wanted = (int)Math.min(entry.size(), maxScanBytes);
+            if (wanted < 0x70) { skippedMaps++; continue; }
+            byte[] bytes;
+            try { bytes = readMappedMemory(context, entry.start, wanted); }
+            catch (Throwable error) { skippedMaps++; continue; }
+            scannedMaps++;
+            if (bytes.length < wanted) truncatedMaps++;
+            for (int off = 0; off + 0x70 <= bytes.length && candidates.length() < maxCandidates; off++) {
+                if (!looksLikeDexHeader(bytes, off)) continue;
+                long absolute = entry.start + off;
+                long fileSize = u32le(bytes, off + 0x20);
+                JSONObject item = new JSONObject()
+                        .put("address", hex(absolute))
+                        .put("map_start", hex(entry.start))
+                        .put("map_end", hex(entry.end))
+                        .put("map_offset", hex(entry.offset))
+                        .put("map_permissions", entry.permissions)
+                        .put("pathname", entry.path == null || entry.path.isBlank() ? JSONObject.NULL : entry.path)
+                        .put("dex_version", new String(bytes, off + 4, 3, java.nio.charset.StandardCharsets.US_ASCII))
+                        .put("file_size", fileSize)
+                        .put("header_size", u32le(bytes, off + 0x24))
+                        .put("endian_tag", hex(u32le(bytes, off + 0x28)))
+                        .put("map_backed", entry.path != null && !entry.path.isBlank() && !entry.path.startsWith("["));
+                if (includeData) {
+                    int n = (int)Math.min(Math.min(fileSize, dumpBytes), bytes.length - off);
+                    item.put("size", n).put("encoding", "base64")
+                            .put("data", Base64.encodeToString(java.util.Arrays.copyOfRange(bytes, off, off + n), Base64.NO_WRAP));
+                }
+                candidates.put(item);
+                off += 0x6f;
+            }
+        }
+        return ok().put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("count", candidates.length())
+                .put("candidates", candidates)
+                .put("scanned_maps", scannedMaps)
+                .put("skipped_maps", skippedMaps)
+                .put("truncated_maps", truncatedMaps)
+                .put("max_scan_bytes_per_map", maxScanBytes)
+                .put("path_contains", pathContains.isEmpty() ? JSONObject.NULL : pathContains)
+                .put("include_anonymous", includeAnonymous)
+                .put("include_data", includeData)
+                .put("art_memory_reconstruction", false)
+                .put("strategy", "bounded readable-map DEX magic/header scan; does not follow ART mCookie/DexCaches");
+    }
+
     private static JSONObject dexDump(JSONObject request) throws Exception {
         String handle = request.optString("dex", request.optString("dex_handle", "")); Object dex = ObjectRegistry.get().get(handle);
         if (dex == null) return error("STALE_HANDLE", handle);
@@ -431,6 +495,7 @@ public final class MemoryIntrospector {
                 .put("elf_info",status(true,"bounded ELF header/program header/GNU build-id parsing from file or APK entry"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
                 .put("dex_art_probe",status(true,"DexPathList/DexFile reflected ART cookie shape probe; no memory reconstruction"))
+                .put("dex_memory_scan",status(bridgeLoaded,"bounded readable-map DEX magic/header candidate scan; not mCookie reconstruction"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
@@ -721,6 +786,20 @@ public final class MemoryIntrospector {
     }
 
     private static Object summarizeCookie(Object value)throws Exception{if(value==null)return JSONObject.NULL;if(value.getClass().isArray()){JSONArray a=new JSONArray();int n=Math.min(java.lang.reflect.Array.getLength(value),32);for(int i=0;i<n;i++)a.put(String.valueOf(java.lang.reflect.Array.get(value,i)));return a;}return String.valueOf(value);}
+    private static boolean looksLikeDexHeader(byte[] bytes, int off) {
+        if (off < 0 || off + 0x70 > bytes.length) return false;
+        if (bytes[off] != 'd' || bytes[off+1] != 'e' || bytes[off+2] != 'x' || bytes[off+3] != '\n' || bytes[off+7] != 0) return false;
+        int v0 = bytes[off+4], v1 = bytes[off+5], v2 = bytes[off+6];
+        if (v0 < '0' || v0 > '9' || v1 < '0' || v1 > '9' || v2 < '0' || v2 > '9') return false;
+        long fileSize = u32le(bytes, off + 0x20);
+        long headerSize = u32le(bytes, off + 0x24);
+        long endian = u32le(bytes, off + 0x28);
+        return fileSize >= 0x70 && headerSize == 0x70 && (endian == 0x12345678L || endian == 0x78563412L);
+    }
+    private static long u32le(byte[] bytes, int off) {
+        return ((long)bytes[off] & 0xff) | (((long)bytes[off+1] & 0xff) << 8) | (((long)bytes[off+2] & 0xff) << 16) | (((long)bytes[off+3] & 0xff) << 24);
+    }
+
     private static long parseAddress(Object value){String text=String.valueOf(value).trim().toLowerCase();if(text.startsWith("0x"))text=text.substring(2);return Long.parseUnsignedLong(text,16);}
     private static String hex(long value){return "0x"+Long.toUnsignedString(value,16);}
     private static int clamp(int v,int min,int max){return Math.max(min,Math.min(max,v));}

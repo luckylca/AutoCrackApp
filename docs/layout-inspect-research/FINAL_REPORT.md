@@ -457,3 +457,23 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This is file-backed metadata parsing only. It does not replace runtime memory relocation reconstruction and does not bypass linker namespace restrictions.
+## 18. Stage 14 bounded DEX magic/header scan
+
+`memory.dex.scan` was added as a bounded DEX discovery probe. It scans selected readable maps for valid DEX header candidates and returns metadata only by default. This is deliberately separate from `memory.dex.art_probe`: `dex-art-probe` reflects Java `DexFile` objects and cookie shape, while `dex-scan` searches mapped bytes for DEX magic/header patterns.
+
+Implemented coverage:
+
+- Runtime capability: `memory.dex.scan`.
+- Toolpack command: `memory-dump dex-scan`.
+- Filters: `path_contains`, `max_maps`, `max_scan_bytes_per_map`, `max_candidates`, `include_anonymous`.
+- Header checks: `dex\nNNN\0` magic, `file_size`, `header_size=0x70`, and endian tag.
+- Optional bounded byte export through `--dump-bytes N --output DIR`, disabled by default.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.dex.scan, path_contains=base.apk)` executed successfully.
+- Result was runnable but found no candidates in the sampled runtime APK mappings: `count=0`, `scanned_maps=2`, `skipped_maps=577`, `art_memory_reconstruction=false`.
+
+Boundary:
+
+- This is not ART `mCookie` / `DexCaches` reconstruction. On modern Android, app Dex may be represented through oat/vdex/art structures rather than a direct readable DEX mapping, so zero candidates is a valid result rather than proof that no classes exist.

@@ -23,6 +23,7 @@ def parser():
     ei=sub.add_parser("elf-info"); add_target(ei); ei.add_argument("--path", default=""); ei.add_argument("--entry", default=""); ei.add_argument("--apk-package", default=""); ei.add_argument("--apk-path", default=""); ei.add_argument("--max-bytes", type=int, default=4194304)
     dl=sub.add_parser("dex-list"); add_target(dl); dl.add_argument("--loader", default="", help="optional ClassLoader handle returned by runtime-inspect classloaders"); dl.add_argument("--class-count", action="store_true", help="count dex class entries up to the runtime safety cap")
     dap=sub.add_parser("dex-art-probe"); add_target(dap); dap.add_argument("--loader", default="", help="optional ClassLoader handle"); dap.add_argument("--class-count", action="store_true"); dap.add_argument("--max-dex", type=int, default=256); dap.add_argument("--no-context-loader", action="store_true")
+    ds=sub.add_parser("dex-scan"); add_target(ds); ds.add_argument("--path-contains", default=""); ds.add_argument("--max-maps", type=int, default=256); ds.add_argument("--max-scan-bytes-per-map", type=int, default=2097152); ds.add_argument("--max-candidates", type=int, default=64); ds.add_argument("--include-anonymous", action="store_true"); ds.add_argument("--dump-bytes", type=int, default=0); ds.add_argument("--output")
     dd=sub.add_parser("dex-dump"); add_target(dd); dd.add_argument("dex_handle"); dd.add_argument("--max-bytes", type=int, default=4194304); add_output(dd)
     al=sub.add_parser("assets-list"); add_target(al); al.add_argument("path", nargs="?", default=""); al.add_argument("--max-assets", type=int, default=20000)
     ap=sub.add_parser("assets-pull"); add_target(ap); ap.add_argument("path"); ap.add_argument("--max-bytes", type=int, default=4194304); add_output(ap)
@@ -45,6 +46,7 @@ def execute(a):
     if a.command=="elf-info": return runtime_request(target_payload(a,"memory.elf.info", path=a.path, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
     if a.command=="dex-list": return runtime_request(target_payload(a,"memory.dex.list", loader=a.loader, include_class_count=a.class_count), a.timeout)
     if a.command=="dex-art-probe": return runtime_request(target_payload(a,"memory.dex.art_probe", loader=a.loader, include_class_count=a.class_count, max_dex=a.max_dex, include_context_loader=not a.no_context_loader), a.timeout)
+    if a.command=="dex-scan": return runtime_request(target_payload(a,"memory.dex.scan", path_contains=a.path_contains, max_maps=a.max_maps, max_scan_bytes_per_map=a.max_scan_bytes_per_map, max_candidates=a.max_candidates, include_anonymous=a.include_anonymous, dump_bytes=a.dump_bytes, include_data=bool(a.output and a.dump_bytes>0)), a.timeout)
     if a.command=="dex-dump": return runtime_request(target_payload(a,"memory.dex.dump", dex=a.dex_handle, max_bytes=a.max_bytes), a.timeout)
     if a.command=="assets-list": return runtime_request(target_payload(a,"memory.assets.list", path=a.path, max_assets=a.max_assets), a.timeout)
     if a.command=="assets-pull": return runtime_request(target_payload(a,"memory.assets.pull", path=a.path, max_bytes=a.max_bytes), a.timeout)
@@ -90,6 +92,37 @@ def _write_xml_text(result, output_path):
     out["output_bytes"] = len(data)
     return out
 
+def _write_dex_scan_candidates(result, output_path):
+    candidates = result.get("candidates")
+    if not isinstance(candidates, list):
+        raise CliError("NO_CANDIDATES", "runtime result has no candidates array")
+    out_dir = _safe_output_path(output_path)
+    os.makedirs(out_dir, exist_ok=True)
+    out = copy.deepcopy(result)
+    written = []
+    for i, item in enumerate(out.get("candidates", [])):
+        data = item.pop("data", None)
+        if not data:
+            continue
+        if item.get("encoding") != "base64":
+            raise CliError("UNSUPPORTED_ENCODING", f"candidate {i} is not base64")
+        raw = base64.b64decode(data)
+        addr = str(item.get("address", f"{i}" )).replace("0x", "")
+        path = os.path.join(out_dir, f"dex_candidate_{i:03d}_{addr}.dex")
+        with open(path, "wb") as f:
+            f.write(raw)
+        item["output_path"] = path
+        item["output_bytes"] = len(raw)
+        item["data_omitted"] = True
+        written.append(path)
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    out["output_dir"] = out_dir
+    out["manifest_path"] = manifest_path
+    out["written_candidates"] = len(written)
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    return out
+
 def _write_module_segments(result, output_path):
     segments = result.get("segments")
     if not isinstance(segments, list):
@@ -130,6 +163,8 @@ def write_output_if_requested(args, result):
         return result
     if getattr(args, "command", "") == "module-dump":
         return _write_module_segments(result, output)
+    if getattr(args, "command", "") == "dex-scan":
+        return _write_dex_scan_candidates(result, output)
     if getattr(args, "command", "") == "xml-pull":
         return _write_xml_text(result, output)
     return _write_single_data(result, output)

@@ -72,3 +72,4 @@ Failures caused by an unsupported API-specific strategy are recorded as
 
 | Host output materialization | PASS(host) | `memory-dump --output` help checks passed for read/module/dex/assets/XML/APK pull commands; local unit checks wrote single bytes, XML text, and module segment manifests |
 | File-backed ELF info | PASS(device self) | `runtime_execute_self(memory.elf.info)` parsed APK-embedded `lib/arm64-v8a/libautocrack_runtime_native.so`; returned ELF64/AARCH64, `phnum=9`, `program_headers=9`, `load_segments=3`, GNU build-id `89d021ea6f492c3cbca67001f0d1f97d4541e0a9` |
+| Bounded DEX memory scan | PASS(device runnable), zero candidates | `runtime_execute_self(memory.dex.scan, path_contains=base.apk)` returned `ok=true`, `count=0`, `scanned_maps=2`, `skipped_maps=577`; explicitly reports `art_memory_reconstruction=false` |
