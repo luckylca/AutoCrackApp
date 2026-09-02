@@ -59,3 +59,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | File-backed ELF info | Complete for bounded file/APK ELF metadata | `memory.elf.info`, `memory-dump elf-info`; device self-test PASS on APK-embedded `libautocrack_runtime_native.so` |
 | Bounded DEX memory scan | Partial; runnable probe, not ART reconstruction | `memory.dex.scan`, `memory-dump dex-scan`; device self-test PASS_RUNNABLE with zero candidates on sampled runtime APK mappings |
 | File-backed ELF symbols | Complete for bounded dynsym/symtab metadata | `memory.elf.symbols`, `memory-dump elf-symbols`; device self-test PASS on JNI exports from runtime native library |
+| File-backed ELF relocations | Complete for bounded REL/RELA metadata | `memory.elf.relocations`, `memory-dump elf-relocations`; device self-test PASS on AArch64 RELA records |

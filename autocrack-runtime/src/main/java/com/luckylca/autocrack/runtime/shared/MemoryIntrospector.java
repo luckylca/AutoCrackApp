@@ -40,7 +40,7 @@ public final class MemoryIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols",
+                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations",
                 "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
@@ -57,6 +57,7 @@ public final class MemoryIntrospector {
             case "memory.module.file_dump" -> moduleFileDump(request);
             case "memory.elf.info" -> elfInfo(context, request);
             case "memory.elf.symbols" -> elfSymbols(context, request);
+            case "memory.elf.relocations" -> elfRelocations(context, request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.scan" -> dexScan(context, request);
@@ -225,6 +226,20 @@ public final class MemoryIntrospector {
                 .put("sha256_prefix", sha256(loaded.bytes)).put("symbols", parsed)
                 .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
                 .put("strategy", "bounded ELF dynsym/symtab parsing; no native code execution");
+    }
+
+    private static JSONObject elfRelocations(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxRelocations = clamp(request.optInt("max_relocations", 1024), 1, 50_000);
+        String filter = request.optString("filter", "");
+        ElfBytes loaded;
+        try { loaded = loadElfBytes(context, request, max); }
+        catch (IllegalArgumentException error) { return error("ELF_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseElfRelocations(loaded.bytes, maxRelocations, filter);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("relocations", parsed)
+                .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
+                .put("strategy", "bounded ELF REL/RELA parsing; no relocation application or native code execution");
     }
 
     private static ElfBytes loadElfBytes(Context context, JSONObject request, int max) throws Exception {
@@ -813,6 +828,58 @@ public final class MemoryIntrospector {
                 .put("truncated", truncated).put("include_symtab", includeSymtab).put("section_headers_available", true);
     }
 
+    private static JSONObject parseElfRelocations(byte[] bytes, int maxRelocations, String filter) throws Exception {
+        if (bytes.length < 64 || bytes[0] != 0x7f || bytes[1] != 'E' || bytes[2] != 'L' || bytes[3] != 'F') return error("NOT_ELF", "missing ELF magic");
+        int elfClass = bytes[4] & 0xff;
+        int data = bytes[5] & 0xff;
+        ByteOrder order = data == 2 ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+        ByteBuffer b = ByteBuffer.wrap(bytes).order(order);
+        boolean is64 = elfClass == 2;
+        long shoff = is64 ? u64(b,40) : u32(b,32);
+        int shentsize = u16(b, is64 ? 58 : 46);
+        int shnum = u16(b, is64 ? 60 : 48);
+        JSONArray relocs = new JSONArray();
+        JSONArray sections = new JSONArray();
+        boolean truncated = false;
+        if (shoff <= 0 || shentsize <= 0 || shnum <= 0 || shoff + (long)shentsize * shnum > bytes.length) {
+            return ok().put("count", 0).put("relocations", relocs).put("sections", sections).put("section_headers_available", false);
+        }
+        for (int i = 0; i < shnum; i++) {
+            int sh = (int)(shoff + (long)i * shentsize);
+            long type = u32(b, sh + 4);
+            if (type != 4 && type != 9) continue; // SHT_RELA / SHT_REL
+            long sectionOffset, sectionSize, entsize;
+            int link;
+            if (is64) { sectionOffset = u64(b, sh + 24); sectionSize = u64(b, sh + 32); link = (int)u32(b, sh + 40); entsize = u64(b, sh + 56); }
+            else { sectionOffset = u32(b, sh + 16); sectionSize = u32(b, sh + 20); link = (int)u32(b, sh + 24); entsize = u32(b, sh + 36); }
+            if (entsize <= 0) entsize = is64 ? (type == 4 ? 24 : 16) : (type == 4 ? 12 : 8);
+            if (sectionOffset < 0 || sectionSize < 0 || sectionOffset + sectionSize > bytes.length) continue;
+            sections.put(new JSONObject().put("index", i).put("type", type).put("type_name", type == 4 ? "SHT_RELA" : "SHT_REL")
+                    .put("offset", sectionOffset).put("size", sectionSize).put("entry_size", entsize).put("symbol_section", link));
+            int count = (int)Math.min(sectionSize / entsize, 200_000);
+            for (int n = 0; n < count; n++) {
+                if (relocs.length() >= maxRelocations) { truncated = true; break; }
+                int ro = (int)(sectionOffset + (long)n * entsize);
+                long rOffset, rInfo, addend = 0;
+                if (is64) { rOffset = u64(b, ro); rInfo = u64(b, ro + 8); if (type == 4) addend = b.getLong(ro + 16); }
+                else { rOffset = u32(b, ro); rInfo = u32(b, ro + 4); if (type == 4) addend = b.getInt(ro + 8); }
+                long symIndex = is64 ? (rInfo >>> 32) : (rInfo >>> 8);
+                long relType = is64 ? (rInfo & 0xffffffffL) : (rInfo & 0xffL);
+                String symName = elfSymbolName(bytes, b, is64, shoff, shentsize, shnum, link, (int)symIndex);
+                if (filter != null && !filter.isEmpty() && (symName == null || !symName.contains(filter))) continue;
+                JSONObject item = new JSONObject().put("section", i).put("index", n).put("kind", type == 4 ? "RELA" : "REL")
+                        .put("offset", hex(rOffset)).put("info", hex(rInfo)).put("symbol_index", symIndex)
+                        .put("symbol", symName == null || symName.isEmpty() ? JSONObject.NULL : symName)
+                        .put("type", relType).put("type_name", relocationTypeName(relType, u16(b,18)));
+                if (type == 4) item.put("addend", addend);
+                relocs.put(item);
+            }
+            if (truncated) break;
+        }
+        return ok().put("count", relocs.length()).put("relocations", relocs).put("sections", sections)
+                .put("truncated", truncated).put("section_headers_available", true);
+    }
+
     private static String parseBuildIdNote(byte[] bytes, int offset, int size, ByteOrder order) {
         try {
             if (offset < 0 || size <= 0 || offset >= bytes.length) return null;
@@ -836,6 +903,34 @@ public final class MemoryIntrospector {
     private static long u32(ByteBuffer b, int off) { return b.getInt(off) & 0xffffffffL; }
     private static long u64(ByteBuffer b, int off) { return b.getLong(off); }
     private static String hexBytes(byte[] bytes, int off, int len) { StringBuilder out = new StringBuilder(len * 2); for (int i=0;i<len && off+i<bytes.length;i++) out.append(String.format("%02x", bytes[off+i] & 0xff)); return out.toString(); }
+    private static String elfSymbolName(byte[] bytes, ByteBuffer b, boolean is64, long shoff, int shentsize, int shnum, int symSection, int symIndex) {
+        try {
+            if (symSection < 0 || symSection >= shnum || symIndex < 0) return "";
+            int sh = (int)(shoff + (long)symSection * shentsize);
+            long type = u32(b, sh + 4);
+            if (type != 11 && type != 2) return "";
+            long sectionOffset, sectionSize, entsize; int link;
+            if (is64) { sectionOffset = u64(b, sh + 24); sectionSize = u64(b, sh + 32); link = (int)u32(b, sh + 40); entsize = u64(b, sh + 56); }
+            else { sectionOffset = u32(b, sh + 16); sectionSize = u32(b, sh + 20); link = (int)u32(b, sh + 24); entsize = u32(b, sh + 36); }
+            if (entsize <= 0) entsize = is64 ? 24 : 16;
+            long symOff = sectionOffset + (long)symIndex * entsize;
+            if (symOff < 0 || symOff + 4 > bytes.length || symOff >= sectionOffset + sectionSize) return "";
+            int nameOff = (int)u32(b, (int)symOff);
+            if (link < 0 || link >= shnum) return "";
+            int st = (int)(shoff + (long)link * shentsize);
+            long strOffset, strSize;
+            if (is64) { strOffset = u64(b, st + 24); strSize = u64(b, st + 32); }
+            else { strOffset = u32(b, st + 16); strSize = u32(b, st + 20); }
+            return strz(bytes, (int)strOffset, (int)Math.min(strSize, Integer.MAX_VALUE), nameOff);
+        } catch (Throwable ignored) { return ""; }
+    }
+    private static String relocationTypeName(long type, int machine) {
+        if (machine == 183) return switch ((int)type) { case 0 -> "R_AARCH64_NONE"; case 257 -> "R_AARCH64_ABS64"; case 1025 -> "R_AARCH64_GLOB_DAT"; case 1026 -> "R_AARCH64_JUMP_SLOT"; case 1027 -> "R_AARCH64_RELATIVE"; case 1032 -> "R_AARCH64_TLSDESC"; case 1037 -> "R_AARCH64_IRELATIVE"; default -> "R_AARCH64_" + type; };
+        if (machine == 62) return switch ((int)type) { case 0 -> "R_X86_64_NONE"; case 1 -> "R_X86_64_64"; case 6 -> "R_X86_64_GLOB_DAT"; case 7 -> "R_X86_64_JUMP_SLOT"; case 8 -> "R_X86_64_RELATIVE"; default -> "R_X86_64_" + type; };
+        if (machine == 40) return switch ((int)type) { case 0 -> "R_ARM_NONE"; case 2 -> "R_ARM_ABS32"; case 21 -> "R_ARM_GLOB_DAT"; case 22 -> "R_ARM_JUMP_SLOT"; case 23 -> "R_ARM_RELATIVE"; default -> "R_ARM_" + type; };
+        return "R_" + machine + "_" + type;
+    }
+
     private static String strz(byte[] bytes, int start, int size, int off) { if (off < 0 || start < 0 || size <= 0 || start + off >= bytes.length) return ""; int pos=start+off, end=Math.min(bytes.length, start+size); while(pos<end && bytes[pos]!=0) pos++; return new String(bytes, start+off, Math.max(0,pos-(start+off)), java.nio.charset.StandardCharsets.UTF_8); }
     private static String symBind(int info) { return switch ((info >>> 4) & 0xf) { case 0 -> "LOCAL"; case 1 -> "GLOBAL"; case 2 -> "WEAK"; case 10 -> "GNU_UNIQUE"; default -> "BIND_" + ((info >>> 4) & 0xf); }; }
     private static String symType(int info) { return switch (info & 0xf) { case 0 -> "NOTYPE"; case 1 -> "OBJECT"; case 2 -> "FUNC"; case 3 -> "SECTION"; case 4 -> "FILE"; case 5 -> "COMMON"; case 6 -> "TLS"; case 10 -> "GNU_IFUNC"; default -> "TYPE_" + (info & 0xf); }; }

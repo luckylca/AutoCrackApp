@@ -498,3 +498,24 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This is file-backed symbol metadata parsing only. It does not call function pointers and does not defeat stripped symbols if neither dynsym nor symtab names are present.
+## 20. Stage 16 file-backed ELF relocation parsing
+
+`memory.elf.relocations` was added to parse bounded ELF REL/RELA relocation metadata. This complements `memory.elf.symbols` and runtime `control.so.dlsym` by exposing the static relocation view used by the dynamic linker.
+
+Implemented coverage:
+
+- Runtime capability: `memory.elf.relocations`.
+- Toolpack command: `memory-dump elf-relocations`.
+- Input sources match `memory.elf.info` and `memory.elf.symbols`.
+- Parses `SHT_RELA` and `SHT_REL` relocation sections.
+- Emits relocation kind, offset, raw info, symbol index/name when linked tables are present, relocation type/name, and addend for RELA.
+- Supports `--filter` and `--max-relocations` for bounded output.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.elf.relocations)` parsed the APK-embedded `lib/arm64-v8a/libautocrack_runtime_native.so`.
+- Result returned `count=64`, `truncated=true` under the bounded test cap, with AArch64 relocation names such as `R_AARCH64_RELATIVE`.
+
+Boundary:
+
+- This parses file-backed relocation metadata only. It does not apply relocations, patch GOT/PLT, or bypass linker namespace policy.
