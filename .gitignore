@@ -18,3 +18,5 @@ __pycache__/
 *.keystore
 keystore.properties
 /exports/
+
+/toolpacks/runtime-inspector/dist/

@@ -1,0 +1,38 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <permission
+        android:name="com.luckylca.runtimeinspector.runtime.permission.SEND_INSPECT_REQUEST"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.luckylca.runtimeinspector.runtime.permission.SEND_INSPECT_REQUEST" />
+    <application
+        android:allowBackup="false"
+        android:label="Runtime Inspector"
+        android:supportsRtl="true"
+        tools:ignore="DataExtractionRules,MissingApplicationIcon">
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="Runtime Android View inspector for authorized test apps" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+        <meta-data android:name="xposedsharedprefs" android:value="true" />
+
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name=".InspectorResultReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.luckylca.runtimeinspector.RESULT" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name=".InspectorProvider"
+            android:authorities="com.luckylca.runtimeinspector.runtime"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
+    </application>
+</manifest>

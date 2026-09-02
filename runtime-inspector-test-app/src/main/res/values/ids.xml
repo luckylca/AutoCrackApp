@@ -1,0 +1,8 @@
+<resources>
+    <item name="inspect_root" type="id" />
+    <item name="inspect_target_text" type="id" />
+    <item name="inspect_click_button" type="id" />
+    <item name="inspect_nested_label" type="id" />
+    <item name="inspect_dialog_button" type="id" />
+    <item name="inspect_dialog_text" type="id" />
+</resources>
