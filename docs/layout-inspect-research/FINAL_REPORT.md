@@ -320,3 +320,29 @@ Boundary:
 - This is loader PHDR enumeration, not a replacement for `/proc/self/maps`.
 - Anonymous mappings, JIT regions, ashmem/memfd mappings, and non-ELF ranges remain maps-only.
 - It does not implement linker namespace bypass; `control.so.dlopen` still reports linker failures directly.
+
+
+## 14. Stage 10 ART Dex cookie probe
+
+`memory.dex.art_probe` was added as a bounded ART/DexFile research probe.
+
+Implemented:
+
+- Runtime capability `memory.dex.art_probe`.
+- `memory-dump dex-art-probe --class-count --max-dex N` CLI command.
+- Optional `--no-context-loader` flag. By default, the probe includes `Context.getClassLoader()` so provider-side diagnostics can still run before the Xposed classloader registry is populated.
+- Per-Dex record summary: loader handle/class, Dex element metadata, file-backed status, file length, reflected `mCookie`/`mInternalCookie`, cookie field count, and cookie value count.
+
+Boundary:
+
+- This is not a native ART memory Dex reconstruction.
+- It intentionally reports `art_memory_reconstruction=false`.
+- It is meant to expose API-specific cookie shape and backing-file state for later native ART offset work.
+
+Validation:
+
+- Host Gradle build PASS.
+- `memory-dump` Toolpack rebuild PASS.
+- CLI help PASS.
+- Runtime APK install PASS.
+- Direct device provider-self assertion was not re-run after the context-loader fix because the tool safety layer blocked the short `runtime_execute_self(memory.dex.art_probe)` command. This is recorded as not device-proven, not as a pass.

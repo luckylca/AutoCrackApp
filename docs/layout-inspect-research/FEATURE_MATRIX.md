@@ -46,3 +46,5 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 `supported:false`, a reason, and the strategies considered.
 
 | Native ELF loader modules | Complete for loader PHDR view; not a maps replacement | `memory.native.modules`, `memory-dump native-modules`; device self-test PASS on `a4976c80` |
+
+| ART Dex cookie probe | Partial; host/install validated, not device-proven | `memory.dex.art_probe` exposes DexFile backing path and reflected cookie shape; `art_memory_reconstruction=false` |

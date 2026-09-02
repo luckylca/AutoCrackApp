@@ -39,7 +39,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump",
-                "memory.dex.list", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -54,6 +54,7 @@ public final class MemoryIntrospector {
             case "memory.module.dump" -> moduleDump(context, request);
             case "memory.module.file_dump" -> moduleFileDump(request);
             case "memory.dex.list" -> dexList(request);
+            case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.dump" -> dexDump(request);
             case "memory.assets.list" -> assetsList(context, request);
             case "memory.assets.pull" -> assetsPull(context, request);
@@ -218,6 +219,73 @@ public final class MemoryIntrospector {
                 .put("memory_dump_strategy", "file-backed dex can be copied; ART cookie is exposed for research but native pointer reconstruction is intentionally version-gated");
     }
 
+    private static JSONObject dexArtProbe(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_dex", 256), 1, MAX_DEX);
+        boolean includeClassCount = request.optBoolean("include_class_count", false);
+        String selected = request.optString("loader", "");
+        JSONArray records = new JSONArray();
+        int loaderCount = 0;
+        int dexCount = 0;
+        int fileBacked = 0;
+        int cookieFieldCount = 0;
+        int cookieValueCount = 0;
+        boolean truncated = false;
+        ArrayList<ClassLoader> probeLoaders = new ArrayList<>(ClassLoaderRegistry.get().snapshot());
+        boolean includeContextLoader = request.optBoolean("include_context_loader", true);
+        if (includeContextLoader && context != null && context.getClassLoader() != null && !probeLoaders.contains(context.getClassLoader())) {
+            probeLoaders.add(context.getClassLoader());
+        }
+        for (ClassLoader loader : probeLoaders) {
+            String loaderHandle = ObjectRegistry.get().put(loader, false, "classloader");
+            if (!selected.isBlank() && !selected.equals(loaderHandle)) continue;
+            loaderCount++;
+            JSONArray dex = RuntimeIntrospector.dexElements(loader, max, includeClassCount);
+            for (int i = 0; i < dex.length(); i++) {
+                if (records.length() >= max) { truncated = true; break; }
+                JSONObject item = dex.getJSONObject(i);
+                JSONObject out = new JSONObject()
+                        .put("loader_handle", loaderHandle)
+                        .put("loader_class", loader.getClass().getName())
+                        .put("dex", item);
+                String name = item.optString("name", "");
+                if (!name.isBlank() && new File(name).isFile()) {
+                    fileBacked++;
+                    out.put("file_backed", true).put("file_length", new File(name).length());
+                } else {
+                    out.put("file_backed", false);
+                }
+                String dexHandle = item.optString("dex_handle", "");
+                Object dexObject = dexHandle.isBlank() ? null : ObjectRegistry.get().get(dexHandle);
+                JSONObject cookie = cookieInfo(dexObject);
+                if (cookie != null) {
+                    out.put("cookie", cookie);
+                    JSONObject analysis = analyzeCookie(cookie);
+                    out.put("cookie_analysis", analysis);
+                    cookieFieldCount += analysis.optInt("field_count", 0);
+                    cookieValueCount += analysis.optInt("value_count", 0);
+                } else {
+                    out.put("cookie", JSONObject.NULL)
+                            .put("cookie_analysis", new JSONObject().put("field_count", 0).put("value_count", 0));
+                }
+                records.put(out);
+                dexCount++;
+            }
+            if (truncated) break;
+        }
+        return ok().put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("loader_count", loaderCount)
+                .put("dex_count", dexCount)
+                .put("file_backed_count", fileBacked)
+                .put("cookie_field_count", cookieFieldCount)
+                .put("cookie_value_count", cookieValueCount)
+                .put("records", records)
+                .put("truncated", truncated)
+                .put("include_context_loader", includeContextLoader)
+                .put("strategy", "Java DexPathList/DexFile reflection + ART cookie shape probe")
+                .put("art_memory_reconstruction", false)
+                .put("warning", "This exposes ART cookie shape for research. It does not reconstruct DexFile memory by native ART offsets.");
+    }
+
     private static JSONObject dexDump(JSONObject request) throws Exception {
         String handle = request.optString("dex", request.optString("dex_handle", "")); Object dex = ObjectRegistry.get().get(handle);
         if (dex == null) return error("STALE_HANDLE", handle);
@@ -323,6 +391,7 @@ public final class MemoryIntrospector {
                 .put("native_modules",status(bridgeLoaded,"native dl_iterate_phdr loader PHDR enumeration"))
                 .put("memory_read",status(bridgeLoaded || canReadSelfMem(),"native process_vm_readv/pread with java /proc/self/mem fallback"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
+                .put("dex_art_probe",status(true,"DexPathList/DexFile reflected ART cookie shape probe; no memory reconstruction"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
@@ -482,6 +551,21 @@ public final class MemoryIntrospector {
     private static String normalizeAsset(String path){String v=path==null?"":path.trim();while(v.startsWith("/"))v=v.substring(1);if(v.contains(".."))throw new IllegalArgumentException("asset path may not contain ..");return v;}
     private static JSONObject cookieInfo(Object dex){if(dex==null)return null;try{JSONObject out=new JSONObject();for(String name:new String[]{"mCookie","mInternalCookie"}){Object v=field(dex,name);if(v!=null)out.put(name,summarizeCookie(v));}return out.length()==0?null:out;}catch(Throwable ignored){return null;}}
     private static Object field(Object object,String name)throws Exception{Class<?> c=object.getClass();while(c!=null){try{Field f=c.getDeclaredField(name);f.setAccessible(true);return f.get(object);}catch(NoSuchFieldException e){c=c.getSuperclass();}}return null;}
+    private static JSONObject analyzeCookie(JSONObject cookie) throws Exception {
+        JSONObject out = new JSONObject().put("field_count", 0).put("value_count", 0).put("fields", new JSONArray());
+        if (cookie == null) return out;
+        JSONArray fields = new JSONArray();
+        int valueCount = 0;
+        for (String name : new String[]{"mCookie", "mInternalCookie"}) {
+            if (!cookie.has(name) || cookie.isNull(name)) continue;
+            Object value = cookie.get(name);
+            int count = value instanceof JSONArray ? ((JSONArray)value).length() : 1;
+            fields.put(new JSONObject().put("name", name).put("shape", value instanceof JSONArray ? "array" : "scalar").put("count", count));
+            valueCount += count;
+        }
+        return out.put("field_count", fields.length()).put("value_count", valueCount).put("fields", fields);
+    }
+
     private static Object summarizeCookie(Object value)throws Exception{if(value==null)return JSONObject.NULL;if(value.getClass().isArray()){JSONArray a=new JSONArray();int n=Math.min(java.lang.reflect.Array.getLength(value),32);for(int i=0;i<n;i++)a.put(String.valueOf(java.lang.reflect.Array.get(value,i)));return a;}return String.valueOf(value);}
     private static long parseAddress(Object value){String text=String.valueOf(value).trim().toLowerCase();if(text.startsWith("0x"))text=text.substring(2);return Long.parseUnsignedLong(text,16);}
     private static String hex(long value){return "0x"+Long.toUnsignedString(value,16);}

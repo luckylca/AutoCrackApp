@@ -66,3 +66,7 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 `memory-dump apk-entries --package RUNTIME_PKG --apk-path /data/app/.../base.apk --prefix res/ --json` reads an explicit APK path. This is useful when package visibility prevents `createPackageContext` from resolving `--apk-package`.
 
 `memory-dump native-modules --package PKG --filter libc --json` uses the AutoCrack JNI bridge and `dl_iterate_phdr` to enumerate ELF loader modules with base/load ranges. This complements `/proc/self/maps`; it does not include anonymous or non-ELF mappings.
+
+`memory-dump dex-art-probe --package PKG --class-count --json` summarizes each runtime DexFile, its backing path, class-count lower bound, and reflected ART `mCookie`/`mInternalCookie` shape. It is a probe for future native ART reconstruction, not a Dex memory reconstruction.
+
+`dex-art-probe` includes the current `Context.getClassLoader()` by default so provider-side self diagnostics work even before the Xposed target-process registry is populated. Use `--no-context-loader` to restrict results to registered target classloaders only.
