@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <android/log.h>
+#include <android/dlext.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -102,6 +103,51 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeDlopen(
     return env->NewStringUTF(buf);
 }
 
+
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeAndroidDlopenExt(
+        JNIEnv* env, jclass, jstring path, jint flags, jint ext_flags) {
+    std::string p = jstr(env, path);
+    if (p.empty()) return env->NewStringUTF("ERR:path is required");
+
+    android_dlextinfo extinfo{};
+    extinfo.flags = static_cast<uint64_t>(ext_flags);
+
+#ifdef ANDROID_DLEXT_USE_NAMESPACE
+    if ((extinfo.flags & ANDROID_DLEXT_USE_NAMESPACE) != 0) {
+        return env->NewStringUTF("ERR:ANDROID_DLEXT_USE_NAMESPACE requires an android_namespace_t pointer; namespace bypass is not implemented");
+    }
+#endif
+
+    int fd = -1;
+#ifdef ANDROID_DLEXT_USE_LIBRARY_FD
+    if ((extinfo.flags & ANDROID_DLEXT_USE_LIBRARY_FD) != 0) {
+        fd = open(p.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd < 0) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "ERR:open library fd failed: errno=%d %s", errno, strerror(errno));
+            return env->NewStringUTF(buf);
+        }
+        extinfo.library_fd = fd;
+    }
+#endif
+
+    dlerror();
+    void* handle = android_dlopen_ext(p.c_str(), flags, &extinfo);
+    const char* err = dlerror();
+    int saved = errno;
+    if (fd >= 0) close(fd);
+
+    char buf[1024];
+    if (handle) {
+        snprintf(buf, sizeof(buf), "OK:%p", handle);
+    } else {
+        snprintf(buf, sizeof(buf), "ERR:%s errno=%d %s", err ? err : "android_dlopen_ext failed", saved, strerror(saved));
+    }
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "android_dlopen_ext(%s, flags=%d, ext_flags=%" PRIu64 ") => %s", p.c_str(), flags, extinfo.flags, buf);
+    return env->NewStringUTF(buf);
+}
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeDlsym(

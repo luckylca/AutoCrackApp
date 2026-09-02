@@ -371,3 +371,23 @@ Safety/behavior boundary:
 - This only resolves a symbol address.
 - It explicitly returns `callable=false` and does not call the resolved native function.
 - It does not bypass linker namespace restrictions. Explicit handle lookup depends on a handle returned by `control.so.dlopen` and Android linker policy.
+
+
+## 16. Stage 12 android_dlopen_ext loader path
+
+`control.so.android_dlopen_ext` was added as a native Android-linker loading path. This is closer to bionic's real loading entry than plain `dlopen`, but it still does not claim linker namespace bypass.
+
+Implemented:
+
+- JNI bridge calls `android_dlopen_ext(path, flags, android_dlextinfo*)`.
+- Optional `ext_flags` are accepted as integer/hex values from the CLI.
+- `ANDROID_DLEXT_USE_LIBRARY_FD` can be requested and opens the target path as a library fd before calling the linker.
+- `ANDROID_DLEXT_USE_NAMESPACE` is explicitly rejected unless a real `android_namespace_t` pointer is available; this prevents falsely claiming namespace bypass.
+- Runtime result includes `namespace_bypass=false` and a namespace note.
+
+Validation:
+
+- Host Gradle build passed with isolated Gradle user home because the user's global `~/.gradle/init.gradle` conflicts with settings-level repositories.
+- `runtime-control` Toolpack rebuild passed.
+- CLI help and manifest checks passed.
+- Direct device self-test for loading `/system/lib64/liblog.so` through `runtime_execute_self(control.so.android_dlopen_ext)` was blocked by the tool safety layer, so a device PASS is not claimed for this capability.

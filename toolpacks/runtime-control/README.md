@@ -43,4 +43,6 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 
 `runtime-control object-method-call --package PKG HANDLE METHOD --arg-types-json JSON --args-json JSON` invokes an explicitly named reflected method with at most 16 scalar arguments. The caller must provide exact parameter type names. This is a bounded runtime-control feature and returns a summarized result or object handle.
 
+`runtime-control so-android-dlopen-ext --package PKG /system/lib64/liblog.so --ext-flags 0 --json` uses Android bionic `android_dlopen_ext`. It returns the handle or linker error and explicitly reports that namespace bypass is not claimed.
+
 `runtime-control so-dlsym --package PKG symbolName --json` resolves a native symbol through `dlsym`. Use `--handle 0x...` with a handle returned by `so-dlopen`, or omit it for `RTLD_DEFAULT`. This only returns the address and does not call the function.

@@ -50,3 +50,5 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | ART Dex cookie probe | Partial; host/install validated, not device-proven | `memory.dex.art_probe` exposes DexFile backing path and reflected cookie shape; `art_memory_reconstruction=false` |
 
 | Native dlsym symbol lookup | Complete for bounded symbol lookup; no invocation | `control.so.dlsym`, `runtime-control so-dlsym`; device self-test PASS resolving `dlopen` through `RTLD_DEFAULT` |
+
+| android_dlopen_ext loader | Host-complete; device assertion blocked | `control.so.android_dlopen_ext`, `runtime-control so-android-dlopen-ext`; explicit `namespace_bypass=false` until a real `android_namespace_t` strategy exists |

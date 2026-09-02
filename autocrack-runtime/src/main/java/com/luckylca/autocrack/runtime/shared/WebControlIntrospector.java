@@ -41,7 +41,7 @@ public final class WebControlIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
-                "control.secure.status", "control.secure.disable", "control.so.inject", "control.so.dlopen", "control.so.dlsym",
+                "control.secure.status", "control.secure.disable", "control.so.inject", "control.so.dlopen", "control.so.android_dlopen_ext", "control.so.dlsym",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
 
@@ -61,6 +61,7 @@ public final class WebControlIntrospector {
             case "control.secure.disable" -> secureDisable();
             case "control.so.inject" -> injectSo(request);
             case "control.so.dlopen" -> dlopenSo(context, request);
+            case "control.so.android_dlopen_ext" -> androidDlopenExtSo(context, request);
             case "control.so.dlsym" -> dlsymSo(context, request);
             case "control.activity.start" -> startActivity(context, request);
             case "control.process.kill" -> killProcess(request);
@@ -237,6 +238,22 @@ public final class WebControlIntrospector {
         return ok().put("supported", false).put("path", path).put("loaded", false)
                 .put("reason", result.optString("reason", "native dlopen failed"))
                 .put("strategies", new JSONArray().put("native dlopen absolute path").put("System.load fallback via control.so.inject"));
+    }
+
+    private static JSONObject androidDlopenExtSo(Context context, JSONObject request) throws Exception {
+        String path = request.optString("path", "");
+        if (path.isBlank() || !path.startsWith("/")) return error("ABSOLUTE_PATH_REQUIRED", "An absolute target-process-visible .so path is required");
+        int flags = request.optInt("flags", 2); // RTLD_NOW by default.
+        int extFlags = request.optInt("ext_flags", 0);
+        JSONObject result = NativeBridge.androidDlopenExt(context, path, flags, extFlags);
+        if (result.optBoolean("ok")) return ok().put("path", path).put("loaded", true)
+                .put("handle", result.optString("handle", "")).put("flags", flags).put("ext_flags", extFlags)
+                .put("strategy", "native android_dlopen_ext")
+                .put("namespace_bypass", false)
+                .put("namespace_note", "ANDROID_DLEXT_USE_NAMESPACE requires an android_namespace_t pointer; namespace bypass is intentionally not claimed.");
+        return ok().put("supported", false).put("path", path).put("loaded", false).put("flags", flags).put("ext_flags", extFlags)
+                .put("reason", result.optString("reason", "native android_dlopen_ext failed"))
+                .put("strategies", new JSONArray().put("android_dlopen_ext absolute path").put("ANDROID_DLEXT_USE_LIBRARY_FD when requested").put("control.so.dlopen fallback"));
     }
 
     private static JSONObject dlsymSo(Context context, JSONObject request) throws Exception {

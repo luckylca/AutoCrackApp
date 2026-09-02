@@ -51,6 +51,14 @@ public final class NativeBridge {
         return new JSONObject().put("ok", false).put("loaded", false).put("reason", raw == null ? "native returned null" : raw.substring(Math.min(4, raw.length())));
     }
 
+
+    public static JSONObject androidDlopenExt(Context context, String path, int flags, int extFlags) throws Exception {
+        if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("loaded", false).put("reason", loadError);
+        String raw = nativeAndroidDlopenExt(path, flags, extFlags);
+        if (raw != null && raw.startsWith("OK:")) return new JSONObject().put("ok", true).put("loaded", true).put("handle", raw.substring(3));
+        return new JSONObject().put("ok", false).put("loaded", false).put("reason", raw == null ? "native returned null" : raw.substring(Math.min(4, raw.length())));
+    }
+
     public static JSONObject dladdr(Context context, long address) throws Exception {
         if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("supported", false).put("reason", loadError);
         String raw = nativeDladdr(address);
@@ -91,6 +99,7 @@ public final class NativeBridge {
 
     private static native byte[] nativeReadMemory(long address, int size) throws Exception;
     private static native String nativeDlopen(String path, int flags);
+    private static native String nativeAndroidDlopenExt(String path, int flags, int extFlags);
     private static native String nativeDladdr(long address);
     private static native String nativeDlsym(String handle, String symbol);
     private static native String nativeModules(int maxModules, String filter);
