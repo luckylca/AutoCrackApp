@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
+import com.luckylca.autocrack.runtime.shared.ClassLoaderRegistry;
 import com.luckylca.simplehook.core.ConditionEvaluator;
 import com.luckylca.simplehook.core.HookRule;
 import com.luckylca.simplehook.core.RuleState;
@@ -30,7 +31,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-final class RuntimeEngine {
+public final class RuntimeEngine {
     private final RuntimeChannel channel;
     private final String packageName;
     private final String processName;
@@ -46,7 +47,7 @@ final class RuntimeEngine {
     private final AtomicLong stateOrder = new AtomicLong(System.currentTimeMillis() * 1_000L);
     private volatile long generation = -1L;
 
-    RuntimeEngine(Context context, String packageName, String processName, ClassLoader classLoader) {
+    public RuntimeEngine(Context context, String packageName, String processName, ClassLoader classLoader) {
         this.channel = new RuntimeChannel(context);
         this.packageName = packageName;
         this.processName = processName;
@@ -54,8 +55,10 @@ final class RuntimeEngine {
         this.classLoaders.add(classLoader);
     }
 
-    void start() throws Throwable {
-        installClassLoaderObserver();
+    public void start() throws Throwable {
+        ClassLoaderRegistry registry = ClassLoaderRegistry.get();
+        classLoaders.addAll(registry.snapshot());
+        registry.addListener(this::onClassLoaded);
         synchronizeRules();
         handler.postDelayed(this::poll, 1000L);
     }
@@ -374,38 +377,18 @@ final class RuntimeEngine {
         return result.toString();
     }
 
-    private void installClassLoaderObserver() throws Throwable {
-        observeClassLoaderMethod(ClassLoader.class.getDeclaredMethod("loadClass", String.class));
-        observeClassLoaderMethod(ClassLoader.class.getDeclaredMethod("loadClass", String.class, boolean.class));
-        Class<?> baseDexClassLoader = Class.forName("dalvik.system.BaseDexClassLoader");
-        observeClassLoaderMethod(baseDexClassLoader.getDeclaredMethod("findClass", String.class));
-        for (Constructor<?> constructor : baseDexClassLoader.getDeclaredConstructors()) {
-            XposedBridge.hookMethod(constructor, new XC_MethodHook(10) {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    if (param.thisObject instanceof ClassLoader loader) classLoaders.add(loader);
-                }
-            });
-        }
-    }
-
-    private void observeClassLoaderMethod(Method method) {
-        XposedBridge.hookMethod(method, new XC_MethodHook(10) {
-            @Override
-            protected void afterHookedMethod(MethodHookParam param) {
-                if (param.hasThrowable() || !(param.getResult() instanceof Class<?> loaded)) return;
-                classLoaders.add(loaded.getClassLoader() == null ? initialClassLoader : loaded.getClassLoader());
-                for (HookRule rule : activeRules.values()) {
-                    if (!rule.target.className.equals(loaded.getName())) continue;
-                    try {
-                        installOnClass(rule, loaded);
-                        waitingForClass.remove(rule.id);
-                    } catch (Throwable error) {
-                        state(rule.id, RuleState.FAILED, error.toString());
-                    }
-                }
+    private void onClassLoaded(Class<?> loaded) {
+        ClassLoader loader = loaded.getClassLoader() == null ? initialClassLoader : loaded.getClassLoader();
+        classLoaders.add(loader);
+        for (HookRule rule : activeRules.values()) {
+            if (!rule.target.className.equals(loaded.getName())) continue;
+            try {
+                installOnClass(rule, loaded);
+                waitingForClass.remove(rule.id);
+            } catch (Throwable error) {
+                state(rule.id, RuleState.FAILED, error.toString());
             }
-        });
+        }
     }
 
     private void fulfillInspections() throws JSONException {

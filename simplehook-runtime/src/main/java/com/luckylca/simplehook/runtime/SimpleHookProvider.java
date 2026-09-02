@@ -8,6 +8,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import android.os.Process;
 import android.util.Base64;
+import com.luckylca.autocrack.runtime.shared.RuntimeRequestStore;
 import com.luckylca.simplehook.core.HookRule;
 import com.luckylca.simplehook.core.RuleValidationException;
 import com.luckylca.simplehook.core.SimpleHookLimits;
@@ -25,11 +26,13 @@ public final class SimpleHookProvider extends ContentProvider {
     private static final Map<String, JSONObject> HEARTBEATS = new ConcurrentHashMap<>();
     private RuleStore rules;
     private JsonLogStore logs;
+    private RuntimeRequestStore runtimeRequests;
 
     @Override
     public boolean onCreate() {
         rules = new RuleStore(contextOrThrow());
         logs = new JsonLogStore(contextOrThrow());
+        runtimeRequests = new RuntimeRequestStore(contextOrThrow());
         return true;
     }
 
@@ -61,6 +64,11 @@ public final class SimpleHookProvider extends ContentProvider {
                 case "inspect_complete" -> inspectComplete(request);
                 case "inspect_result" -> inspectResult(request.getString("request_id"));
                 case "limits" -> limits();
+                case "runtime_submit" -> runtimeRequests.submit(request);
+                case "runtime_result" -> runtimeRequests.result(request.getString("request_id"));
+                case "runtime_status" -> runtimeRequests.status();
+                case "runtime_clear" -> runtimeRequests.clear(request);
+                case "runtime_complete" -> runtimeRequests.complete(request);
                 default -> error("UNKNOWN_METHOD", "Unknown provider method: " + method);
             };
             return bundle(result);
@@ -76,7 +84,7 @@ public final class SimpleHookProvider extends ContentProvider {
     private void authorize(String method, JSONObject request) {
         int uid = Binder.getCallingUid();
         if (uid == 0 || uid == Process.SHELL_UID || uid == Process.myUid()) return;
-        if (!Set.of("rules_for_package", "rule_state", "append_log", "heartbeat", "inspect_pending", "inspect_complete").contains(method)) {
+        if (!Set.of("rules_for_package", "rule_state", "append_log", "heartbeat", "inspect_pending", "inspect_complete", "runtime_complete").contains(method)) {
             throw new SecurityException("This operation requires Android root or shell");
         }
         JSONObject entry = request.optJSONObject("entry");

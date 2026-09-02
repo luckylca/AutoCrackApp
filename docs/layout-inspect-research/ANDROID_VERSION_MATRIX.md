@@ -15,8 +15,4 @@
 | Runtime binary XML | native strategy required | native strategy required | native layout changes | unsupported until verified |
 | `System.load` injection | namespace rules apply | stricter namespaces | namespace/SELinux apply | failures reported; no bypass claim |
 
-Current owned device: Android API 36, arm64-v8a, rooted through KernelSU. This
-device is the release gate for Java-level runtime, cross-tool, UI, WebView,
-maps/SO and explicitly supported Dex strategies. Older rows require automated
-host coverage and a real device before being upgraded from contract support to
-device-verified support.
+The intended release-gate device remains Android API 36 arm64-v8a with root/LSPosed access, but the current Mac Runner session did not expose `adb` or `android-shell`. Rows above therefore distinguish contract support from device-verified support. A row is upgraded to device-verified only after the matching real-device matrix has been rerun in the current workspace.

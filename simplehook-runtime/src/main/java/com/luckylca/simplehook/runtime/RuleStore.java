@@ -11,7 +11,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-@SuppressLint({"ApplySharedPref", "WorldReadableFiles"})
+@SuppressLint("ApplySharedPref")
 final class RuleStore {
     private static final String PREFS = "simplehook_rules";
     private static final String RULES = "rules";
@@ -27,13 +27,13 @@ final class RuleStore {
     RuleStore(Context context) {
         Context credentialContext = context;
         Context deviceContext = context.createDeviceProtectedStorageContext();
-        // LSPosed API 93 redirects this file into its protected preference bridge. The legacy
-        // world-readable mode is the signal that permits XSharedPreferences readers in scoped apps.
-        SharedPreferences credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
-        SharedPreferences devicePreferences = deviceContext.getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
+        // xposedsharedprefs metadata lets LSPosed expose this private preference file safely to
+        // XSharedPreferences readers. MODE_WORLD_READABLE is rejected by modern Android targets.
+        SharedPreferences credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        SharedPreferences devicePreferences = deviceContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (!credentialPreferences.contains(RULES) && devicePreferences.contains(RULES)) {
             credentialContext.moveSharedPreferencesFrom(deviceContext, PREFS);
-            credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
+            credentialPreferences = credentialContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         }
         if (!credentialPreferences.getBoolean(WORLD_READABLE_MIGRATED, false)
                 || !credentialPreferences.contains(CHANNEL_TOKEN)) {

@@ -1,16 +1,16 @@
 # Runtime Inspector 0.1.0
 
-Runtime Inspector is an independent LSPosed/Xposed runtime View inspection tool for applications and devices you own or are authorized to test. It is intentionally separate from SimpleHook: SimpleHook handles Java method/field hooks; Runtime Inspector handles live windows, View trees, hit testing, listener metadata, and bounded UI actions.
+Runtime Inspector is the legacy first-phase View inspection CLI for applications and devices you own or are authorized to test. In the Layout Inspect migration branch, it is kept for backward compatibility and forwards to the shared AutoCrack Runtime. SimpleHook still handles Java method/field hooks; Runtime Inspector handles live windows, View trees, hit testing, listener metadata, and bounded UI actions.
 
 ## Components
 
-- `runtime-inspector-runtime`: companion APK + LSPosed module.
+- `autocrack-runtime`: shared companion APK + LSPosed module.
 - `runtime-inspector-test-app`: deterministic owned test UI.
 - `runtime-inspector`: rootfs CLI toolpack command.
 
 ## Transport
 
-CLI calls the companion ContentProvider. The companion sends an explicit permission-protected request broadcast to the scoped target package. Injected runtime code receives the request, executes it on the main thread, and sends an explicit result broadcast back to the companion. This avoids Android package-visibility restrictions that prevent arbitrary target apps from resolving the companion provider directly.
+CLI calls the shared AutoCrack Runtime ContentProvider. The provider writes bounded request records, injected runtime code polls them through `XSharedPreferences`, executes matching requests, and completes them through the provider. This preserves the old CLI surface while avoiding a second Xposed module.
 
 ## Commands
 

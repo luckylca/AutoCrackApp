@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-RUNTIME_AUTHORITY = "com.luckylca.simplehook.runtime"
+RUNTIME_AUTHORITY = "com.luckylca.autocrack.runtime"
 TEST_AUTHORITY = "com.luckylca.simplehook.testapp.control"
 TEST_PACKAGE = "com.luckylca.simplehook.testapp"
 TARGET_CLASS = "com.luckylca.simplehook.testapp.HookTargets"
@@ -21,6 +21,13 @@ class DeviceTest:
         self.results = {}
 
     def shell(self, command, check=True):
+        completed = subprocess.run(self.adb + ["shell", command], text=True,
+                                   capture_output=True, timeout=30)
+        if check and completed.returncode:
+            raise RuntimeError((completed.stderr or completed.stdout).strip())
+        return completed.stdout + completed.stderr
+
+    def root_shell(self, command, check=True):
         completed = subprocess.run(self.adb + ["shell", "su", "-c", command], text=True,
                                    capture_output=True, timeout=30)
         if check and completed.returncode:
@@ -166,7 +173,7 @@ class DeviceTest:
 
         persistent = self.rule("persistence", "getInt", {"type": "replace_return", "value": 77})
         self.stop_target(); self.add(persistent)
-        self.shell("am force-stop com.luckylca.simplehook.runtime")
+        self.shell("am force-stop com.luckylca.autocrack.runtime")
         self.results["persistence"] = self.target("get_int").get("value") == 77
         self.remove(persistent["id"])
 

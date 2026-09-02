@@ -10,8 +10,8 @@ Agent
             -> one Xposed entry / one bootstrap in target process
               -> RuntimeDispatcher
                 -> WindowRegistry / ActivityRegistry / ClassLoaderRegistry
-                -> ObjectRegistry / ViewCreationTracker / WebViewRegistry
-                -> HookEngine / MemoryStrategies / ControlActions
+                -> ObjectRegistry / ViewCreationTracker / WebControlIntrospector
+                -> SimpleHook RuntimeEngine / MemoryIntrospector / ControlActions
 ```
 
 ## Invariants
@@ -22,8 +22,9 @@ Agent
 - Every request names a capability and carries package/process/session/id/nonce.
 - UI and WebView work runs on the main looper; long reflection and serialization
   work runs on a bounded worker after a main-thread snapshot.
-- Large byte results are written under `/workspace/artifacts` and stdout returns
-  metadata, hash, size and path.
+- Current byte-returning strategies are inline-capped. Over-budget or API-gated
+  dumps return structured unsupported/error results; host artifact streaming is a
+  remaining extension point rather than a claimed completed feature.
 
 ## ObjectRegistry
 

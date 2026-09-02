@@ -8,8 +8,8 @@ import subprocess
 import sys
 import time
 
-VERSION = "0.1.0"
-AUTHORITY = "com.luckylca.runtimeinspector.runtime"
+VERSION = "1.0.0"
+AUTHORITY = "com.luckylca.autocrack.runtime"
 
 
 class CliError(Exception):
@@ -47,11 +47,11 @@ def provider_call(method, request=None):
 
 
 def request(payload, timeout):
-    submitted = provider_call("submit", payload)
+    submitted = provider_call("runtime_submit", payload)
     request_id = submitted["request_id"]
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        result = provider_call("result", {"request_id": request_id})
+        result = provider_call("runtime_result", {"request_id": request_id})
         if not result.get("pending", False):
             if result.get("missing"):
                 raise CliError("REQUEST_MISSING", request_id)
@@ -86,9 +86,9 @@ def make_parser():
 
 def execute(args):
     if args.command == "status":
-        return provider_call("status")
+        return provider_call("runtime_status")
     if args.command == "clear":
-        return provider_call("clear", {"package": args.package} if args.package else {})
+        return provider_call("runtime_clear", {"package": args.package} if args.package else {})
     base = {"package": args.package, "process": args.process}
     if args.command == "windows":
         return request(base | {"kind": "windows", "max_roots": args.max_roots}, args.timeout)

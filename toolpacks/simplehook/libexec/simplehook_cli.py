@@ -14,9 +14,9 @@ import sys
 import tempfile
 import time
 
-VERSION = "0.1.1"
-AUTHORITY = "com.luckylca.simplehook.runtime"
-MODULE_PACKAGE = "com.luckylca.simplehook.runtime"
+VERSION = "1.0.0"
+AUTHORITY = "com.luckylca.autocrack.runtime"
+MODULE_PACKAGE = "com.luckylca.autocrack.runtime"
 LSPOSED_DATABASE = "/data/adb/lspd/config/modules_config.db"
 VALID_ACTIONS = {
     "record", "replace_return", "replace_argument", "before", "after", "skip_original",

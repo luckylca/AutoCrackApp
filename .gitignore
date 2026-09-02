@@ -1,6 +1,8 @@
 *.iml
 .gradle/
 .gradle-simplehook/
+.gradle-autocrack-runtime/
+
 /dist/
 /toolpacks/simplehook/dist/
 .idea/
@@ -20,3 +22,7 @@ keystore.properties
 /exports/
 
 /toolpacks/runtime-inspector/dist/
+/toolpacks/ui-inspect/dist/
+/toolpacks/runtime-inspect/dist/
+/toolpacks/memory-dump/dist/
+/toolpacks/runtime-control/dist/

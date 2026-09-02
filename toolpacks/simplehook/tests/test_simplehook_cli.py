@@ -108,10 +108,11 @@ class SimpleHookCliTest(unittest.TestCase):
                 module_pkg_name TEXT NOT NULL, app_pkg_name TEXT NOT NULL, user_id INTEGER NOT NULL,
                 PRIMARY KEY(module_pkg_name, app_pkg_name, user_id)
             );
-            INSERT INTO modules VALUES('com.luckylca.simplehook.runtime', '/data/app/runtime/base.apk');
-            INSERT INTO modules_state VALUES('com.luckylca.simplehook.runtime', 0, 1, 0);
-            INSERT INTO scope VALUES('com.luckylca.simplehook.runtime', 'com.example.target', 0);
+            INSERT INTO modules VALUES('com.luckylca.autocrack.runtime', '/data/app/runtime/base.apk');
+            INSERT INTO modules_state VALUES('com.luckylca.autocrack.runtime', 0, 1, 0);
+            INSERT INTO scope VALUES('com.luckylca.autocrack.runtime', 'com.example.target', 0);
         """)
+        connection.commit()
         connection.close()
 
         result = read_lsposed_module_status(database)

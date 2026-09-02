@@ -1,18 +1,17 @@
 package com.luckylca.runtimeinspector.runtime;
 
-import android.content.ComponentName;
 import android.content.Context;
-import android.content.Intent;
 import android.net.Uri;
+import android.os.Bundle;
+import com.luckylca.autocrack.runtime.shared.RuntimeRequestStore;
 import de.robv.android.xposed.XSharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 final class InspectorChannel {
-    static final String MODULE_PACKAGE = "com.luckylca.runtimeinspector.runtime";
-    static final String PREFS = "runtime_inspector";
-    static final String REQUESTS = "requests";
-    static final String ACTION_RESULT = "com.luckylca.runtimeinspector.RESULT";
+    static final String MODULE_PACKAGE = "com.luckylca.autocrack.runtime";
+    static final String PREFS = RuntimeRequestStore.PREFS;
+    static final String REQUESTS = RuntimeRequestStore.REQUESTS;
     static final String JSON = "json";
     static final Uri URI = Uri.parse("content://" + MODULE_PACKAGE);
 
@@ -47,11 +46,9 @@ final class InspectorChannel {
                     .put("process", processName)
                     .put("pid", android.os.Process.myPid())
                     .put("result", result);
-            Intent intent = new Intent(ACTION_RESULT)
-                    .setComponent(new ComponentName(MODULE_PACKAGE, MODULE_PACKAGE + ".InspectorResultReceiver"))
-                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                    .putExtra(JSON, payload.toString());
-            context.sendBroadcast(intent);
+            Bundle extras = new Bundle();
+            extras.putString(JSON, payload.toString());
+            context.getContentResolver().call(URI, "runtime_complete", null, extras);
         } catch (Throwable error) {
             de.robv.android.xposed.XposedBridge.log("RuntimeInspector result broadcast failed: " + error);
         }

@@ -17,8 +17,7 @@ dependencyResolutionManagement {
 rootProject.name = "AutoCrackApp"
 include(":app")
 include(":simplehook-core")
-include(":simplehook-runtime")
+include(":autocrack-runtime")
 include(":simplehook-test-app")
-include(":runtime-inspector-runtime")
 include(":runtime-inspector-test-app")
 include(":xposed-api-stubs")

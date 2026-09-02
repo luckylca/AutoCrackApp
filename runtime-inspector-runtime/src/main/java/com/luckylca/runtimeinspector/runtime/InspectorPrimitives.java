@@ -2,10 +2,14 @@ package com.luckylca.runtimeinspector.runtime;
 
 import android.annotation.SuppressLint;
 import android.graphics.Rect;
+import android.graphics.Matrix;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.WebView;
 import android.widget.TextView;
+import com.luckylca.autocrack.runtime.shared.ObjectRegistry;
+import com.luckylca.autocrack.runtime.shared.ViewCreationTracker;
+import com.luckylca.autocrack.runtime.shared.WindowRegistry;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -19,7 +23,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 @SuppressLint({"DiscouragedPrivateApi", "PrivateApi"})
-final class InspectorPrimitives {
+public final class InspectorPrimitives {
     private static final int MAX_ROOTS = 64;
     private static final int MAX_NODES = 4000;
     private static final int MAX_STRING = 2048;
@@ -30,11 +34,11 @@ final class InspectorPrimitives {
 
     private InspectorPrimitives() {}
 
-    static boolean supports(String kind) {
+    public static boolean supports(String kind) {
         return Set.of("windows", "view_tree", "view_at", "view_action").contains(kind);
     }
 
-    static JSONObject execute(JSONObject request) throws Exception {
+    public static JSONObject execute(JSONObject request) throws Exception {
         return switch (request.getString("kind")) {
             case "windows" -> windows(request.optInt("max_roots", MAX_ROOTS));
             case "view_tree" -> tree(request.optInt("max_nodes", MAX_NODES), request.optBoolean("include_listeners"));
@@ -50,10 +54,11 @@ final class InspectorPrimitives {
         for (int i = 0; i < roots.size(); i++) {
             View view = roots.get(i);
             values.put(new JSONObject()
-                    .put("index", i).put("node_id", nodeId(view))
+                    .put("index", i).put("node_id", nodeId(view)).put("handle", handle(view))
                     .put("class", view.getClass().getName())
                     .put("bounds", bounds(view)).put("shown", view.isShown())
-                    .put("attached", view.isAttachedToWindow()));
+                    .put("attached", view.isAttachedToWindow())
+                    .put("layout_params", WindowRegistry.get().describeLayoutParams(view)));
         }
         return ok().put("root_count", roots.size()).put("roots", values);
     }
@@ -78,9 +83,15 @@ final class InspectorPrimitives {
         Map<View, String> ids = new IdentityHashMap<>();
         List<View> roots = roots(MAX_ROOTS);
         for (int i = 0; i < roots.size() && budget.room(); i++) {
-            hitWalk(roots.get(i), null, i, 0, x, y, hits, budget, ids, includeHidden);
+            hitWalk(roots.get(i), null, i, 0, i, 0, x, y, hits, budget, ids, includeHidden);
         }
         hits.sort((a, b) -> {
+            int root = Integer.compare(b.rootIndex, a.rootIndex);
+            if (root != 0) return root;
+            int z = Float.compare(b.view.getZ(), a.view.getZ());
+            if (z != 0) return z;
+            int draw = Integer.compare(b.drawOrder, a.drawOrder);
+            if (draw != 0) return draw;
             int depth = Integer.compare(b.depth, a.depth);
             if (depth != 0) return depth;
             long aa = (long) Math.max(1, a.view.getWidth()) * Math.max(1, a.view.getHeight());
@@ -141,36 +152,77 @@ case "webview_eval_js" -> {
         String id = ids.computeIfAbsent(view, InspectorPrimitives::nodeId);
         out.put(describe(view, parentId, index, depth, ids, listeners));
         if (view instanceof ViewGroup group) {
-            for (int i = 0; i < group.getChildCount() && budget.room(); i++) {
-                walk(group.getChildAt(i), id, i, depth + 1, out, budget, ids, listeners);
+            List<Integer> order = childDrawingOrder(group);
+            for (int draw = 0; draw < order.size() && budget.room(); draw++) {
+                int childIndex = order.get(draw);
+                walk(group.getChildAt(childIndex), id, childIndex, depth + 1, out, budget, ids, listeners);
             }
         }
     }
 
-    private static void hitWalk(View view, String parentId, int index, int depth, int x, int y,
-            List<Hit> hits, Budget budget, Map<View, String> ids, boolean includeHidden) {
+    private static void hitWalk(View view, String parentId, int index, int rootIndex, int depth, int drawOrder,
+            int x, int y, List<Hit> hits, Budget budget, Map<View, String> ids, boolean includeHidden) {
         if (!budget.take()) return;
         String id = ids.computeIfAbsent(view, InspectorPrimitives::nodeId);
-        Rect rect = new Rect();
-        try {
-            int[] location = new int[2];
-            view.getLocationOnScreen(location);
-            rect.set(location[0], location[1], location[0] + view.getWidth(), location[1] + view.getHeight());
-            if ((includeHidden || view.isShown()) && rect.contains(x, y)) {
-                hits.add(new Hit(view, parentId, index, depth));
-            }
-        } catch (Throwable ignored) {}
+        if (containsScreenPoint(view, x, y, includeHidden)) {
+            hits.add(new Hit(view, parentId, index, rootIndex, depth, drawOrder));
+        }
         if (view instanceof ViewGroup group) {
-            for (int i = 0; i < group.getChildCount() && budget.room(); i++) {
-                hitWalk(group.getChildAt(i), id, i, depth + 1, x, y, hits, budget, ids, includeHidden);
+            List<Integer> order = childDrawingOrder(group);
+            for (int draw = 0; draw < order.size() && budget.room(); draw++) {
+                int childIndex = order.get(draw);
+                hitWalk(group.getChildAt(childIndex), id, childIndex, rootIndex, depth + 1, draw, x, y, hits, budget, ids, includeHidden);
             }
         }
+    }
+
+    private static boolean containsScreenPoint(View view, int x, int y, boolean includeHidden) {
+        try {
+            if (view.getWidth() <= 0 || view.getHeight() <= 0) return false;
+            if (!includeHidden && (!view.isShown() || view.getAlpha() <= 0f)) return false;
+            Rect visible = new Rect();
+            boolean globallyVisible = view.getGlobalVisibleRect(visible);
+            if (!includeHidden && (!globallyVisible || !visible.contains(x, y))) return false;
+            if (includeHidden && !roughScreenBounds(view).contains(x, y)) return false;
+            float[] point = new float[]{x, y};
+            Matrix matrix = new Matrix();
+            view.transformMatrixToGlobal(matrix);
+            int[] root = new int[2];
+            View rootView = view.getRootView();
+            if (rootView != null) rootView.getLocationOnScreen(root);
+            matrix.postTranslate(root[0], root[1]);
+            Matrix inverse = new Matrix();
+            if (!matrix.invert(inverse)) return false;
+            inverse.mapPoints(point);
+            return point[0] >= 0f && point[1] >= 0f && point[0] < view.getWidth() && point[1] < view.getHeight();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Rect roughScreenBounds(View view) {
+        int[] location = new int[2];
+        try { view.getLocationOnScreen(location); }
+        catch (Throwable ignored) { return new Rect(); }
+        return new Rect(location[0], location[1], location[0] + view.getWidth(), location[1] + view.getHeight());
+    }
+
+    private static List<Integer> childDrawingOrder(ViewGroup group) {
+        ArrayList<Integer> order = new ArrayList<>();
+        for (int i = 0; i < group.getChildCount(); i++) order.add(i);
+        order.sort((a, b) -> {
+            int z = Float.compare(group.getChildAt(a).getZ(), group.getChildAt(b).getZ());
+            if (z != 0) return z;
+            return Integer.compare(a, b);
+        });
+        return order;
     }
 
     private static JSONObject describe(View view, String parentId, int index, int depth,
             Map<View, String> ids, boolean listeners) throws Exception {
         JSONObject value = new JSONObject()
                 .put("node_id", ids.computeIfAbsent(view, InspectorPrimitives::nodeId))
+                .put("handle", handle(view))
                 .put("parent_id", parentId == null ? JSONObject.NULL : parentId)
                 .put("index", index).put("depth", depth)
                 .put("class", view.getClass().getName())
@@ -191,6 +243,12 @@ case "webview_eval_js" -> {
             try { info.put("url", web.getUrl()); } catch (Throwable error) { info.put("url_error", error.toString()); }
             value.put("webview", info);
         }
+        value.put("translation_x", view.getTranslationX()).put("translation_y", view.getTranslationY())
+                .put("scale_x", view.getScaleX()).put("scale_y", view.getScaleY())
+                .put("rotation", view.getRotation()).put("elevation", view.getElevation()).put("z", view.getZ())
+                .put("padding", new JSONArray().put(view.getPaddingLeft()).put(view.getPaddingTop()).put(view.getPaddingRight()).put(view.getPaddingBottom()));
+        ViewCreationTracker.Record creation = ViewCreationTracker.get().get(view);
+        if (creation != null) value.put("creation_stack_available", creation.construction() != null || creation.inflate() != null || creation.add() != null);
         if (listeners) value.put("listeners", listeners(view));
         return value;
     }
@@ -208,7 +266,10 @@ case "webview_eval_js" -> {
                     Field field = type.getDeclaredField(name);
                     field.setAccessible(true);
                     Object listener = field.get(info);
-                    if (listener != null) values.put(name, listener.getClass().getName());
+                    if (listener != null) {
+                        values.put(name, listener.getClass().getName());
+                        values.put(name + "_handle", ObjectRegistry.get().put(listener, false, "ui"));
+                    }
                 } catch (Throwable error) {
                     values.put(name + "_error", error.toString());
                 }
@@ -273,6 +334,7 @@ case "webview_eval_js" -> {
         catch (Throwable ignored) { return Integer.toString(view.getId()); }
     }
 
+    private static String handle(View view) { return ObjectRegistry.get().put(view, false, "ui"); }
     private static String nodeId(View view) { return "v_" + Integer.toHexString(System.identityHashCode(view)); }
     private static String cut(String value) { return value != null && value.length() > MAX_STRING ? value.substring(0, MAX_STRING) : value; }
     private static JSONObject ok() throws Exception { return new JSONObject().put("ok", true); }
@@ -285,5 +347,5 @@ case "webview_eval_js" -> {
         boolean take() { if (!room()) return false; used++; return true; }
     }
 
-    private record Hit(View view, String parentId, int index, int depth) {}
+    private record Hit(View view, String parentId, int index, int rootIndex, int depth, int drawOrder) {}
 }

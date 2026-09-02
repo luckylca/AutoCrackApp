@@ -16,12 +16,12 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 final class RuntimeChannel {
-    static final String ACTION = "com.luckylca.simplehook.runtime.EVENT";
+    static final String ACTION = "com.luckylca.autocrack.runtime.EVENT";
     static final String EVENT = "event";
     static final String JSON = "json";
     static final String TOKEN = "token";
     static final String EVENT_ID = "event_id";
-    private static final String MODULE_PACKAGE = "com.luckylca.simplehook.runtime";
+    private static final String MODULE_PACKAGE = "com.luckylca.autocrack.runtime";
     private static final String PREF_FILE = "simplehook_rules";
     private static final int MAX_PENDING_EVENTS = 256;
     private static final int MAX_DELIVERY_ATTEMPTS = 10;
@@ -90,7 +90,7 @@ final class RuntimeChannel {
     private void dispatch(String id, String event, String json) {
         preferences.reload();
         Intent intent = new Intent(ACTION)
-                .setComponent(new ComponentName(MODULE_PACKAGE, MODULE_PACKAGE + ".RuntimeEventReceiver"))
+                .setComponent(new ComponentName(MODULE_PACKAGE, "com.luckylca.simplehook.runtime.RuntimeEventReceiver"))
                 .addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
                 .putExtra(EVENT, event)
                 .putExtra(JSON, json)

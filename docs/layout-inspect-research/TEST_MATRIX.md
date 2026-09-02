@@ -1,18 +1,18 @@
 # Test Matrix
 
-## Baseline captured before migration
+## Baseline captured before this consolidation pass
 
-- Git: clean `codex/frida-capabilities-1.0.4`, initial `fd6a048`.
-- Device: `a4976c80`, Android API 36, arm64-v8a, KernelSU root.
-- Existing Runtime Inspector: 9/9 PASS for windows, target identity, tree,
-  listener, hit test, text mutation, visual text, visibility and Dialog root.
+- Branch: `codex/frida-capabilities-1.0.4`.
+- Consolidation start HEAD: `e46c3e2e678edd380c62c3c23f21faea6ddf4238`.
+- The current pass inherited uncommitted shared Runtime / Toolpack migration work and preserves it instead of reverting it.
+- Current Runner device access: `adb` and `android-shell` were not available, so real-device validation remains blocked in this session.
 
 ## Required release gates
 
 | Layer | Required proof |
 |---|---|
 | Host | manifest v1/v2 parse, trust/dependency checks, maps parser, JSON envelope, object serializer budgets |
-| Build | `lintDebug`, all JVM tests, all runtime/test APK assemblies, four Toolpack packages |
+| Build | all runtime/test APK assemblies, Toolpack packages, manifest validation; lint/JVM tests when dependencies are available |
 | Install | install/uninstall/reinstall each Toolpack without breaking other commands |
 | Shared runtime | one installed module package and one injected entry; all capability groups respond |
 | UI | Activity, Dialog, PopupWindow, multiple roots, listener details, transform-aware pick, mutation, image |
@@ -27,3 +27,14 @@
 
 Failures caused by an unsupported API-specific strategy are recorded as
 `UNSUPPORTED`, not PASS. A release report lists PASS/FAIL/UNSUPPORTED per row.
+
+## Current host validation evidence
+
+- Gradle build uses isolated `GRADLE_USER_HOME=.gradle-autocrack-runtime` because the user-level `~/.gradle/init.gradle` injects repositories that conflict with this repository's settings repository policy.
+- `:autocrack-runtime:assembleDebug`, `:app:assembleDebug`, `:runtime-inspector-test-app:assembleDebug`, and `:simplehook-test-app:assembleDebug` passed offline.
+- Python `compileall` passed for the shared client and all CLI entrypoints.
+- CLI `--help` smoke passed for `simplehook`, legacy `runtime-inspector`, `ui-inspect`, `runtime-inspect`, `memory-dump`, and `runtime-control`.
+- Toolpack packaging passed for the two legacy Toolpacks and the four new schema-v2 Toolpacks.
+- Zip/manifest validation passed: each package contains `manifest.json` and `payload.zip`, payload SHA/size match, and schema-v2 packages contain `requires`.
+- Python `pytest` was not available in the current Python 3.14/3.13 environments, so pytest-based tests were not executed.
+- Real-device install/runtime/cross-tool validation was not executed because no Android bridge command was available in the current Runner.

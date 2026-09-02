@@ -78,6 +78,44 @@ data class ToolpackSelfTest(
         .put("outputContains", JSONArray(outputContains))
 }
 
+data class ToolpackRequirements(
+    val runtime: String? = null,
+    val capabilities: List<String> = emptyList(),
+    val commands: List<String> = emptyList(),
+    val optionalCapabilities: List<String> = emptyList(),
+) {
+    init {
+        runtime?.let { require(it.isNotBlank() && it.length <= TOOLPACK_MAX_VERSION_CHARS) { "runtime 版本约束非法" } }
+        (capabilities + optionalCapabilities).forEach { capability ->
+            require(capability.matches(TOOLPACK_CAPABILITY_REGEX)) { "非法 runtime capability：$capability" }
+        }
+        commands.forEach { command ->
+            require(command.matches(TOOLPACK_COMMAND_NAME_REGEX)) { "非法依赖命令：$command" }
+        }
+        require(capabilities.distinct().size == capabilities.size) { "required capabilities 包含重复项" }
+        require(optionalCapabilities.distinct().size == optionalCapabilities.size) { "optional capabilities 包含重复项" }
+        require(commands.distinct().size == commands.size) { "required commands 包含重复项" }
+    }
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("runtime", runtime ?: JSONObject.NULL)
+        .put("capabilities", JSONArray(capabilities))
+        .put("commands", JSONArray(commands))
+        .put("optionalCapabilities", JSONArray(optionalCapabilities))
+
+    companion object {
+        fun parse(json: JSONObject?): ToolpackRequirements {
+            if (json == null) return ToolpackRequirements()
+            return ToolpackRequirements(
+                runtime = json.optString("runtime").takeIf(String::isNotBlank),
+                capabilities = json.optJSONArray("capabilities")?.toStringList().orEmpty(),
+                commands = json.optJSONArray("commands")?.toStringList().orEmpty(),
+                optionalCapabilities = json.optJSONArray("optionalCapabilities")?.toStringList().orEmpty(),
+            )
+        }
+    }
+}
+
 data class ToolpackPackageManifest(
     val schemaVersion: Int,
     val id: String,
@@ -92,11 +130,13 @@ data class ToolpackPackageManifest(
     val selfTests: List<ToolpackSelfTest>,
     val sources: List<ToolpackSourceArtifact>,
     val description: String = "",
+    val requires: ToolpackRequirements = ToolpackRequirements(),
 ) {
     init {
-        require(schemaVersion == SUPPORTED_SCHEMA_VERSION) {
+        require(schemaVersion in SUPPORTED_SCHEMA_VERSIONS) {
             "不支持的 toolpack manifest schema：$schemaVersion"
         }
+        if (schemaVersion == 1) require(requires == ToolpackRequirements()) { "schema v1 不支持 requires" }
         require(id.matches(TOOLPACK_SAFE_ID_REGEX)) { "非法 toolpack id：$id" }
         require(title.isNotBlank() && title.length <= TOOLPACK_MAX_TITLE_CHARS) {
             "toolpack 标题非法"
@@ -146,9 +186,11 @@ data class ToolpackPackageManifest(
         .put("commands", JSONArray(commands.map(ToolpackCommand::toJson)))
         .put("selfTests", JSONArray(selfTests.map(ToolpackSelfTest::toJson)))
         .put("sources", JSONArray(sources.map(ToolpackSourceArtifact::toJson)))
+        .apply { if (schemaVersion >= 2) put("requires", requires.toJson()) }
 
     companion object {
-        const val SUPPORTED_SCHEMA_VERSION = 1
+        const val SUPPORTED_SCHEMA_VERSION = 2
+        val SUPPORTED_SCHEMA_VERSIONS = 1..SUPPORTED_SCHEMA_VERSION
         const val PAYLOAD_ENTRY = "payload.zip"
         const val MAX_PAYLOAD_BYTES = 1_500_000_000L
         private val SUPPORTED_ARCHITECTURES = setOf("all", "arm64", "aarch64")
@@ -193,6 +235,11 @@ data class ToolpackPackageManifest(
                         url = item.getString("url"),
                         sha256 = item.getString("sha256").lowercase(Locale.US),
                     )
+                },
+                requires = if (json.getInt("schemaVersion") >= 2) {
+                    ToolpackRequirements.parse(json.optJSONObject("requires"))
+                } else {
+                    ToolpackRequirements()
                 },
             )
         }
@@ -259,6 +306,7 @@ object ToolpackPathPolicy {
 internal val TOOLPACK_SAFE_ID_REGEX = Regex("[A-Za-z0-9._-]{1,120}")
 private val TOOLPACK_SAFE_VERSION_REGEX = Regex("[A-Za-z0-9._+-]{1,160}")
 private val TOOLPACK_COMMAND_NAME_REGEX = Regex("[A-Za-z0-9._+-]{1,64}")
+private val TOOLPACK_CAPABILITY_REGEX = Regex("[A-Za-z][A-Za-z0-9_.-]{0,127}")
 private val TOOLPACK_SHA256_REGEX = Regex("[a-fA-F0-9]{64}")
 private const val TOOLPACK_MAX_VERSION_CHARS = 160
 private const val TOOLPACK_MAX_TITLE_CHARS = 200

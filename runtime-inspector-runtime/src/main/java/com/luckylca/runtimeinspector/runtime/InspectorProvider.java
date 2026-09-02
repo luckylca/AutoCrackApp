@@ -17,7 +17,7 @@ import java.util.Iterator;
 import java.util.UUID;
 import org.json.JSONObject;
 
-@SuppressLint({"ApplySharedPref", "WorldReadableFiles"})
+@SuppressLint("ApplySharedPref")
 public final class InspectorProvider extends ContentProvider {
     private static final String PREFS = InspectorChannel.PREFS;
     private static final String REQUESTS = InspectorChannel.REQUESTS;
@@ -27,7 +27,7 @@ public final class InspectorProvider extends ContentProvider {
 
     @Override
     public boolean onCreate() {
-        preferences = requireContext().getSharedPreferences(PREFS, Context.MODE_WORLD_READABLE);
+        preferences = requireContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return true;
     }
 

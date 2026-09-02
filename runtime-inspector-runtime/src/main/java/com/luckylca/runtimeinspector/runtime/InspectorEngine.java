@@ -3,27 +3,35 @@ package com.luckylca.runtimeinspector.runtime;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
+import com.luckylca.autocrack.runtime.shared.RuntimeDispatcher;
 import de.robv.android.xposed.XposedBridge;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
-final class InspectorEngine {
+public final class InspectorEngine {
     private final Context context;
     private final InspectorChannel channel;
     private final String packageName;
     private final String processName;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
+    private final ExecutorService workers = Executors.newFixedThreadPool(2, runnable -> {
+        Thread thread = new Thread(runnable, "AutoCrack-RuntimeWorker");
+        thread.setDaemon(true);
+        return thread;
+    });
 
-    InspectorEngine(Context context, String packageName, String processName) {
+    public InspectorEngine(Context context, String packageName, String processName) {
         this.context = context;
         this.channel = new InspectorChannel(context);
         this.packageName = packageName;
         this.processName = processName;
     }
 
-    void start() throws Throwable {
+    public void start() throws Throwable {
         WindowRootRegistry.install();
         main.post(this::poll);
     }
@@ -35,8 +43,10 @@ final class InspectorEngine {
                 JSONObject request = requests.getJSONObject(i);
                 String id = request.getString("request_id");
                 if (!inFlight.add(id)) continue;
-                handle(request);
-                main.postDelayed(() -> inFlight.remove(id), 1_000L);
+                workers.execute(() -> {
+                    try { handle(request); }
+                    finally { main.postDelayed(() -> inFlight.remove(id), 1_000L); }
+                });
             }
         } catch (Throwable error) {
             XposedBridge.log("RuntimeInspector poll failed: " + error);
@@ -51,7 +61,7 @@ final class InspectorEngine {
             String nonce = request.getString("nonce");
             JSONObject result;
             try {
-                result = InspectorPrimitives.execute(request);
+                result = RuntimeDispatcher.execute(context, request);
             } catch (Throwable error) {
                 result = error("INSPECT_FAILED", error.toString());
             }

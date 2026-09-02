@@ -3,13 +3,13 @@
 | Original area | Shared capability | CLI owner | Execution boundary |
 |---|---|---|---|
 | Capture layout/windows | `ui.windows`, `ui.tree`, `ui.at` | `ui-inspect` | target runtime |
-| View properties/listeners/stacks/image/actions | `ui.props`, `ui.listeners`, `ui.stacks`, `ui.image`, `ui.action` | `ui-inspect` | target runtime; artifact file for image |
+| View properties/listeners/stacks/image/actions | `ui.props`, `ui.listeners`, `ui.stack`, `ui.image`, `ui.action` | `ui-inspect` | target runtime; inline image result is capped |
 | Process/runtime activities | `runtime.process`, `runtime.activities` | `runtime-inspect` | target runtime plus host process metadata |
-| Declared activities | `runtime.activities.declared` | `runtime-inspect` | PackageManager/host |
+| Declared activities | `runtime.declared_activities` | `runtime-inspect` | target PackageManager |
 | Class loaders/search/preview | `runtime.classloaders`, `runtime.class.search`, `runtime.class.describe` | `runtime-inspect` | target runtime |
 | Object preview/dump | `object.describe`, `object.fields`, `object.dump`, `object.release` | `runtime-inspect` | target runtime |
-| Maps/ranges/modules/SO | `memory.maps`, `memory.read`, `memory.modules`, `memory.so` | `memory-dump` | root `/proc` plus target runtime/native |
-| Dex/XML/assets | `memory.dex`, `memory.xml`, `memory.assets` | `memory-dump` | target runtime/native; artifacts |
+| Maps/ranges/modules/SO | `memory.maps`, `memory.read`, `memory.modules`, `memory.module.dump` | `memory-dump` | target `/proc/self` plus optional host/root strategies |
+| Dex/XML/assets | `memory.dex.list`, `memory.dex.dump`, `memory.xml.pull`, `memory.assets.*` | `memory-dump` | target runtime; ART/XML native reconstruction is capability-gated |
 | Activity start/process kill | `control.activity.start`, `control.process.kill` | `runtime-control` | host root or target runtime |
 | SO injection/secure/WebView | `control.so.inject`, `control.secure`, `webview.*` | `runtime-control` | target runtime |
 | Method/constructor/field hooks | `hook.*` | `simplehook` | target runtime |

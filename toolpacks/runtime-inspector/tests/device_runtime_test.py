@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import argparse, base64, json, subprocess, sys, time, xml.etree.ElementTree as ET
 
-AUTH = "com.luckylca.runtimeinspector.runtime"
+AUTH = "com.luckylca.autocrack.runtime"
 PKG = "com.luckylca.runtimeinspector.testapp"
 
 
@@ -25,9 +25,9 @@ class Test:
         return self.parse(self.shell("content", "call", "--uri", f"content://{AUTH}", "--method", method, "--extra", f"base64:s:{b64}"))
 
     def request(self, payload, timeout=6):
-        submitted = self.provider("submit", payload); rid = submitted["request_id"]; deadline = time.monotonic() + timeout
+        submitted = self.provider("runtime_submit", payload); rid = submitted["request_id"]; deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            result = self.provider("result", {"request_id": rid})
+            result = self.provider("runtime_result", {"request_id": rid})
             if not result.get("pending"):
                 value = result.get("result", {})
                 if not value.get("ok"): raise RuntimeError(value)
@@ -59,7 +59,7 @@ class Test:
         return [node.attrib.get("text", "") for node in ET.fromstring(xml).iter("node")]
 
     def fresh_target(self):
-        self.provider("clear", {})
+        self.provider("runtime_clear", {})
         self.start_target()
 
     def run(self):
