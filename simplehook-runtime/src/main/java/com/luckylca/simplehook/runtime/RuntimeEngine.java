@@ -414,8 +414,13 @@ final class RuntimeEngine {
             JSONObject request = requests.getJSONObject(i);
             JSONObject result;
             try {
-                Class<?> type = findLoadedClass(request.getString("class"));
-                result = inspect(type, request.getString("kind"));
+                String kind = request.getString("kind");
+                if (RuntimeInspectorPrimitives.supports(kind)) {
+                    result = RuntimeInspectorPrimitives.executeRequest(request);
+                } else {
+                    Class<?> type = findLoadedClass(request.getString("class"));
+                    result = inspect(type, kind);
+                }
             } catch (ClassNotFoundException error) {
                 result = new JSONObject().put("ok", false).put("error", new JSONObject()
                         .put("code", "CLASS_NOT_FOUND").put("message", "Target class is not currently available"));
