@@ -52,3 +52,5 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | Native dlsym symbol lookup | Complete for bounded symbol lookup; no invocation | `control.so.dlsym`, `runtime-control so-dlsym`; device self-test PASS resolving `dlopen` through `RTLD_DEFAULT` |
 
 | android_dlopen_ext loader | Host-complete; device assertion blocked | `control.so.android_dlopen_ext`, `runtime-control so-android-dlopen-ext`; explicit `namespace_bypass=false` until a real `android_namespace_t` strategy exists |
+
+| ELF metadata / Build-ID | Complete for file-backed ELF/APK-entry parsing | `memory.elf.info`, `memory-dump elf-info`; parses headers, PT_LOAD, PT_NOTE GNU Build-ID without executing code; device self-test PASS |

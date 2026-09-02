@@ -67,3 +67,5 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | Native symbol resolution | PASS(device self) | `runtime_execute_self(control.so.dlsym, symbol=dlopen)` resolved `RTLD_DEFAULT` `dlopen` to `0x77d932c01c`; result marks `callable=false` and does not invoke the symbol |
 
 | Android dlopen ext | PASS(host), DEVICE ASSERTION BLOCKED | `control.so.android_dlopen_ext` compiled, `runtime-control` rebuilt, CLI/manifest checks passed. Direct provider-self load assertion was blocked by tool safety checks, so device result is not claimed. |
+
+| ELF metadata parsing | PASS(device self) | `runtime_execute_self(memory.elf.info)` parsed `lib/arm64-v8a/libautocrack_runtime_native.so` from the installed runtime APK; result was `ELF64`, `EM_AARCH64`, `phnum=9`, `load_segments=3`, Build-ID `89d021ea6f492c3cbca67001f0d1f97d4541e0a9`, `bytes_read=412664`, `truncated=false` |

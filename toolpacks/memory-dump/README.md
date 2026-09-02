@@ -70,3 +70,5 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 `memory-dump dex-art-probe --package PKG --class-count --json` summarizes each runtime DexFile, its backing path, class-count lower bound, and reflected ART `mCookie`/`mInternalCookie` shape. It is a probe for future native ART reconstruction, not a Dex memory reconstruction.
 
 `dex-art-probe` includes the current `Context.getClassLoader()` by default so provider-side self diagnostics work even before the Xposed target-process registry is populated. Use `--no-context-loader` to restrict results to registered target classloaders only.
+
+`memory-dump elf-info --package PKG --path /data/app/.../base.apk!/lib/arm64-v8a/libfoo.so --json` parses a bounded ELF header/program-header view and GNU build-id from a file-backed ELF or APK-embedded native library. It does not execute native code and does not replace runtime loader enumeration.

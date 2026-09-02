@@ -391,3 +391,24 @@ Validation:
 - `runtime-control` Toolpack rebuild passed.
 - CLI help and manifest checks passed.
 - Direct device self-test for loading `/system/lib64/liblog.so` through `runtime_execute_self(control.so.android_dlopen_ext)` was blocked by the tool safety layer, so a device PASS is not claimed for this capability.
+
+
+## 17. Stage 13 file-backed ELF metadata parsing
+
+`memory.elf.info` was added to inspect native libraries without executing them. It supports both normal file paths and APK-embedded native libraries such as `base.apk!/lib/arm64-v8a/libfoo.so`.
+
+Implemented:
+
+- ELF32/ELF64 header parsing.
+- Little/big-endian identification.
+- machine/type/entry/program-header/section-header metadata.
+- PT_LOAD segment summary.
+- PT_NOTE parsing for GNU Build-ID.
+- `memory-dump elf-info` CLI with `--path`, `--entry`, `--apk-package`, `--apk-path`, and `--max-bytes`.
+
+Validation:
+
+- Host Gradle build passed.
+- `memory-dump` Toolpack rebuild passed.
+- CLI help and manifest checks passed.
+- Device provider-self test parsed the installed runtime APK entry `lib/arm64-v8a/libautocrack_runtime_native.so`: `ELF64`, `EM_AARCH64`, `phnum=9`, `load_segments=3`, Build-ID `89d021ea6f492c3cbca67001f0d1f97d4541e0a9`, `bytes_read=412664`, `truncated=false`.
