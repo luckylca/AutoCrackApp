@@ -9,18 +9,66 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import org.json.JSONArray
 import org.json.JSONObject
 
 class SecureLlmConfigStore(context: Context) {
     private val applicationContext = context.applicationContext
     private val preferences = applicationContext.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
-    fun save(config: LlmProviderConfig) {
+    @Synchronized
+    fun save(config: LlmProviderConfig) = saveProvider(config, makeActive = true)
+
+    @Synchronized
+    fun saveProvider(config: LlmProviderConfig, makeActive: Boolean = true) {
         val validated = config.validated()
-        val plaintext = JSONObject()
-            .put("baseUrl", validated.baseUrl)
-            .put("model", validated.model)
-            .put("apiKey", validated.apiKey)
+        val current = loadCatalog()
+        val providers = current.providers.filterNot { it.id == validated.id } + validated
+        writeCatalog(
+            LlmProviderCatalog(
+                providers = providers,
+                activeProviderId = if (makeActive) validated.id else current.activeProviderId,
+            ).validated(),
+        )
+    }
+
+    @Synchronized
+    fun deleteProvider(id: String) {
+        val current = loadCatalog()
+        val providers = current.providers.filterNot { it.id == id }
+        writeCatalog(
+            LlmProviderCatalog(
+                providers = providers,
+                activeProviderId = current.activeProviderId.takeIf { it != id },
+            ).validated(),
+        )
+    }
+
+    @Synchronized
+    fun setActiveProvider(id: String) {
+        val current = loadCatalog()
+        require(current.providers.any { it.id == id }) { "供应商不存在" }
+        writeCatalog(current.copy(activeProviderId = id).validated())
+    }
+
+    @Synchronized
+    fun load(): LlmProviderConfig? = loadCatalog().activeProvider
+
+    @Synchronized
+    fun loadCatalog(): LlmProviderCatalog {
+        val json = decryptJson() ?: return LlmProviderCatalog()
+        return runCatching {
+            val catalog = LlmProviderCatalogJson.decode(json).validated()
+            if (!json.has("providers")) writeCatalog(catalog)
+            catalog
+        }.getOrElse {
+            clear()
+            LlmProviderCatalog()
+        }
+    }
+
+    private fun writeCatalog(catalog: LlmProviderCatalog) {
+        val plaintext = LlmProviderCatalogJson.encode(catalog.validated())
             .toString()
             .toByteArray(Charsets.UTF_8)
 
@@ -33,7 +81,7 @@ class SecureLlmConfigStore(context: Context) {
             .apply()
     }
 
-    fun load(): LlmProviderConfig? {
+    private fun decryptJson(): JSONObject? {
         val ivText = preferences.getString(KEY_IV, null) ?: return null
         val encryptedText = preferences.getString(KEY_CIPHERTEXT, null) ?: return null
         return runCatching {
@@ -41,12 +89,7 @@ class SecureLlmConfigStore(context: Context) {
             val encrypted = Base64.decode(encryptedText, Base64.NO_WRAP)
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(GCM_TAG_BITS, iv))
-            val json = JSONObject(String(cipher.doFinal(encrypted), Charsets.UTF_8))
-            LlmProviderConfig(
-                baseUrl = json.getString("baseUrl"),
-                model = json.getString("model"),
-                apiKey = json.getString("apiKey"),
-            ).validated()
+            JSONObject(String(cipher.doFinal(encrypted), Charsets.UTF_8))
         }.getOrElse {
             clear()
             null
@@ -87,5 +130,69 @@ class SecureLlmConfigStore(context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val KEY_SIZE_BITS = 256
         const val GCM_TAG_BITS = 128
+    }
+}
+
+internal object LlmProviderCatalogJson {
+    private const val VERSION = 2
+    private const val LEGACY_PROVIDER_ID = "migrated-default"
+
+    fun encode(catalog: LlmProviderCatalog): JSONObject = JSONObject()
+        .put("version", VERSION)
+        .put("activeProviderId", catalog.activeProviderId)
+        .put(
+            "providers",
+            JSONArray().also { providers ->
+                catalog.providers.forEach { providers.put(encodeProvider(it)) }
+            },
+        )
+
+    fun decode(json: JSONObject): LlmProviderCatalog {
+        val providersJson = json.optJSONArray("providers")
+        if (providersJson == null) {
+            val legacy = decodeProvider(
+                json = json,
+                fallbackId = LEGACY_PROVIDER_ID,
+                fallbackName = "原有供应商",
+            )
+            return LlmProviderCatalog(listOf(legacy), legacy.id)
+        }
+        val providers = buildList {
+            for (index in 0 until providersJson.length()) {
+                add(decodeProvider(providersJson.getJSONObject(index)))
+            }
+        }
+        return LlmProviderCatalog(
+            providers = providers,
+            activeProviderId = json.optString("activeProviderId").takeIf(String::isNotBlank),
+        )
+    }
+
+    private fun encodeProvider(config: LlmProviderConfig): JSONObject = JSONObject()
+        .put("id", config.id)
+        .put("name", config.name)
+        .put("baseUrl", config.baseUrl)
+        .put("model", config.model)
+        .put("apiKey", config.apiKey)
+        .put("protocol", config.protocol.name)
+
+    private fun decodeProvider(
+        json: JSONObject,
+        fallbackId: String = LlmProviderConfig.DEFAULT_PROVIDER_ID,
+        fallbackName: String = "默认供应商",
+    ): LlmProviderConfig {
+        val baseUrl = json.getString("baseUrl")
+        val protocol = json.optString("protocol")
+            .takeIf(String::isNotBlank)
+            ?.let { runCatching { LlmApiProtocol.valueOf(it) }.getOrNull() }
+            ?: LlmEndpointNormalizer.protocol(baseUrl)
+        return LlmProviderConfig(
+            baseUrl = baseUrl,
+            model = json.getString("model"),
+            apiKey = json.getString("apiKey"),
+            id = json.optString("id", fallbackId).ifBlank { fallbackId },
+            name = json.optString("name", fallbackName).ifBlank { fallbackName },
+            protocol = protocol,
+        )
     }
 }

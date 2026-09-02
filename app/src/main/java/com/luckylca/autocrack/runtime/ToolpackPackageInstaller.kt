@@ -8,6 +8,7 @@ import java.io.FileOutputStream
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
@@ -29,6 +30,22 @@ private data class ActiveLinkActivation(
     val link: File,
     val previousTarget: Path?,
 )
+
+data class ToolpackPackagePruneResult(
+    val deletedFiles: Int,
+    val reclaimedBytes: Long,
+)
+
+internal fun unreferencedToolpackPackages(
+    packageFiles: List<File>,
+    referencedPackagePaths: Set<String>,
+): List<File> {
+    val referenced = referencedPackagePaths.mapTo(mutableSetOf()) { File(it).canonicalPath }
+    return packageFiles.filter { candidate ->
+        candidate.isFile && candidate.extension.equals("zip", ignoreCase = true) &&
+            candidate.canonicalPath !in referenced
+    }
+}
 
 internal fun parseInstalledToolpackRecord(
     text: String,
@@ -140,6 +157,7 @@ class ToolpackPackageInstaller(
             activeLinkActivation = null
             runCatching { obsoleteBackup?.let(::deleteTreeNoFollow) }
             runCatching { pruneOldVersions(manifest.id, target) }
+            runCatching { pruneUnreferencedPackagesInternal() }
 
             appendAudit(
                 event = "install",
@@ -203,10 +221,14 @@ class ToolpackPackageInstaller(
         removeActiveLink(toolpackId)
         deleteTreeNoFollow(File(rootfsPacksRoot, toolpackId))
         recordFile(toolpackId).delete()
+        val removedPackageBytes = deleteManagedPackage(installed.packagePath)
+        val pruned = pruneUnreferencedPackagesInternal()
         appendAudit(
             event = "uninstall",
             manifest = installed.manifest,
-            detail = JSONObject().put("installedPath", installed.installedPath),
+            detail = JSONObject()
+                .put("installedPath", installed.installedPath)
+                .put("reclaimedPackageBytes", removedPackageBytes + pruned.reclaimedBytes),
         )
         onProgress("工具包已卸载")
     }
@@ -226,7 +248,13 @@ class ToolpackPackageInstaller(
             initializeRootfsDirectories()
             reconcileActiveLinks(installed)
         }
+        pruneUnreferencedPackagesInternal()
         installed
+    }
+
+    suspend fun pruneUnreferencedPackages(): ToolpackPackagePruneResult = withContext(Dispatchers.IO) {
+        initializeAppDirectories()
+        pruneUnreferencedPackagesInternal()
     }
 
     suspend fun runSelfTests(
@@ -535,7 +563,7 @@ class ToolpackPackageInstaller(
     }
 
     private fun activeLinkTarget(toolpackId: String, version: String): Path =
-        Path.of("..", "packs", toolpackId, version)
+        Paths.get("..", "packs", toolpackId, version)
 
     private fun removeActiveLink(toolpackId: String) {
         val link = File(rootfsActiveRoot, toolpackId)
@@ -627,6 +655,56 @@ class ToolpackPackageInstaller(
             .orEmpty()
             .filter { candidate -> candidate.canonicalFile != activeTarget.canonicalFile }
             .forEach(::deleteTreeNoFollow)
+    }
+
+    private fun pruneUnreferencedPackagesInternal(): ToolpackPackagePruneResult {
+        val installed = readInstalledRecordsForPrune()
+            ?: return ToolpackPackagePruneResult(deletedFiles = 0, reclaimedBytes = 0L)
+        val candidates = unreferencedToolpackPackages(
+            packageFiles = packagesRoot.listFiles().orEmpty().toList(),
+            referencedPackagePaths = installed.mapTo(mutableSetOf(), InstalledToolpack::packagePath),
+        )
+        var deletedFiles = 0
+        var reclaimedBytes = 0L
+        candidates.forEach { candidate ->
+            val bytes = candidate.length()
+            if (candidate.delete()) {
+                deletedFiles += 1
+                reclaimedBytes += bytes
+            }
+        }
+        if (deletedFiles > 0) {
+            appendAudit(
+                event = "prune_packages",
+                manifest = null,
+                detail = JSONObject()
+                    .put("deletedFiles", deletedFiles)
+                    .put("reclaimedBytes", reclaimedBytes),
+            )
+        }
+        return ToolpackPackagePruneResult(deletedFiles, reclaimedBytes)
+    }
+
+    private fun readInstalledRecordsForPrune(): List<InstalledToolpack>? {
+        val records = installedRecordsRoot.listFiles()
+            .orEmpty()
+            .filter { it.isFile && it.extension == "json" }
+        val installed = ArrayList<InstalledToolpack>(records.size)
+        records.forEach { file ->
+            val parsed = runCatching {
+                parseInstalledToolpackRecord(file.readText(Charsets.UTF_8), requireTrusted = false)
+            }.getOrNull() ?: return null
+            installed += parsed
+        }
+        return installed
+    }
+
+    private fun deleteManagedPackage(path: String): Long {
+        val candidate = File(path).canonicalFile
+        val root = packagesRoot.canonicalFile
+        if (candidate.parentFile != root || !candidate.isFile) return 0L
+        val bytes = candidate.length()
+        return if (candidate.delete()) bytes else 0L
     }
 
     private fun writeInstalledRecord(installed: InstalledToolpack) {

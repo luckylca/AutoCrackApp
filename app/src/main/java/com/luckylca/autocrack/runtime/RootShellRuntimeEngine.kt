@@ -259,7 +259,12 @@ class RootShellRuntimeEngine(
 
         synchronized(auditLock) {
             layout.auditRoot.mkdirs()
-            layout.shellAuditFile.appendText(json.toString() + "\n", Charsets.UTF_8)
+            appendJsonLineWithRotation(
+                file = layout.shellAuditFile,
+                jsonLine = json.toString(),
+                maxBytes = SHELL_AUDIT_MAX_BYTES,
+                backupCount = SHELL_AUDIT_BACKUP_COUNT,
+            )
         }
     }
 
@@ -415,5 +420,7 @@ class RootShellRuntimeEngine(
         const val STREAM_DRAIN_POLL_MILLIS = 10L
         const val GRACEFUL_STOP_MILLIS = 300L
         const val FORCED_STOP_MILLIS = 1_000L
+        const val SHELL_AUDIT_MAX_BYTES = 5L * 1_024L * 1_024L
+        const val SHELL_AUDIT_BACKUP_COUNT = 3
     }
 }

@@ -7,10 +7,13 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -46,7 +49,7 @@ class MobileAgentToolClient {
         val validated = config.validated()
         val startedAt = System.currentTimeMillis()
         var messages = buildProtocolMessages(systemPrompt, conversation)
-        val protocol = LlmEndpointNormalizer.protocol(validated.baseUrl)
+        val protocol = validated.protocol
         val toolJson = when (protocol) {
             LlmApiProtocol.OPENAI_CHAT -> JSONArray().also { array -> tools.forEach { array.put(it.toOpenAiJson()) } }
             LlmApiProtocol.ANTHROPIC_MESSAGES -> AnthropicMessagesAdapter.buildTools(tools)
@@ -296,20 +299,49 @@ class MobileAgentToolClient {
             appendLine("新增历史：")
             append(history)
         }
-        val response = requestSimple(
+        var response = requestSimple(
             config = validated,
             messages = JSONArray()
                 .put(JSONObject().put("role", "system").put("content", "你负责压缩长期 Agent 会话上下文。输出紧凑、事实化的中文摘要。"))
                 .put(JSONObject().put("role", "user").put("content", prompt)),
             maxTokens = COMPACTION_RESPONSE_TOKENS,
         )
-        val responseJson = JSONObject(response)
-        val finishReason = responseJson.optJSONArray("choices")
+        var responseJson = JSONObject(response)
+        var finishReason = responseJson.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optString("finish_reason")
             .orEmpty()
-        val summary = parseContent(parseMessage(response)).take(MAX_SUMMARY_CHARS)
-        val validationError = MobileAgentCompactionPolicy.generatedSummaryError(summary, history)
+        var summary = parseContent(parseMessage(response)).take(MAX_SUMMARY_CHARS)
+        var validationError = MobileAgentCompactionPolicy.generatedSummaryError(summary, history)
+        if (validationError != null) {
+            response = requestSimple(
+                config = validated,
+                messages = JSONArray()
+                    .put(
+                        JSONObject().put(
+                            "role",
+                            "system",
+                        ).put(
+                            "content",
+                            "你负责修复 Agent 检查点。必须严格遵守格式、补齐所有章节、保留草稿中的具体事实，不要添加解释。\n\n${MobileAgentCompactionPolicy.outputContract()}",
+                        ),
+                    )
+                    .put(
+                        JSONObject().put("role", "user").put(
+                            "content",
+                            "校验错误：$validationError\n\n待修复草稿：\n${summary.take(MAX_EXISTING_SUMMARY_CHARS)}",
+                        ),
+                    ),
+                maxTokens = COMPACTION_RESPONSE_TOKENS,
+            )
+            responseJson = JSONObject(response)
+            finishReason = responseJson.optJSONArray("choices")
+                ?.optJSONObject(0)
+                ?.optString("finish_reason")
+                .orEmpty()
+            summary = parseContent(parseMessage(response)).take(MAX_SUMMARY_CHARS)
+            validationError = MobileAgentCompactionPolicy.generatedSummaryError(summary, history)
+        }
         require(validationError == null) {
             "上下文压缩结果无效：$validationError；finish_reason=${finishReason.ifBlank { "unknown" }}；响应片段=${summary.take(240)}"
         }
@@ -339,7 +371,8 @@ class MobileAgentToolClient {
             ?.let { boundary ->
             conversation.messages.indexOfFirst { it.id == boundary }.takeIf { it >= 0 }?.plus(1)
         } ?: 0
-        conversation.messages.drop(startIndex).forEach { message -> messages.put(message.toOpenAiJson()) }
+        val repaired = MobileAgentProtocolRepair.repair(conversation.messages.drop(startIndex))
+        repaired.messages.forEach { message -> messages.put(message.toOpenAiJson()) }
         return messages
     }
 
@@ -375,14 +408,16 @@ class MobileAgentToolClient {
         }
     }
 
-    private fun requestStreamingMessage(
+    private suspend fun requestStreamingMessage(
         config: LlmProviderConfig,
         messages: JSONArray,
         tools: JSONArray,
         onTextSnapshot: (String) -> Unit,
-    ): JSONObject = when (LlmEndpointNormalizer.protocol(config.baseUrl)) {
-        LlmApiProtocol.OPENAI_CHAT -> requestOpenAiStreamingMessage(config, messages, tools, onTextSnapshot)
-        LlmApiProtocol.ANTHROPIC_MESSAGES -> requestAnthropicStreamingMessage(config, messages, tools, onTextSnapshot)
+    ): JSONObject = retryModelRequest {
+        when (config.protocol) {
+            LlmApiProtocol.OPENAI_CHAT -> requestOpenAiStreamingMessage(config, messages, tools, onTextSnapshot)
+            LlmApiProtocol.ANTHROPIC_MESSAGES -> requestAnthropicStreamingMessage(config, messages, tools, onTextSnapshot)
+        }
     }
 
     private fun requestOpenAiStreamingMessage(
@@ -407,7 +442,7 @@ class MobileAgentToolClient {
             val input = if (status in 200..299) connection.inputStream else connection.errorStream
             if (status !in 200..299) {
                 val responseText = readLimited(input, MAX_RESPONSE_CHARS)
-                throw IOException("外部模型 tool request 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}")
+                throw modelHttpException(connection, status, "外部模型 tool request", responseText)
             }
             val contentType = connection.contentType.orEmpty().lowercase()
             if (!contentType.contains("text/event-stream")) {
@@ -423,13 +458,15 @@ class MobileAgentToolClient {
         }
     }
 
-    private fun requestSimple(
+    private suspend fun requestSimple(
         config: LlmProviderConfig,
         messages: JSONArray,
         maxTokens: Int,
-    ): String = when (LlmEndpointNormalizer.protocol(config.baseUrl)) {
-        LlmApiProtocol.OPENAI_CHAT -> requestOpenAiSimple(config, messages, maxTokens)
-        LlmApiProtocol.ANTHROPIC_MESSAGES -> requestAnthropicSimple(config, messages, maxTokens)
+    ): String = retryModelRequest {
+        when (config.protocol) {
+            LlmApiProtocol.OPENAI_CHAT -> requestOpenAiSimple(config, messages, maxTokens)
+            LlmApiProtocol.ANTHROPIC_MESSAGES -> requestAnthropicSimple(config, messages, maxTokens)
+        }
     }
 
     private fun requestOpenAiSimple(
@@ -453,7 +490,7 @@ class MobileAgentToolClient {
                 MAX_RESPONSE_CHARS,
             )
             if (status !in 200..299) {
-                throw IOException("外部模型 request 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}")
+                throw modelHttpException(connection, status, "外部模型 request", responseText)
             }
             return responseText
         } catch (error: IOException) {
@@ -486,7 +523,7 @@ class MobileAgentToolClient {
             val input = if (status in 200..299) connection.inputStream else connection.errorStream
             if (status !in 200..299) {
                 val responseText = readLimited(input, MAX_RESPONSE_CHARS)
-                throw IOException("Anthropic tool request 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}")
+                throw modelHttpException(connection, status, "Anthropic tool request", responseText)
             }
             val contentType = connection.contentType.orEmpty().lowercase()
             if (!contentType.contains("text/event-stream")) {
@@ -523,7 +560,7 @@ class MobileAgentToolClient {
                 MAX_RESPONSE_CHARS,
             )
             if (status !in 200..299) {
-                throw IOException("Anthropic request 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}")
+                throw modelHttpException(connection, status, "Anthropic request", responseText)
             }
             return AnthropicMessagesAdapter.wrapAsCanonicalChatResponse(
                 AnthropicMessagesAdapter.parseResponse(responseText),
@@ -546,7 +583,7 @@ class MobileAgentToolClient {
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "text/event-stream, application/json")
-            when (LlmEndpointNormalizer.protocol(config.baseUrl)) {
+            when (config.protocol) {
                 LlmApiProtocol.OPENAI_CHAT -> setRequestProperty("Authorization", "Bearer ${config.apiKey}")
                 LlmApiProtocol.ANTHROPIC_MESSAGES -> {
                     // MiniMax's Anthropic-compatible endpoint follows Claude Code's auth-token mode.
@@ -557,6 +594,39 @@ class MobileAgentToolClient {
                 }
             }
         }
+
+    private suspend fun <T> retryModelRequest(request: () -> T): T {
+        var lastError: IOException? = null
+        repeat(MAX_MODEL_REQUEST_ATTEMPTS) { attempt ->
+            ensureRunning()
+            try {
+                return request()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: IOException) {
+                val retryable = error !is ModelHttpException || isRetryableModelHttpStatus(error.status)
+                if (!retryable || attempt == MAX_MODEL_REQUEST_ATTEMPTS - 1) throw error
+                lastError = error
+                val fallback = MODEL_RETRY_BASE_DELAY_MILLIS * (1L shl attempt)
+                delay((error as? ModelHttpException)?.retryAfterMillis?.coerceAtMost(MAX_RETRY_AFTER_MILLIS) ?: fallback)
+            }
+        }
+        throw lastError ?: IOException("外部模型请求失败")
+    }
+
+    private fun modelHttpException(
+        connection: HttpURLConnection,
+        status: Int,
+        action: String,
+        responseText: String,
+    ): ModelHttpException {
+        val retryAfterMillis = parseRetryAfterMillis(connection.getHeaderField("Retry-After"))
+        return ModelHttpException(
+            status = status,
+            retryAfterMillis = retryAfterMillis,
+            message = "$action 失败：HTTP $status，${responseText.take(MAX_ERROR_CHARS)}",
+        )
+    }
 
     private fun writeRequest(connection: HttpURLConnection, request: JSONObject) {
         ensureRunningBlocking()
@@ -756,7 +826,7 @@ class MobileAgentToolClient {
         const val READ_TIMEOUT_MILLIS = 180_000
         const val ANTHROPIC_VERSION = "2023-06-01"
         const val MAX_RESPONSE_TOKENS = 4_096
-        const val COMPACTION_RESPONSE_TOKENS = 1_500
+        const val COMPACTION_RESPONSE_TOKENS = 3_200
         const val MAX_RESPONSE_CHARS = 320_000
         const val MAX_ERROR_CHARS = 2_000
         const val MAX_ANSWER_CHARS = 100_000
@@ -778,8 +848,36 @@ class MobileAgentToolClient {
         const val MAX_COMPACTION_INPUT_CHARS = 60_000
         const val MAX_EXISTING_SUMMARY_CHARS = 20_000
         const val MAX_SUMMARY_CHARS = 24_000
+        const val MAX_MODEL_REQUEST_ATTEMPTS = 3
+        const val MODEL_RETRY_BASE_DELAY_MILLIS = 1_000L
+        const val MAX_RETRY_AFTER_MILLIS = 30_000L
     }
 }
+
+internal fun isRetryableModelHttpStatus(status: Int): Boolean =
+    status == 408 || status == 429 || status in 500..599
+
+internal fun parseRetryAfterMillis(
+    value: String?,
+    nowEpochMillis: Long = System.currentTimeMillis(),
+): Long? {
+    val normalized = value?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    normalized.toLongOrNull()?.let { seconds ->
+        return seconds.coerceAtLeast(0L).coerceAtMost(Long.MAX_VALUE / 1_000L) * 1_000L
+    }
+    return runCatching {
+        val retryAt = ZonedDateTime.parse(normalized, DateTimeFormatter.RFC_1123_DATE_TIME)
+            .toInstant()
+            .toEpochMilli()
+        (retryAt - nowEpochMillis).coerceAtLeast(0L)
+    }.getOrNull()
+}
+
+private class ModelHttpException(
+    val status: Int,
+    val retryAfterMillis: Long?,
+    message: String,
+) : IOException(message)
 
 data class MobileAgentCompletion(
     val model: String,

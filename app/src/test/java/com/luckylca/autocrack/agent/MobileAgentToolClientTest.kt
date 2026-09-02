@@ -9,6 +9,26 @@ import org.junit.Test
 
 class MobileAgentToolClientTest {
     @Test
+    fun retryPolicyCoversRateLimitsTimeoutsAndAllServerErrors() {
+        assertTrue(isRetryableModelHttpStatus(408))
+        assertTrue(isRetryableModelHttpStatus(429))
+        assertTrue(isRetryableModelHttpStatus(500))
+        assertTrue(isRetryableModelHttpStatus(507))
+        assertFalse(isRetryableModelHttpStatus(400))
+        assertFalse(isRetryableModelHttpStatus(404))
+    }
+
+    @Test
+    fun retryAfterSupportsSecondsAndHttpDate() {
+        assertEquals(3_000L, parseRetryAfterMillis("3", nowEpochMillis = 0L))
+        assertEquals(
+            5_000L,
+            parseRetryAfterMillis("Thu, 01 Jan 1970 00:00:05 GMT", nowEpochMillis = 0L),
+        )
+        assertEquals(null, parseRetryAfterMillis("invalid", nowEpochMillis = 0L))
+    }
+
+    @Test
     fun protocolPreservesToolMessagesAfterSummaryBoundary() {
         val toolCalls = JSONArray()
             .put(
@@ -95,6 +115,13 @@ class MobileAgentToolClientTest {
             messages = listOf(
                 message("user", MobileAgentRole.USER, "inspect", 1),
                 MobileAgentMessage(
+                    id = "assistant-call",
+                    role = MobileAgentRole.ASSISTANT,
+                    content = "",
+                    createdAtEpochMillis = 2,
+                    toolCallsJson = JSONArray().put(toolCall("call-large")).toString(),
+                ),
+                MobileAgentMessage(
                     id = "tool-result",
                     role = MobileAgentRole.TOOL,
                     content = largeResult,
@@ -106,7 +133,7 @@ class MobileAgentToolClientTest {
         )
 
         val messages = MobileAgentToolClient().buildProtocolMessagesForTesting("system", conversation)
-        val modelToolContent = messages.getJSONObject(2).getString("content")
+        val modelToolContent = messages.getJSONObject(3).getString("content")
 
         assertEquals(16_000, modelToolContent.length)
         assertEquals(50_000, conversation.messages.last().content.length)

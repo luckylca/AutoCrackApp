@@ -50,6 +50,50 @@ class LlmEndpointNormalizerTest {
     }
 
     @Test
+    fun normalize_usesExplicitProtocolAndSupportsSwitchingFormats() {
+        assertEquals(
+            "https://example.com/v1/messages",
+            LlmEndpointNormalizer.normalize(
+                "https://example.com/v1/chat/completions",
+                LlmApiProtocol.ANTHROPIC_MESSAGES,
+            ),
+        )
+        assertEquals(
+            "https://example.com/v1/chat/completions",
+            LlmEndpointNormalizer.normalize(
+                "https://example.com/v1/messages",
+                LlmApiProtocol.OPENAI_CHAT,
+            ),
+        )
+    }
+
+    @Test
+    fun modelsEndpoint_isDerivedFromSelectedProtocol() {
+        assertEquals(
+            "https://example.com/proxy/v1/models",
+            LlmEndpointNormalizer.modelsEndpoint(
+                LlmProviderConfig(
+                    baseUrl = "https://example.com/proxy/v1",
+                    model = "gpt-test",
+                    apiKey = "test-key",
+                    protocol = LlmApiProtocol.OPENAI_CHAT,
+                ),
+            ),
+        )
+        assertEquals(
+            "https://example.com/anthropic/v1/models",
+            LlmEndpointNormalizer.modelsEndpoint(
+                LlmProviderConfig(
+                    baseUrl = "https://example.com/anthropic/v1/messages",
+                    model = "claude-test",
+                    apiKey = "test-key",
+                    protocol = LlmApiProtocol.ANTHROPIC_MESSAGES,
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun normalize_allowsPinnedCleartextProviderOnly() {
         assertEquals(
             "http://128.241.229.70:8080/v1/chat/completions",

@@ -26,9 +26,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
@@ -56,6 +60,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.luckylca.autocrack.agent.DangerousOperationDecision
 import com.luckylca.autocrack.agent.DangerousOperationRequest
+import com.luckylca.autocrack.agent.LlmApiProtocol
+import com.luckylca.autocrack.agent.LlmProviderProbeClient
 import com.luckylca.autocrack.agent.LlmProviderConfig
 import com.luckylca.autocrack.agent.MobileAgentAttachment
 import com.luckylca.autocrack.agent.MobileAgentAttachmentStore
@@ -80,8 +86,10 @@ import com.luckylca.autocrack.runtime.RootfsPackageInstaller
 import com.luckylca.autocrack.runtime.RuntimeLayout
 import com.luckylca.autocrack.runtime.RuntimeRootfsState
 import com.luckylca.autocrack.runtime.ToolpackPackageInstaller
+import com.luckylca.autocrack.runtime.unreferencedToolpackPackages
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -113,6 +121,7 @@ internal fun MobilePiAgentScreen(
     val conversationStore = remember(appContext) { MobileAgentConversationStore(appContext) }
     val attachmentStore = remember(appContext) { MobileAgentAttachmentStore(appContext) }
     val configStore = remember(appContext) { SecureLlmConfigStore(appContext) }
+    val providerProbe = remember { LlmProviderProbeClient() }
     val preferencesStore = remember(appContext) { MobileAgentPreferencesStore(appContext) }
     val taskCoordinator = remember(appContext) { MobileAgentTaskCoordinator.get(appContext) }
     val tasks by taskCoordinator.tasks.collectAsState()
@@ -148,10 +157,18 @@ internal fun MobilePiAgentScreen(
     var uiStatus by remember { mutableStateOf<String?>(null) }
     var notificationPermissionPrompted by remember { mutableStateOf(false) }
 
-    var savedConfig by remember { mutableStateOf(configStore.load()) }
-    var baseUrlInput by remember { mutableStateOf(savedConfig?.baseUrl.orEmpty()) }
-    var modelInput by remember { mutableStateOf(savedConfig?.model.orEmpty()) }
+    val initialProviderCatalog = remember(configStore) { configStore.loadCatalog() }
+    var providerCatalog by remember { mutableStateOf(initialProviderCatalog) }
+    val initialProvider = initialProviderCatalog.activeProvider
+    val savedConfig = providerCatalog.activeProvider
+    var editingProviderId by remember { mutableStateOf(initialProvider?.id ?: UUID.randomUUID().toString()) }
+    var providerNameInput by remember { mutableStateOf(initialProvider?.name.orEmpty()) }
+    var providerProtocol by remember { mutableStateOf(initialProvider?.protocol ?: LlmApiProtocol.OPENAI_CHAT) }
+    var baseUrlInput by remember { mutableStateOf(initialProvider?.baseUrl.orEmpty()) }
+    var modelInput by remember { mutableStateOf(initialProvider?.model.orEmpty()) }
     var apiKeyInput by remember { mutableStateOf("") }
+    var availableModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var configBusy by remember { mutableStateOf(false) }
     var configStatus by remember { mutableStateOf<String?>(null) }
 
     var agentPreferences by remember { mutableStateOf(preferencesStore.load()) }
@@ -177,6 +194,40 @@ internal fun MobilePiAgentScreen(
     var toolLog by remember { mutableStateOf("") }
 
     var pendingSave by remember { mutableStateOf<Pair<String, AgentManagedFile>?>(null) }
+
+    fun loadProviderDraft(provider: LlmProviderConfig) {
+        editingProviderId = provider.id
+        providerNameInput = provider.name
+        providerProtocol = provider.protocol
+        baseUrlInput = provider.baseUrl
+        modelInput = provider.model
+        apiKeyInput = ""
+        availableModels = emptyList()
+    }
+
+    fun newProviderDraft() {
+        editingProviderId = UUID.randomUUID().toString()
+        providerNameInput = ""
+        providerProtocol = LlmApiProtocol.OPENAI_CHAT
+        baseUrlInput = ""
+        modelInput = ""
+        apiKeyInput = ""
+        availableModels = emptyList()
+        configStatus = null
+    }
+
+    fun draftProviderConfig(): LlmProviderConfig {
+        val existing = providerCatalog.providers.firstOrNull { it.id == editingProviderId }
+        val key = apiKeyInput.ifBlank { existing?.apiKey ?: error("首次配置必须输入 API Key") }
+        return LlmProviderConfig(
+            id = editingProviderId,
+            name = providerNameInput,
+            protocol = providerProtocol,
+            baseUrl = baseUrlInput,
+            model = modelInput,
+            apiKey = key,
+        )
+    }
 
     fun navigate(destination: MobileAgentDestination) {
         navigation = navigation.navigate(destination)
@@ -235,9 +286,21 @@ internal fun MobilePiAgentScreen(
 
     suspend fun refreshStorage() {
         storageInfo = withContext(Dispatchers.IO) {
+            val packagesRoot = File(layout.toolpacksRoot, "packages")
+            val packageFiles = packagesRoot.listFiles().orEmpty().toList()
+            val cacheBytes = directorySize(appContext.cacheDir) + directorySize(layout.tempRoot)
+            val unreferencedArchiveBytes = unreferencedToolpackPackages(
+                packageFiles = packageFiles,
+                referencedPackagePaths = installedToolpacks.mapTo(mutableSetOf(), InstalledToolpack::packagePath),
+            ).sumOf(File::length)
             StorageUiInfo(
                 workspaceBytes = directorySize(layout.workspacesRoot),
-                cacheBytes = directorySize(appContext.cacheDir) + directorySize(layout.tempRoot),
+                cacheBytes = cacheBytes,
+                toolpackArchiveBytes = packageFiles.filter(File::isFile).sumOf(File::length),
+                auditBytes = directorySize(layout.auditRoot),
+                sessionBytes = directorySize(layout.sessionsRoot),
+                quarantineBytes = directorySize(layout.quarantineRoot),
+                reclaimableBytes = cacheBytes + unreferencedArchiveBytes,
             )
         }
     }
@@ -500,6 +563,19 @@ internal fun MobilePiAgentScreen(
                     onRemoveAttachment = { attachment -> pendingAttachments = pendingAttachments.filterNot { it.id == attachment.id } },
                     onSend = ::sendMessage,
                     onStop = { activeConversation?.id?.let(taskCoordinator::stop) },
+                    onResume = {
+                        val conversationId = activeConversation?.id
+                        val config = savedConfig
+                        if (conversationId != null && config != null) {
+                            scope.launch {
+                                runCatching { taskCoordinator.resume(conversationId, config) }
+                                    .onSuccess { resumed ->
+                                        uiStatus = if (resumed) null else "这个会话已有 Agent 任务在运行"
+                                    }
+                                    .onFailure { error -> uiStatus = "无法继续任务：${error.message}" }
+                            }
+                        }
+                    },
                     onRename = { conversation -> renameTarget = conversation; renameInput = conversation.title },
                     onDelete = { conversation ->
                         scope.launch {
@@ -542,33 +618,93 @@ internal fun MobilePiAgentScreen(
                     page = destinationSettingsPage,
                     onPageChange = ::navigateSettings,
                     onBack = ::navigateBack,
-                    savedConfig = savedConfig,
+                    activeConfig = savedConfig,
+                    providers = providerCatalog.providers,
+                    editingProviderId = editingProviderId,
+                    providerName = providerNameInput,
+                    protocol = providerProtocol,
                     baseUrl = baseUrlInput,
                     model = modelInput,
                     apiKey = apiKeyInput,
+                    availableModels = availableModels,
+                    configBusy = configBusy,
+                    onSelectProvider = { provider ->
+                        runCatching { configStore.setActiveProvider(provider.id) }
+                            .onSuccess {
+                                providerCatalog = configStore.loadCatalog()
+                                loadProviderDraft(provider)
+                                configStatus = "当前使用：${provider.name}"
+                            }
+                            .onFailure { configStatus = it.message }
+                    },
+                    onNewProvider = ::newProviderDraft,
+                    onProviderNameChange = { providerNameInput = it.take(64) },
+                    onProtocolChange = { selected ->
+                        providerProtocol = selected
+                        availableModels = emptyList()
+                        configStatus = null
+                    },
                     onBaseUrlChange = { baseUrlInput = it },
                     onModelChange = { modelInput = it },
                     onApiKeyChange = { apiKeyInput = it },
                     configStatus = configStatus,
                     onSaveConfig = {
                         runCatching {
-                            val key = apiKeyInput.ifBlank { savedConfig?.apiKey ?: error("首次配置必须输入 API Key") }
-                            val config = LlmProviderConfig(baseUrlInput, modelInput, key).validated()
-                            configStore.save(config)
+                            val config = draftProviderConfig().validated()
+                            configStore.saveProvider(config, makeActive = true)
                             config
                         }.onSuccess { config ->
-                            savedConfig = config
-                            baseUrlInput = config.baseUrl
-                            modelInput = config.model
-                            apiKeyInput = ""
-                            configStatus = "API 配置已保存"
+                            providerCatalog = configStore.loadCatalog()
+                            loadProviderDraft(config)
+                            configStatus = "供应商已保存并设为当前使用"
                         }.onFailure { configStatus = it.message }
                     },
-                    onClearConfig = {
-                        configStore.clear()
-                        savedConfig = null
-                        apiKeyInput = ""
-                        configStatus = "API 配置已清除"
+                    onDeleteProvider = {
+                        runCatching { configStore.deleteProvider(editingProviderId) }
+                            .onSuccess {
+                                providerCatalog = configStore.loadCatalog()
+                                providerCatalog.activeProvider?.let(::loadProviderDraft) ?: newProviderDraft()
+                                configStatus = "供应商已删除"
+                            }
+                            .onFailure { configStatus = it.message }
+                    },
+                    onFetchModels = {
+                        scope.launch {
+                            configBusy = true
+                            configStatus = "正在获取模型列表…"
+                            runCatching { providerProbe.fetchModels(draftProviderConfig()) }
+                                .onSuccess { models ->
+                                    availableModels = models
+                                    if (modelInput.isBlank() && models.isNotEmpty()) modelInput = models.first()
+                                    configStatus = if (models.isEmpty()) {
+                                        "连接成功，但服务返回了空模型列表；仍可手工输入模型"
+                                    } else {
+                                        "已获取 ${models.size} 个模型"
+                                    }
+                                }
+                                .onFailure { configStatus = "获取模型失败：${it.message}；仍可手工输入模型" }
+                            configBusy = false
+                        }
+                    },
+                    onTestConnectivity = {
+                        scope.launch {
+                            configBusy = true
+                            configStatus = "正在测试连接与鉴权…"
+                            runCatching { providerProbe.testConnectivity(draftProviderConfig()) }
+                                .onSuccess { result -> configStatus = "联通成功（HTTP ${result.statusCode}），未发送推理请求" }
+                                .onFailure { configStatus = "联通失败：${it.message}" }
+                            configBusy = false
+                        }
+                    },
+                    onTestHi = {
+                        scope.launch {
+                            configBusy = true
+                            configStatus = "正在发送 hi…"
+                            runCatching { providerProbe.testHi(draftProviderConfig()) }
+                                .onSuccess { result -> configStatus = "hi 测试成功：${result.responseText}" }
+                                .onFailure { configStatus = "hi 测试失败：${it.message}" }
+                            configBusy = false
+                        }
                     },
                     preferences = agentPreferences,
                     systemPrompt = systemPromptInput,
@@ -668,7 +804,15 @@ internal fun MobilePiAgentScreen(
                             scope.launch { refreshLogs(); refreshStorage() }
                         }
                     },
-                    icon = { Text(if (item == MobileAgentMainTab.CONVERSATIONS) "聊" else "设") },
+                    icon = {
+                        Icon(
+                            imageVector = when (item) {
+                                MobileAgentMainTab.CONVERSATIONS -> Icons.AutoMirrored.Filled.List
+                                MobileAgentMainTab.SETTINGS -> Icons.Default.Settings
+                            },
+                            contentDescription = item.label,
+                        )
+                    },
                     label = { Text(item.label) },
                 )
             }

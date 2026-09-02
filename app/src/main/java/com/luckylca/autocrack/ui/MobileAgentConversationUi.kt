@@ -18,6 +18,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -29,6 +36,8 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -94,6 +103,7 @@ internal fun MobileAgentConversationPage(
     onRemoveAttachment: (MobileAgentAttachment) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onResume: () -> Unit,
     onRename: (MobileAgentConversation) -> Unit,
     onDelete: (MobileAgentConversation) -> Unit,
     onOpenApiSettings: () -> Unit,
@@ -142,6 +152,7 @@ internal fun MobileAgentConversationPage(
             onRemoveAttachment = onRemoveAttachment,
             onSend = onSend,
             onStop = onStop,
+            onResume = onResume,
             onOpenApiSettings = onOpenApiSettings,
             onOpenFile = onOpenFile,
             onShareFile = onShareFile,
@@ -165,6 +176,7 @@ private fun ConversationBody(
     onRemoveAttachment: (MobileAgentAttachment) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onResume: () -> Unit,
     onOpenApiSettings: () -> Unit,
     onOpenFile: (AgentManagedFile) -> Unit,
     onShareFile: (AgentManagedFile) -> Unit,
@@ -176,7 +188,9 @@ private fun ConversationBody(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onOpenDrawer) { Text("☰", style = MaterialTheme.typography.titleLarge) }
+            IconButton(onClick = onOpenDrawer) {
+                Icon(Icons.Default.Menu, contentDescription = "会话列表")
+            }
             Text(
                 text = activeConversation?.title ?: "新会话",
                 modifier = Modifier.weight(1f),
@@ -185,7 +199,9 @@ private fun ConversationBody(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            TextButton(onClick = onNewConversation) { Text("＋", style = MaterialTheme.typography.titleLarge) }
+            IconButton(onClick = onNewConversation) {
+                Icon(Icons.Default.Add, contentDescription = "新建会话")
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
 
@@ -236,11 +252,19 @@ private fun ConversationBody(
                 }
                 if (showTerminalStatus) {
                     item(key = "terminal-status") {
-                        Text(
-                            listOfNotNull(task.stage, task.error).joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (task.status == MobileAgentTaskStatus.CANCELLED) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                listOfNotNull(task.stage, task.error).joinToString(" · "),
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (task.status == MobileAgentTaskStatus.CANCELLED) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                            )
+                            if (hasApi) TextButton(onClick = onResume) { Text("继续") }
+                        }
                     }
                 }
             }
@@ -297,7 +321,9 @@ private fun Composer(
     Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp), tonalElevation = 2.dp, color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.Bottom) {
             Box {
-                TextButton(onClick = { attachmentMenu = true }, enabled = enabled) { Text("＋", style = MaterialTheme.typography.titleLarge) }
+                IconButton(onClick = { attachmentMenu = true }, enabled = enabled) {
+                    Icon(Icons.Default.Add, contentDescription = "添加附件")
+                }
                 DropdownMenu(expanded = attachmentMenu, onDismissRequest = { attachmentMenu = false }) {
                     DropdownMenuItem(text = { Text("选择文件") }, onClick = { attachmentMenu = false; onAttach(AgentAttachmentKind.FILE) })
                     DropdownMenuItem(text = { Text("选择 APK") }, onClick = { attachmentMenu = false; onAttach(AgentAttachmentKind.APK) })
@@ -308,8 +334,11 @@ private fun Composer(
                 modifier = Modifier.weight(1f), value = value, onValueChange = onValueChange,
                 placeholder = { Text("输入消息……") }, minLines = 1, maxLines = 5, enabled = enabled, shape = RoundedCornerShape(20.dp),
             )
-            TextButton(onClick = if (running) onStop else onSend, enabled = running || canSend) {
-                Text(if (running) "■" else "↑", style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = if (running) onStop else onSend, enabled = running || canSend) {
+                Icon(
+                    imageVector = if (running) Icons.Default.Close else Icons.AutoMirrored.Filled.Send,
+                    contentDescription = if (running) "停止任务" else "发送消息",
+                )
             }
         }
     }
@@ -473,9 +502,20 @@ private fun ConversationDrawer(
     onDelete: (MobileAgentConversation) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxHeight().padding(horizontal = 12.dp, vertical = 12.dp)) {
-        Button(modifier = Modifier.fillMaxWidth(), onClick = onNewConversation) { Text("＋ 新建会话") }
+        Button(modifier = Modifier.fillMaxWidth(), onClick = onNewConversation) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("新建会话")
+        }
         Spacer(Modifier.height(10.dp))
-        OutlinedTextField(modifier = Modifier.fillMaxWidth(), value = searchQuery, onValueChange = onSearchChange, placeholder = { Text("搜索会话") }, singleLine = true)
+        OutlinedTextField(
+            modifier = Modifier.fillMaxWidth(),
+            value = searchQuery,
+            onValueChange = onSearchChange,
+            placeholder = { Text("搜索会话") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            singleLine = true,
+        )
         Spacer(Modifier.height(10.dp))
         val query = searchQuery.trim()
         val filtered = conversations.filter { conversation ->

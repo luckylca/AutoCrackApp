@@ -11,6 +11,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,6 +57,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     private val agentAuditFile = File(layout.auditRoot, "mobile-agent-events.jsonl")
     private val taskLock = Any()
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val starting = ConcurrentHashMap.newKeySet<String>()
     private val clients = ConcurrentHashMap<String, MobileAgentToolClient>()
     private val runtimes = ConcurrentHashMap<String, MobileAgentRuntimeSession>()
     private val foregroundLeases = ConcurrentHashMap<String, String>()
@@ -87,24 +89,33 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     ): Boolean {
         val message = userMessage.trim()
         require(message.isNotBlank() || attachments.isNotEmpty()) { "消息和附件不能同时为空" }
-        if (jobs[conversationId]?.isActive == true) return false
-        conversationStore.appendUser(conversationId, message, attachments)
-        val now = System.currentTimeMillis()
-        updateTask(
-            MobileAgentTaskSnapshot(
-                conversationId = conversationId,
-                status = MobileAgentTaskStatus.RUNNING,
-                stage = "准备 Agent",
-                streamingText = "",
-                startedAtEpochMillis = now,
-                updatedAtEpochMillis = now,
-            ),
-            persist = true,
-        )
-        val job = scope.launch { execute(conversationId, config) }
-        jobs[conversationId] = job
-        appendAudit("start", conversationId, JSONObject().put("attachmentCount", attachments.size))
-        return true
+        if (!starting.add(conversationId)) return false
+        if (jobs[conversationId]?.isActive == true) {
+            starting.remove(conversationId)
+            return false
+        }
+        return try {
+            conversationStore.appendUser(conversationId, message, attachments)
+            beginExecution(conversationId, config, "start", attachments.size)
+            true
+        } finally {
+            starting.remove(conversationId)
+        }
+    }
+
+    suspend fun resume(conversationId: String, config: LlmProviderConfig): Boolean {
+        if (!starting.add(conversationId)) return false
+        if (jobs[conversationId]?.isActive == true) {
+            starting.remove(conversationId)
+            return false
+        }
+        return try {
+            requireNotNull(conversationStore.get(conversationId)) { "会话不存在：$conversationId" }
+            beginExecution(conversationId, config, "resume", attachmentCount = 0)
+            true
+        } finally {
+            starting.remove(conversationId)
+        }
     }
 
     fun stop(conversationId: String): Boolean {
@@ -117,6 +128,30 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
 
     fun snapshot(conversationId: String): MobileAgentTaskSnapshot? = mutableTasks.value[conversationId]
 
+    private fun beginExecution(
+        conversationId: String,
+        config: LlmProviderConfig,
+        auditEvent: String,
+        attachmentCount: Int,
+    ) {
+        val now = System.currentTimeMillis()
+        updateTask(
+            MobileAgentTaskSnapshot(
+                conversationId = conversationId,
+                status = MobileAgentTaskStatus.RUNNING,
+                stage = if (auditEvent == "resume") "正在恢复 Agent" else "准备 Agent",
+                streamingText = "",
+                startedAtEpochMillis = now,
+                updatedAtEpochMillis = now,
+            ),
+            persist = true,
+        )
+        val job = scope.launch(start = CoroutineStart.LAZY) { execute(conversationId, config) }
+        jobs[conversationId] = job
+        appendAudit(auditEvent, conversationId, JSONObject().put("attachmentCount", attachmentCount))
+        job.start()
+    }
+
     private suspend fun execute(conversationId: String, config: LlmProviderConfig) {
         var runtime: MobileAgentRuntimeSession? = null
         var leaseId: String? = null
@@ -126,6 +161,16 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         try {
             startupProcessCleanup.await()
             val initialConversation = requireNotNull(conversationStore.get(conversationId)) { "会话不存在：$conversationId" }
+            val protocolRepair = MobileAgentProtocolRepair.repair(initialConversation.messages)
+            if (protocolRepair.synthesizedToolResults > 0 || protocolRepair.droppedOrphanToolResults > 0) {
+                appendAudit(
+                    "protocol_repaired",
+                    conversationId,
+                    JSONObject()
+                        .put("synthesizedToolResults", protocolRepair.synthesizedToolResults)
+                        .put("droppedOrphanToolResults", protocolRepair.droppedOrphanToolResults),
+                )
+            }
             leaseId = AgentExecutionForegroundService.acquire(
                 appContext,
                 conversationId,
@@ -241,15 +286,15 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         request: DangerousOperationRequest,
     ): DangerousOperationDecision {
         val preferences = preferencesStore.load()
-        if (request.category.name in preferences.alwaysAllowedDangerousCategories) {
-            return DangerousOperationDecision.ALLOW_ONCE
-        }
         if (request.category == DangerousOperationCategory.SYSTEM_WRITE) {
             when (preferences.systemWritePolicy) {
                 SystemWritePolicy.DENY -> return DangerousOperationDecision.DENY
                 SystemWritePolicy.ALLOW -> return DangerousOperationDecision.ALLOW_ONCE
                 SystemWritePolicy.ASK -> Unit
             }
+        }
+        if (request.category.name in preferences.alwaysAllowedDangerousCategories) {
+            return DangerousOperationDecision.ALLOW_ONCE
         }
         if (!preferences.dangerousOperationConfirmation) return DangerousOperationDecision.ALLOW_ONCE
 
@@ -393,23 +438,12 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
     }
 
     private fun loadAndRecoverTasks(): Map<String, MobileAgentTaskSnapshot> {
+        val needsNullableNormalization = runCatching {
+            taskFile.isFile && hasLegacyNullTaskErrors(JSONObject(taskFile.readText(Charsets.UTF_8)))
+        }.getOrDefault(false)
         val loaded = readTasks()
-        var changed = false
-        val recovered = loaded.mapValues { (_, task) ->
-            if (task.status == MobileAgentTaskStatus.RUNNING) {
-                changed = true
-                task.copy(
-                    status = MobileAgentTaskStatus.INTERRUPTED,
-                    stage = "上次任务因进程重启而中断",
-                    streamingText = "",
-                    updatedAtEpochMillis = System.currentTimeMillis(),
-                    error = "任务执行进程已重启，可以在原会话中继续。",
-                )
-            } else {
-                task
-            }
-        }
-        if (changed) writeTasks(recovered)
+        val recovered = recoverInterruptedTasks(loaded, System.currentTimeMillis())
+        if (recovered != loaded || needsNullableNormalization) writeTasks(recovered)
         return recovered
     }
 
@@ -432,7 +466,7 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
                             streamingText = "",
                             startedAtEpochMillis = item.optLong("startedAtEpochMillis"),
                             updatedAtEpochMillis = item.optLong("updatedAtEpochMillis"),
-                            error = item.optString("error").takeIf(String::isNotBlank),
+                            error = item.optNonBlankStringOrNull("error"),
                         ),
                     )
                 }
@@ -479,5 +513,37 @@ class MobileAgentTaskCoordinator private constructor(context: Context) {
         fun get(context: Context): MobileAgentTaskCoordinator = instance ?: synchronized(this) {
             instance ?: MobileAgentTaskCoordinator(context).also { instance = it }
         }
+    }
+}
+
+internal fun JSONObject.optNonBlankStringOrNull(name: String): String? =
+    if (has(name) && !isNull(name)) {
+        optString(name).takeIf { value -> value.isNotBlank() && value != "null" }
+    } else {
+        null
+    }
+
+internal fun recoverInterruptedTasks(
+    tasks: Map<String, MobileAgentTaskSnapshot>,
+    nowEpochMillis: Long,
+): Map<String, MobileAgentTaskSnapshot> = tasks.mapValues { (_, task) ->
+    if (task.status == MobileAgentTaskStatus.RUNNING) {
+        task.copy(
+            status = MobileAgentTaskStatus.INTERRUPTED,
+            stage = "上次任务因进程重启而中断",
+            streamingText = "",
+            updatedAtEpochMillis = nowEpochMillis,
+            error = "任务执行进程已重启，可以在原会话中继续。",
+        )
+    } else {
+        task
+    }
+}
+
+internal fun hasLegacyNullTaskErrors(root: JSONObject): Boolean {
+    val tasks = root.optJSONArray("tasks") ?: return false
+    return (0 until tasks.length()).any { index ->
+        val item = tasks.optJSONObject(index)
+        item != null && item.has("error") && !item.isNull("error") && item.optString("error") == "null"
     }
 }

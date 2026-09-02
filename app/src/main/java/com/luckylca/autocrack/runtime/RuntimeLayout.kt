@@ -17,6 +17,7 @@ class RuntimeLayout(context: Context) {
     val toolpacksRoot: File = File(runtimeRoot, "toolpacks").canonicalFile
     val sessionsRoot: File = File(runtimeRoot, "sessions").canonicalFile
     val auditRoot: File = File(runtimeRoot, "audit").canonicalFile
+    val quarantineRoot: File = File(runtimeRoot, "quarantine").canonicalFile
     val tempRoot: File = File(runtimeRoot, "tmp").canonicalFile
     val workspacesRoot: File = File(filesRoot, "workspaces").canonicalFile
     val runtimeStateFile: File = File(runtimeRoot, "runtime-state.json").canonicalFile
@@ -35,6 +36,7 @@ class RuntimeLayout(context: Context) {
             toolpacksRoot,
             sessionsRoot,
             auditRoot,
+            quarantineRoot,
             tempRoot,
             workspacesRoot,
         ).forEach(::ensureDirectory)

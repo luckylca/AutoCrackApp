@@ -14,12 +14,45 @@ data class LlmProviderConfig(
     val baseUrl: String,
     val model: String,
     val apiKey: String,
+    val id: String = DEFAULT_PROVIDER_ID,
+    val name: String = "默认供应商",
+    val protocol: LlmApiProtocol = LlmEndpointNormalizer.protocol(baseUrl),
 ) {
     fun validated(): LlmProviderConfig {
-        val endpoint = LlmEndpointNormalizer.normalize(baseUrl)
+        val endpoint = LlmEndpointNormalizer.normalize(baseUrl, protocol)
+        require(id.trim().length in 1..128) { "供应商 ID 无效" }
+        require(name.trim().length in 1..64) { "供应商名称不能为空或过长" }
         require(model.trim().length in 1..128) { "模型名称不能为空或过长" }
         require(apiKey.trim().length in 4..8_192) { "API Key 不能为空或格式异常" }
-        return copy(baseUrl = endpoint, model = model.trim(), apiKey = apiKey.trim())
+        return copy(
+            id = id.trim(),
+            name = name.trim(),
+            baseUrl = endpoint,
+            model = model.trim(),
+            apiKey = apiKey.trim(),
+        )
+    }
+
+    companion object {
+        const val DEFAULT_PROVIDER_ID = "default"
+    }
+}
+
+data class LlmProviderCatalog(
+    val providers: List<LlmProviderConfig> = emptyList(),
+    val activeProviderId: String? = null,
+) {
+    val activeProvider: LlmProviderConfig?
+        get() = providers.firstOrNull { it.id == activeProviderId } ?: providers.firstOrNull()
+
+    fun validated(): LlmProviderCatalog {
+        val normalized = providers.map(LlmProviderConfig::validated)
+        require(normalized.map(LlmProviderConfig::id).distinct().size == normalized.size) {
+            "供应商 ID 不能重复"
+        }
+        val active = activeProviderId?.takeIf { id -> normalized.any { it.id == id } }
+            ?: normalized.firstOrNull()?.id
+        return copy(providers = normalized, activeProviderId = active)
     }
 }
 
@@ -38,7 +71,9 @@ data class LlmAgentAnswer(
 object LlmEndpointNormalizer {
     private val CLEARTEXT_PROVIDER_HOSTS = setOf("128.241.229.70")
 
-    fun normalize(input: String): String {
+    fun normalize(input: String): String = normalize(input, protocol(input))
+
+    fun normalize(input: String, protocol: LlmApiProtocol): String {
         val trimmed = input.trim().trimEnd('/')
         require(trimmed.isNotBlank()) { "API 地址不能为空" }
         val uri = URI(trimmed)
@@ -50,18 +85,38 @@ object LlmEndpointNormalizer {
         }
         require(uri.userInfo == null) { "API 地址不能包含用户名或密码" }
         require(uri.fragment == null) { "API 地址不能包含 URL Fragment" }
-        return when {
-            trimmed.endsWith("/v1/messages") -> trimmed
-            trimmed.endsWith("/anthropic/v1") -> "$trimmed/messages"
-            trimmed.endsWith("/anthropic") -> "$trimmed/v1/messages"
-            trimmed.endsWith("/chat/completions") -> trimmed
-            trimmed.endsWith("/v1") -> "$trimmed/chat/completions"
-            else -> "$trimmed/v1/chat/completions"
+        val base = when {
+            trimmed.endsWith("/chat/completions") -> trimmed.removeSuffix("/chat/completions")
+            trimmed.endsWith("/messages") -> trimmed.removeSuffix("/messages")
+            else -> trimmed
+        }
+        return when (protocol) {
+            LlmApiProtocol.OPENAI_CHAT -> if (base.endsWith("/v1")) {
+                "$base/chat/completions"
+            } else {
+                "$base/v1/chat/completions"
+            }
+            LlmApiProtocol.ANTHROPIC_MESSAGES -> if (base.endsWith("/v1")) {
+                "$base/messages"
+            } else {
+                "$base/v1/messages"
+            }
         }
     }
 
+    fun modelsEndpoint(config: LlmProviderConfig): String {
+        val endpoint = normalize(config.baseUrl, config.protocol)
+        val base = when (config.protocol) {
+            LlmApiProtocol.OPENAI_CHAT -> endpoint.removeSuffix("/chat/completions")
+            LlmApiProtocol.ANTHROPIC_MESSAGES -> endpoint.removeSuffix("/messages")
+        }
+        return "$base/models"
+    }
+
     fun protocol(endpoint: String): LlmApiProtocol =
-        if (URI(endpoint).path?.endsWith("/v1/messages") == true) {
+        if (URI(endpoint).path?.let { path ->
+                path.endsWith("/v1/messages") || path.contains("/anthropic")
+            } == true) {
             LlmApiProtocol.ANTHROPIC_MESSAGES
         } else {
             LlmApiProtocol.OPENAI_CHAT

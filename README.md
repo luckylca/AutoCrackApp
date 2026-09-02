@@ -12,7 +12,7 @@ See [Final runtime target](docs/FINAL_RUNTIME_TARGET.md) and [Android/rootfs net
 
 Mobile Pi Agent uses four primitive actions (`exec_bash`, `read_file`, `write_file`, and `kill_process`) in one Debian ARM64 environment. Toolpacks remain independently verified and atomically installed, while active toolpack commands share `/usr/local/bin` and Python, Node, and Java dependencies share their conventional runtime search paths. Mature upstream CLIs and language APIs are the capability surface; AutoCrack helpers are optional conveniences.
 
-Android-host commands run through `android-shell`, which forwards root argv without a command allowlist. Only clearly destructive recursive deletion of critical trees, block-device writes/formatting, and reboot/poweroff/halt require an extra confirmation. Existing typed bridges remain available for legacy UI diagnostics and recovery, but the Mobile Pi Agent does not depend on them.
+Android-host commands run through `android-shell`, which forwards root argv without a command allowlist. Package/data changes, mount control, system-path writes, destructive recursive deletion of critical trees, block-device writes/formatting, and reboot/poweroff/halt are classified before execution. The on-device policy can deny system writes or require an explicit confirmation. Existing typed bridges remain available for legacy UI diagnostics and recovery, but the Mobile Pi Agent does not depend on them.
 
 ## Earlier milestone
 
@@ -76,17 +76,23 @@ Every APK is checked for non-zero size and SHA-256 before analysis. The analyzer
 
 ## External model boundary
 
-External model use is optional and requires an explicit button press. AutoCrackApp sends only:
+External model use is optional and requires an explicit button press. The earlier Phase 5 evidence-analysis flow sends only:
 
 - the user's question;
 - compact Manifest and archive statistics;
 - DEX index counts;
 - at most 60 ranked evidence records.
 
-It does not send APK, DEX, SO, signing-certificate bytes, application private data, or the complete DEX index. Provider URLs must use HTTPS. API configuration is encrypted using an Android Keystore key, but a fully compromised Root device cannot provide absolute secret protection.
+That earlier flow does not send APK, DEX, SO, signing-certificate bytes, application private data, or the complete DEX index.
+
+Mobile Pi Agent has a broader boundary: the configured external model receives the conversation, attachment descriptions and text made available to the Agent, and bounded tool results needed for the tool loop. Binary attachments remain in the private on-device workspace unless a tool or user instruction explicitly converts or uploads them, but extracted text and command output can be included in model requests. Review the selected provider's data policy before using secrets or third-party application data.
+
+Provider URLs must use HTTPS. API configuration is encrypted using an Android Keystore key, but a fully compromised Root device cannot provide absolute secret protection.
+
+Model settings support multiple named providers with one active provider at a time. Each provider explicitly selects either OpenAI Chat Completions-compatible or Anthropic Messages-compatible request formatting. The app can discover models through the provider's `GET /v1/models` endpoint, test connectivity and authentication without an inference request, or send a separate minimal `hi` request to the selected model. Providers that do not expose a model-list endpoint can still use a manually entered model id.
 
 ## Safety
 
-Use AutoCrackApp only on applications and devices you own or are explicitly authorized to analyze. Mobile Pi Agent intentionally has general Debian Bash and Android host root-command access; the minimal destructive-operation confirmation is not a substitute for authorization or careful review. Toolpack hashes, timeouts, audit logs, process identity checks, loopback validation, and cleanup remain integrity and reliability controls.
+Use AutoCrackApp only on applications and devices you own or are explicitly authorized to analyze. Mobile Pi Agent intentionally has general Debian Bash and Android host root-command access. Disabling dangerous-operation confirmation is equivalent to granting the Agent full Root execution without per-command prompts; confirmation and command classification are not substitutes for authorization or careful review. Toolpack hashes, timeouts, bounded audit logs, process identity checks, loopback validation, and cleanup remain integrity and reliability controls.
 
 See [Phase 5 documentation](docs/PHASE_5.md) for the index schema, privacy boundary, and device test checklist.

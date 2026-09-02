@@ -27,8 +27,8 @@ enum class DangerousOperationDecision {
 }
 
 object MobileAgentDangerousCommandClassifier {
-    // Pi-Agent mode keeps only a minimal last-resort guardrail around operations that can destroy
-    // the device/runtime itself. Normal root administration is intentionally not capability-gated.
+    // This is a last-mile guard for raw shell. It intentionally classifies mutation commands only;
+    // observation and debugging commands remain available without confirmation noise.
     private val rmCommand = Regex("(?is)(^|[;&|\\n])\\s*(?:sudo\\s+)?rm\\s+([^\\n;&|]+)")
     private val recursiveFlag = Regex("(?i)(^|\\s)(?:--recursive|-\\S*r\\S*)(?=\\s|$)")
     private val forceFlag = Regex("(?i)(^|\\s)(?:--force|-\\S*f\\S*)(?=\\s|$)")
@@ -37,11 +37,29 @@ object MobileAgentDangerousCommandClassifier {
     )
     private val blockWrite = Regex("(?is)(^|[;&|\\n])\\s*(?:sudo\\s+)?(?:dd\\s+[^\\n;&|]*\\bof=/dev/(?:block|sd|mmc|nvme)|(?:mkfs(?:\\.[A-Za-z0-9_-]+)?|mkswap|wipefs)\\b|(?:cat\\b[^\\n;&|]*>|tee\\s+)(?:\\s*)/dev/(?:block|sd|mmc|nvme))")
     private val deviceControl = Regex("(?im)(^|[;&|]\\s*)(reboot|poweroff|halt)\\b")
+    private val mountControl = Regex("(?im)(^|[;&|]\\s*)(?:sudo\\s+)?(?:mount|umount)\\b")
+    private val packageDataChange = Regex(
+        "(?im)(^|[;&|]\\s*)(?:sudo\\s+)?(?:pm\\s+(?:install(?:-[a-z]+)?|uninstall|clear|enable|disable(?:-user)?|grant|revoke|reset-permissions)\\b|cmd\\s+(?:package\\s+(?:install|uninstall|clear|grant|revoke|set-enabled-setting|set-distracting-restriction)\\b|appops\\s+(?:set|reset)\\b))",
+    )
+    private val systemSettingChange = Regex(
+        "(?im)(^|[;&|]\\s*)(?:sudo\\s+)?(?:settings\\s+(?:put|delete|reset)\\b|setprop\\s+persist(?:\\.|\\s))",
+    )
+    private val systemPathMutation = Regex(
+        "(?im)(^|[;&|]\\s*)(?:sudo\\s+)?(?:(?:chmod|chown|touch|mkdir|rmdir|rm|mv|cp|ln|install|truncate)\\b[^\\n;&|]*|sed\\s+[^\\n;&|]*\\s-i(?:\\s|$)[^\\n;&|]*|(?:cat\\b[^\\n;&|]*>|tee(?:\\s+-a)?\\s+))['\"]?/(?:system|vendor|product|odm|apex|proc|sys)(?:/|['\"]?(?:\\s|$))",
+    )
+    private val systemPathRedirect = Regex(
+        "(?im)(?:>|>>)\\s*['\"]?/(?:system|vendor|product|odm|apex|proc|sys)(?:/|['\"]?(?:\\s|$))",
+    )
 
     fun classify(script: String): DangerousOperationCategory? = when {
         isDestructiveDelete(script) -> DangerousOperationCategory.DESTRUCTIVE_DELETE
         blockWrite.containsMatchIn(script) -> DangerousOperationCategory.BLOCK_DEVICE_WRITE
         deviceControl.containsMatchIn(script) -> DangerousOperationCategory.DEVICE_CONTROL
+        packageDataChange.containsMatchIn(script) -> DangerousOperationCategory.PACKAGE_DATA_CHANGE
+        mountControl.containsMatchIn(script) -> DangerousOperationCategory.MOUNT_CONTROL
+        systemSettingChange.containsMatchIn(script) || systemPathMutation.containsMatchIn(script) ||
+            systemPathRedirect.containsMatchIn(script) ->
+            DangerousOperationCategory.SYSTEM_WRITE
         else -> null
     }
 
