@@ -60,3 +60,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | Bounded DEX memory scan | Partial; runnable probe, not ART reconstruction | `memory.dex.scan`, `memory-dump dex-scan`; device self-test PASS_RUNNABLE with zero candidates on sampled runtime APK mappings |
 | File-backed ELF symbols | Complete for bounded dynsym/symtab metadata | `memory.elf.symbols`, `memory-dump elf-symbols`; device self-test PASS on JNI exports from runtime native library |
 | File-backed ELF relocations | Complete for bounded REL/RELA metadata | `memory.elf.relocations`, `memory-dump elf-relocations`; device self-test PASS on AArch64 RELA records |
+| File-backed ELF dynamic table | Complete for bounded dynamic metadata | `memory.elf.dynamic`, `memory-dump elf-dynamic`; device self-test PASS with `DT_NEEDED` and SONAME from runtime native library |

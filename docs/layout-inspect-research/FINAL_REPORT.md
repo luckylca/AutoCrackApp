@@ -519,3 +519,23 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This parses file-backed relocation metadata only. It does not apply relocations, patch GOT/PLT, or bypass linker namespace policy.
+## 21. Stage 17 file-backed ELF dynamic table parsing
+
+`memory.elf.dynamic` was added to parse bounded ELF dynamic table metadata. This closes another loader-analysis gap between static ELF inspection and runtime `dlopen` / `dlsym` behavior.
+
+Implemented coverage:
+
+- Runtime capability: `memory.elf.dynamic`.
+- Toolpack command: `memory-dump elf-dynamic`.
+- Input sources match the other ELF commands.
+- Parses `SHT_DYNAMIC` entries and labels common tags such as `DT_NEEDED`, `DT_SONAME`, `DT_RPATH`, `DT_RUNPATH`, `DT_STRTAB`, `DT_SYMTAB`, `DT_RELA`, `DT_RELASZ`, `DT_JMPREL`, `DT_FLAGS`, and `DT_FLAGS_1`.
+- Resolves string-valued dynamic entries through the linked string table when section headers are available.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.elf.dynamic)` parsed the APK-embedded `lib/arm64-v8a/libautocrack_runtime_native.so`.
+- Result: `count=28`, `needed=[liblog.so, libdl.so, libm.so, libc.so]`, `soname=libautocrack_runtime_native.so`, `truncated=false`.
+
+Boundary:
+
+- This reads file-backed dynamic table metadata only. It does not alter linker state, load libraries, or bypass Android linker namespace policy.

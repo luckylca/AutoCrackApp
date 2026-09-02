@@ -40,7 +40,7 @@ public final class MemoryIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations",
+                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
                 "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
@@ -58,6 +58,7 @@ public final class MemoryIntrospector {
             case "memory.elf.info" -> elfInfo(context, request);
             case "memory.elf.symbols" -> elfSymbols(context, request);
             case "memory.elf.relocations" -> elfRelocations(context, request);
+            case "memory.elf.dynamic" -> elfDynamic(context, request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.scan" -> dexScan(context, request);
@@ -226,6 +227,18 @@ public final class MemoryIntrospector {
                 .put("sha256_prefix", sha256(loaded.bytes)).put("symbols", parsed)
                 .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
                 .put("strategy", "bounded ELF dynsym/symtab parsing; no native code execution");
+    }
+
+    private static JSONObject elfDynamic(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxEntries = clamp(request.optInt("max_entries", 512), 1, 10_000);
+        ElfBytes loaded;
+        try { loaded = loadElfBytes(context, request, max); }
+        catch (IllegalArgumentException error) { return error("ELF_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseElfDynamic(loaded.bytes, maxEntries);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("dynamic", parsed)
+                .put("strategy", "bounded ELF dynamic table parsing; no native code execution");
     }
 
     private static JSONObject elfRelocations(Context context, JSONObject request) throws Exception {
@@ -828,6 +841,67 @@ public final class MemoryIntrospector {
                 .put("truncated", truncated).put("include_symtab", includeSymtab).put("section_headers_available", true);
     }
 
+    private static JSONObject parseElfDynamic(byte[] bytes, int maxEntries) throws Exception {
+        if (bytes.length < 64 || bytes[0] != 0x7f || bytes[1] != 'E' || bytes[2] != 'L' || bytes[3] != 'F') return error("NOT_ELF", "missing ELF magic");
+        int elfClass = bytes[4] & 0xff;
+        int data = bytes[5] & 0xff;
+        ByteOrder order = data == 2 ? ByteOrder.BIG_ENDIAN : ByteOrder.LITTLE_ENDIAN;
+        ByteBuffer b = ByteBuffer.wrap(bytes).order(order);
+        boolean is64 = elfClass == 2;
+        long shoff = is64 ? u64(b,40) : u32(b,32);
+        int shentsize = u16(b, is64 ? 58 : 46);
+        int shnum = u16(b, is64 ? 60 : 48);
+        JSONArray entries = new JSONArray();
+        JSONArray needed = new JSONArray();
+        JSONArray sections = new JSONArray();
+        String soname = null, rpath = null, runpath = null;
+        boolean truncated = false;
+        if (shoff <= 0 || shentsize <= 0 || shnum <= 0 || shoff + (long)shentsize * shnum > bytes.length) {
+            return ok().put("entries", entries).put("needed", needed).put("section_headers_available", false).put("count", 0);
+        }
+        for (int i = 0; i < shnum; i++) {
+            int sh = (int)(shoff + (long)i * shentsize);
+            long type = u32(b, sh + 4);
+            if (type != 6) continue; // SHT_DYNAMIC
+            long dynOffset, dynSize, dynEntSize; int link;
+            if (is64) { dynOffset = u64(b, sh + 24); dynSize = u64(b, sh + 32); link = (int)u32(b, sh + 40); dynEntSize = u64(b, sh + 56); }
+            else { dynOffset = u32(b, sh + 16); dynSize = u32(b, sh + 20); link = (int)u32(b, sh + 24); dynEntSize = u32(b, sh + 36); }
+            if (dynEntSize <= 0) dynEntSize = is64 ? 16 : 8;
+            if (dynOffset < 0 || dynSize < 0 || dynOffset + dynSize > bytes.length) continue;
+            long strOffset = 0, strSize = 0;
+            if (link >= 0 && link < shnum) {
+                int st = (int)(shoff + (long)link * shentsize);
+                if (is64) { strOffset = u64(b, st + 24); strSize = u64(b, st + 32); }
+                else { strOffset = u32(b, st + 16); strSize = u32(b, st + 20); }
+            }
+            sections.put(new JSONObject().put("index", i).put("offset", dynOffset).put("size", dynSize).put("entry_size", dynEntSize).put("string_section", link));
+            int count = (int)Math.min(dynSize / dynEntSize, 100_000);
+            for (int n = 0; n < count; n++) {
+                if (entries.length() >= maxEntries) { truncated = true; break; }
+                int off = (int)(dynOffset + (long)n * dynEntSize);
+                long tag = is64 ? b.getLong(off) : b.getInt(off);
+                long value = is64 ? u64(b, off + 8) : u32(b, off + 4);
+                String name = dynamicTagName(tag);
+                JSONObject item = new JSONObject().put("section", i).put("index", n).put("tag", tag).put("tag_name", name).put("value", hex(value));
+                if (tag == 0) { entries.put(item); break; }
+                if ((tag == 1 || tag == 14 || tag == 15 || tag == 29) && strSize > 0) {
+                    String s = strz(bytes, (int)strOffset, (int)Math.min(strSize, Integer.MAX_VALUE), (int)value);
+                    item.put("string", s);
+                    if (tag == 1) needed.put(s);
+                    else if (tag == 14) soname = s;
+                    else if (tag == 15) rpath = s;
+                    else if (tag == 29) runpath = s;
+                }
+                entries.put(item);
+            }
+            if (truncated) break;
+        }
+        return ok().put("count", entries.length()).put("entries", entries).put("sections", sections)
+                .put("needed", needed).put("soname", soname == null ? JSONObject.NULL : soname)
+                .put("rpath", rpath == null ? JSONObject.NULL : rpath).put("runpath", runpath == null ? JSONObject.NULL : runpath)
+                .put("truncated", truncated).put("section_headers_available", true);
+    }
+
     private static JSONObject parseElfRelocations(byte[] bytes, int maxRelocations, String filter) throws Exception {
         if (bytes.length < 64 || bytes[0] != 0x7f || bytes[1] != 'E' || bytes[2] != 'L' || bytes[3] != 'F') return error("NOT_ELF", "missing ELF magic");
         int elfClass = bytes[4] & 0xff;
@@ -924,6 +998,8 @@ public final class MemoryIntrospector {
             return strz(bytes, (int)strOffset, (int)Math.min(strSize, Integer.MAX_VALUE), nameOff);
         } catch (Throwable ignored) { return ""; }
     }
+    private static String dynamicTagName(long tag) { return switch ((int)tag) { case 0 -> "DT_NULL"; case 1 -> "DT_NEEDED"; case 2 -> "DT_PLTRELSZ"; case 3 -> "DT_PLTGOT"; case 4 -> "DT_HASH"; case 5 -> "DT_STRTAB"; case 6 -> "DT_SYMTAB"; case 7 -> "DT_RELA"; case 8 -> "DT_RELASZ"; case 9 -> "DT_RELAENT"; case 10 -> "DT_STRSZ"; case 11 -> "DT_SYMENT"; case 12 -> "DT_INIT"; case 13 -> "DT_FINI"; case 14 -> "DT_SONAME"; case 15 -> "DT_RPATH"; case 16 -> "DT_SYMBOLIC"; case 17 -> "DT_REL"; case 18 -> "DT_RELSZ"; case 19 -> "DT_RELENT"; case 20 -> "DT_PLTREL"; case 21 -> "DT_DEBUG"; case 22 -> "DT_TEXTREL"; case 23 -> "DT_JMPREL"; case 24 -> "DT_BIND_NOW"; case 25 -> "DT_INIT_ARRAY"; case 26 -> "DT_FINI_ARRAY"; case 27 -> "DT_INIT_ARRAYSZ"; case 28 -> "DT_FINI_ARRAYSZ"; case 29 -> "DT_RUNPATH"; case 30 -> "DT_FLAGS"; case 32 -> "DT_PREINIT_ARRAY"; case 33 -> "DT_PREINIT_ARRAYSZ"; case 0x6ffffef5 -> "DT_GNU_HASH"; case 0x6ffffff0 -> "DT_VERSYM"; case 0x6ffffffe -> "DT_VERNEED"; case 0x6fffffff -> "DT_VERNEEDNUM"; case 0x6ffffffb -> "DT_FLAGS_1"; default -> "DT_" + tag; }; }
+
     private static String relocationTypeName(long type, int machine) {
         if (machine == 183) return switch ((int)type) { case 0 -> "R_AARCH64_NONE"; case 257 -> "R_AARCH64_ABS64"; case 1025 -> "R_AARCH64_GLOB_DAT"; case 1026 -> "R_AARCH64_JUMP_SLOT"; case 1027 -> "R_AARCH64_RELATIVE"; case 1032 -> "R_AARCH64_TLSDESC"; case 1037 -> "R_AARCH64_IRELATIVE"; default -> "R_AARCH64_" + type; };
         if (machine == 62) return switch ((int)type) { case 0 -> "R_X86_64_NONE"; case 1 -> "R_X86_64_64"; case 6 -> "R_X86_64_GLOB_DAT"; case 7 -> "R_X86_64_JUMP_SLOT"; case 8 -> "R_X86_64_RELATIVE"; default -> "R_X86_64_" + type; };
