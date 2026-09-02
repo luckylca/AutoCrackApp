@@ -56,3 +56,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | ELF metadata / Build-ID | Complete for file-backed ELF/APK-entry parsing | `memory.elf.info`, `memory-dump elf-info`; parses headers, PT_LOAD, PT_NOTE GNU Build-ID without executing code; device self-test PASS |
 
 | Dump output files | Complete for current base64/text dump commands | `memory-dump --output` writes single blobs, logical XML text, and module segment directories; prevents large base64-only workflows |
+| File-backed ELF info | Complete for bounded file/APK ELF metadata | `memory.elf.info`, `memory-dump elf-info`; device self-test PASS on APK-embedded `libautocrack_runtime_native.so` |

@@ -621,6 +621,7 @@ public final class MemoryIntrospector {
         int machine = u16(b,18);
         JSONObject out = new JSONObject()
                 .put("class", is64 ? "ELF64" : "ELF32")
+                .put("bits", is64 ? 64 : 32)
                 .put("endian", data == 2 ? "big" : "little")
                 .put("type", u16(b,16))
                 .put("machine", machine)
@@ -636,6 +637,7 @@ public final class MemoryIntrospector {
                 .put("shentsize", shentsize)
                 .put("shnum", shnum)
                 .put("shstrndx", shstrndx);
+        JSONArray programHeaders = new JSONArray();
         JSONArray loads = new JSONArray();
         JSONArray notes = new JSONArray();
         String buildId = null;
@@ -651,7 +653,11 @@ public final class MemoryIntrospector {
                 } else {
                     pOffset = u32(b, off + 4); vaddr = u32(b, off + 8); fileSize = u32(b, off + 16); memSize = u32(b, off + 20); pFlags = u32(b, off + 24); align = u32(b, off + 28);
                 }
-                if (type == 1) loads.put(new JSONObject().put("index", i).put("offset", pOffset).put("vaddr", hex(vaddr)).put("filesz", fileSize).put("memsz", memSize).put("flags", hex(pFlags)).put("align", align));
+                JSONObject ph = new JSONObject().put("index", i).put("type", type).put("type_name", phdrTypeName(type))
+                        .put("offset", pOffset).put("vaddr", hex(vaddr)).put("filesz", fileSize).put("memsz", memSize)
+                        .put("flags", hex(pFlags)).put("flags_rwx", phdrFlags(pFlags)).put("align", align);
+                programHeaders.put(ph);
+                if (type == 1) loads.put(ph);
                 if (type == 4) {
                     JSONObject note = new JSONObject().put("index", i).put("offset", pOffset).put("filesz", fileSize);
                     String found = parseBuildIdNote(bytes, (int)pOffset, (int)Math.min(fileSize, Integer.MAX_VALUE), order);
@@ -660,7 +666,10 @@ public final class MemoryIntrospector {
                 }
             }
         } else if (phnum > 0) phTruncated = true;
-        return out.put("load_segments", loads).put("note_segments", notes).put("gnu_build_id", buildId == null ? JSONObject.NULL : buildId).put("program_headers_truncated", phTruncated);
+        return out.put("program_headers", programHeaders)
+                .put("load_segments", loads).put("note_segments", notes)
+                .put("gnu_build_id", buildId == null ? JSONObject.NULL : buildId)
+                .put("program_headers_truncated", phTruncated);
     }
 
     private static String parseBuildIdNote(byte[] bytes, int offset, int size, ByteOrder order) {
@@ -687,6 +696,8 @@ public final class MemoryIntrospector {
     private static long u64(ByteBuffer b, int off) { return b.getLong(off); }
     private static String hexBytes(byte[] bytes, int off, int len) { StringBuilder out = new StringBuilder(len * 2); for (int i=0;i<len && off+i<bytes.length;i++) out.append(String.format("%02x", bytes[off+i] & 0xff)); return out.toString(); }
     private static String machineName(int machine) { return switch (machine) { case 3 -> "EM_386"; case 40 -> "EM_ARM"; case 62 -> "EM_X86_64"; case 183 -> "EM_AARCH64"; default -> "EM_" + machine; }; }
+    private static String phdrTypeName(long type) { return switch ((int)type) { case 0 -> "PT_NULL"; case 1 -> "PT_LOAD"; case 2 -> "PT_DYNAMIC"; case 3 -> "PT_INTERP"; case 4 -> "PT_NOTE"; case 5 -> "PT_SHLIB"; case 6 -> "PT_PHDR"; case 7 -> "PT_TLS"; case 0x6474e550 -> "PT_GNU_EH_FRAME"; case 0x6474e551 -> "PT_GNU_STACK"; case 0x6474e552 -> "PT_GNU_RELRO"; case 0x6474e553 -> "PT_GNU_PROPERTY"; default -> "PT_" + type; }; }
+    private static String phdrFlags(long flags) { StringBuilder out = new StringBuilder(3); out.append((flags & 4) != 0 ? 'r' : '-'); out.append((flags & 2) != 0 ? 'w' : '-'); out.append((flags & 1) != 0 ? 'x' : '-'); return out.toString(); }
 
     private static byte[] readFile(File file,int max)throws Exception{try(InputStream in=new FileInputStream(file)){return readLimited(in,max);}}
     private static byte[] readLimited(InputStream in,int max)throws Exception{ByteArrayOutputStream out=new ByteArrayOutputStream(Math.min(max,65536));byte[] buffer=new byte[16384];while(out.size()<max){int n=in.read(buffer,0,Math.min(buffer.length,max-out.size()));if(n<0)break;out.write(buffer,0,n);}return out.toByteArray();}

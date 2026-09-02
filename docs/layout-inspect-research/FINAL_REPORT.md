@@ -435,3 +435,25 @@ Validation:
 - Help assertions passed for all output-enabled commands.
 - Local unit checks verified base64 byte output, XML text output, and segmented module output.
 - `memory-dump` Toolpack rebuild passed.
+## 17. Stage 13 file-backed ELF header / Build-ID parsing
+
+`memory.elf.info` was added for a bounded, non-executing ELF inspection path. It supports ordinary filesystem ELF paths and APK-embedded native libraries such as `base.apk!/lib/arm64-v8a/libfoo.so`. This complements `memory.native.modules` and `control.so.dlsym`: it inspects file-backed ELF metadata instead of executing code or enumerating already-loaded linker state.
+
+Implemented coverage:
+
+- Runtime capability: `memory.elf.info`.
+- Toolpack command: `memory-dump elf-info`.
+- Input sources: absolute file `path`, `apk_path + entry`, installed APK source selection, and `base.apk!/entry` style paths.
+- ELF header fields: class, bits, endian, type, machine, entry, flags, EH/PH/SH sizes and counts.
+- Program headers: all PHDR records with type/type_name, offset, vaddr, filesz, memsz, rwx flags, and alignment.
+- LOAD/NOTE convenience arrays.
+- GNU build-id note parsing when present.
+
+Device evidence on `a4976c80` / API 36:
+
+- `runtime_execute_self(memory.elf.info)` parsed `lib/arm64-v8a/libautocrack_runtime_native.so` from the installed runtime APK.
+- Result: `ELF64`, `bits=64`, `machine=183 / EM_AARCH64`, `phnum=9`, `program_headers=9`, `load_segments=3`, `gnu_build_id=89d021ea6f492c3cbca67001f0d1f97d4541e0a9`.
+
+Boundary:
+
+- This is file-backed metadata parsing only. It does not replace runtime memory relocation reconstruction and does not bypass linker namespace restrictions.
