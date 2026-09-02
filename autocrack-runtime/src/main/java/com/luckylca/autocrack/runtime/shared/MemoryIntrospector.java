@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.res.AssetManager;
 import android.content.res.XmlResourceParser;
 import android.util.Base64;
+import android.util.TypedValue;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -39,7 +40,7 @@ public final class MemoryIntrospector {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump",
                 "memory.dex.list", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
-                "memory.xml.pull", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
+                "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
     public static JSONObject execute(Context context, JSONObject request) throws Exception {
@@ -56,6 +57,7 @@ public final class MemoryIntrospector {
             case "memory.assets.list" -> assetsList(context, request);
             case "memory.assets.pull" -> assetsPull(context, request);
             case "memory.xml.pull" -> xmlPull(context, request);
+            case "memory.xml.binary" -> xmlBinary(context, request);
             case "memory.apk.entries" -> apkEntries(context, request);
             case "memory.apk.pull" -> apkPull(context, request);
             case "memory.capabilities" -> capabilities(context);
@@ -268,6 +270,40 @@ public final class MemoryIntrospector {
                 .put("binary_axml",false).put("warning","Native XmlBlock/ResXMLTree byte recovery remains capability-gated.");
     }
 
+    private static JSONObject xmlBinary(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
+        Context apkContext = apkContext(context, request);
+        String requestedEntry = request.optString("entry", "");
+        String entry;
+        JSONObject resource = new JSONObject();
+        if (!requestedEntry.isBlank()) {
+            entry = normalizeZipEntry(requestedEntry);
+        } else {
+            int id = request.optInt("resource_id", 0);
+            if (id == 0) return unsupported("memory.xml.binary", "resource_id or entry is required", new JSONArray().put("APK file-backed binary XML by resource path").put("Resources.getValue(resourceId) path discovery"));
+            TypedValue value = new TypedValue();
+            apkContext.getResources().getValue(id, value, true);
+            CharSequence text = value.string;
+            if (text == null) return unsupported("memory.xml.binary", "resource does not expose a string path: " + id, new JSONArray().put("Resources.getValue(resourceId).string").put("native XmlBlock/ResXMLTree memory recovery not implemented"));
+            entry = normalizeZipEntry(text.toString());
+            resource.put("resource_id", id)
+                    .put("resource_name", safeResourceName(apkContext, id))
+                    .put("typed_value_string", text.toString())
+                    .put("asset_cookie", value.assetCookie)
+                    .put("type", value.type);
+        }
+        if (!entry.endsWith(".xml")) return error("NOT_XML_ENTRY", entry);
+        JSONObject pulled = pullApkEntryAnySource(apkContext, entry, max);
+        if (!pulled.optBoolean("ok", false)) return pulled;
+        return pulled.put("resource", resource)
+                .put("binary_axml", true)
+                .put("memory_reconstruction", false)
+                .put("strategy", requestedEntry.isBlank()
+                        ? "Resources.getValue(resourceId) -> APK ZipFile raw binary XML"
+                        : "APK ZipFile raw binary XML by entry")
+                .put("warning", "This returns file-backed binary AXML bytes from the APK, not a native XmlBlock/ResXMLTree memory reconstruction.");
+    }
+
     private static JSONObject capabilities(Context context) throws Exception {
         boolean bridgeLoaded = context != null && NativeBridge.ensureLoaded(context);
         return ok().put("api_level",android.os.Build.VERSION.SDK_INT)
@@ -280,18 +316,20 @@ public final class MemoryIntrospector {
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
+                .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
                 .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"))
                 .put("apk_entries",status(true,"base/split APK ZipFile entry enumeration and bounded entry pull"));
     }
 
 
     private static JSONObject apkEntries(Context context, JSONObject request) throws Exception {
+        Context apkContext = apkContext(context, request);
         String prefix = normalizeZipEntry(request.optString("prefix", ""));
         int max = clamp(request.optInt("max_entries", 5000), 1, 50000);
         JSONArray sources = new JSONArray();
         JSONArray entries = new JSONArray();
         boolean truncated = false;
-        for (ApkSource source : apkSources(context)) {
+        for (ApkSource source : apkSources(apkContext, request)) {
             sources.put(source.json());
             try (ZipFile zip = new ZipFile(source.path)) {
                 java.util.Enumeration<? extends ZipEntry> all = zip.entries();
@@ -319,11 +357,12 @@ public final class MemoryIntrospector {
     }
 
     private static JSONObject apkPull(Context context, JSONObject request) throws Exception {
+        Context apkContext = apkContext(context, request);
         String sourceLabel = request.optString("source", "base");
         String name = normalizeZipEntry(request.getString("entry"));
         if (name.isBlank()) return error("ENTRY_REQUIRED", "entry is required");
         int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
-        for (ApkSource source : apkSources(context)) {
+        for (ApkSource source : apkSources(apkContext, request)) {
             if (!source.label.equals(sourceLabel) && !source.path.equals(sourceLabel)) continue;
             try (ZipFile zip = new ZipFile(source.path)) {
                 ZipEntry entry = zip.getEntry(name);
@@ -342,8 +381,44 @@ public final class MemoryIntrospector {
         return error("APK_SOURCE_NOT_FOUND", sourceLabel);
     }
 
+    private static Context apkContext(Context context, JSONObject request) throws Exception {
+        String packageName = request.optString("apk_package", "").trim();
+        if (packageName.isEmpty() || packageName.equals(context.getPackageName())) return context;
+        return context.createPackageContext(packageName, Context.CONTEXT_IGNORE_SECURITY);
+    }
+
+    private static JSONObject pullApkEntryAnySource(Context context, String name, int max) throws Exception {
+        for (ApkSource source : apkSources(context, null)) {
+            try (ZipFile zip = new ZipFile(source.path)) {
+                ZipEntry entry = zip.getEntry(name);
+                if (entry == null || entry.isDirectory()) continue;
+                if (entry.getSize() > max) return error("ENTRY_TOO_LARGE", "entry exceeds inline max_bytes: " + entry.getSize());
+                try (InputStream in = zip.getInputStream(entry)) {
+                    byte[] bytes = readLimited(in, max + 1);
+                    if (bytes.length > max) return error("ENTRY_TOO_LARGE", "entry exceeds inline max_bytes");
+                    return ok().put("source", source.label).put("apk_path", source.path).put("entry", name)
+                            .put("size", bytes.length).put("sha256", sha256(bytes))
+                            .put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                }
+            }
+        }
+        return error("ENTRY_NOT_FOUND", name);
+    }
+
+    private static String safeResourceName(Context context, int id) {
+        try { return context.getResources().getResourceName(id); } catch (Throwable ignored) { return ""; }
+    }
+
     private static List<ApkSource> apkSources(Context context) {
+        return apkSources(context, null);
+    }
+
+    private static List<ApkSource> apkSources(Context context, JSONObject request) {
         ArrayList<ApkSource> out = new ArrayList<>();
+        if (request != null) {
+            String explicit = request.optString("apk_path", "").trim();
+            if (!explicit.isEmpty()) { out.add(new ApkSource("explicit", explicit)); return out; }
+        }
         if (context.getApplicationInfo().sourceDir != null) out.add(new ApkSource("base", context.getApplicationInfo().sourceDir));
         String[] splits = context.getApplicationInfo().splitSourceDirs;
         if (splits != null) for (int i = 0; i < splits.length; i++) if (splits[i] != null) out.add(new ApkSource("split_" + i, splits[i]));

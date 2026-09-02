@@ -268,4 +268,28 @@ Still not claimed complete:
 - DRM/vendor secure-surface bypass.
 - Compose Semantics tree extraction.
 
+
+## 12. Stage 8 file-backed binary XML extraction
+
+`memory.xml.binary` was added to close a practical part of the original Layout Inspect XML-dump workflow without falsely claiming native `XmlBlock` memory reconstruction.
+
+Added capabilities:
+
+- `memory.xml.binary` accepts either `entry` or `resource_id`.
+- `resource_id` resolution uses `Resources.getValue(resourceId, TypedValue, true)` to find the packaged XML path.
+- `entry` extraction returns raw APK-backed binary AXML bytes from base/split APK sources.
+- `apk_package` and `apk_path` let the runtime provider inspect another installed APK or an explicit APK path when target-process polling is unavailable.
+- `memory.apk.entries` and `memory.apk.pull` share the same `apk_package` / `apk_path` source selection.
+- `res/xml/autocrack_runtime_probe.xml` was added to the runtime APK as a stable binary XML probe resource.
+
+Device validation:
+
+- `runtime_execute_self(memory.xml.binary)` extracted `res/xml/autocrack_runtime_probe.xml` from the installed runtime APK.
+- Returned metadata included `binary_axml=true`, `memory_reconstruction=false`, `encoding=base64`, `size=340`, and SHA-256 `62c63b30f0e773b1511f223cbe6ff5c7e11e7fc983afa33839147530059c1400`.
+- `runtime_execute_self(memory.apk.entries)` with prefix `res/xml` returned the probe XML entry.
+
+Boundary:
+
+This is file-backed APK binary XML extraction. It is useful for layouts, XML resources, manifests, and split APK resources, but it is still not native in-memory `XmlBlock` / `ResXMLTree` recovery.
+
 These additions improve the rootfs CLI replacement path, but they are still not a complete native clone of Layout Inspect. ART Dex reconstruction, binary XmlBlock/ResXMLTree recovery, linker namespace bypass/dlopen internals, and Compose Semantics extraction remain explicitly version-gated or unsupported until implemented and verified on a real device.

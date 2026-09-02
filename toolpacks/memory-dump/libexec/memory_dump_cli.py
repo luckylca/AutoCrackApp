@@ -20,8 +20,9 @@ def parser():
     al=sub.add_parser("assets-list"); add_target(al); al.add_argument("path", nargs="?", default=""); al.add_argument("--max-assets", type=int, default=20000)
     ap=sub.add_parser("assets-pull"); add_target(ap); ap.add_argument("path"); ap.add_argument("--max-bytes", type=int, default=4194304)
     xp=sub.add_parser("xml-pull"); add_target(xp); xp.add_argument("resource_id", type=int)
-    ae=sub.add_parser("apk-entries"); add_target(ae); ae.add_argument("--prefix", default=""); ae.add_argument("--max-entries", type=int, default=5000)
-    apkp=sub.add_parser("apk-pull"); add_target(apkp); apkp.add_argument("entry"); apkp.add_argument("--source", default="base"); apkp.add_argument("--max-bytes", type=int, default=4194304)
+    xb=sub.add_parser("xml-binary"); add_target(xb); xb.add_argument("--resource-id", type=lambda x:int(x,0), default=0); xb.add_argument("--entry", default=""); xb.add_argument("--apk-package", default=""); xb.add_argument("--apk-path", default=""); xb.add_argument("--max-bytes", type=int, default=4194304)
+    ae=sub.add_parser("apk-entries"); add_target(ae); ae.add_argument("--prefix", default=""); ae.add_argument("--apk-package", default=""); ae.add_argument("--apk-path", default=""); ae.add_argument("--max-entries", type=int, default=5000)
+    apkp=sub.add_parser("apk-pull"); add_target(apkp); apkp.add_argument("entry"); apkp.add_argument("--source", default="base"); apkp.add_argument("--apk-package", default=""); apkp.add_argument("--apk-path", default=""); apkp.add_argument("--max-bytes", type=int, default=4194304)
     return p
 
 def execute(a):
@@ -38,8 +39,9 @@ def execute(a):
     if a.command=="assets-list": return runtime_request(target_payload(a,"memory.assets.list", path=a.path, max_assets=a.max_assets), a.timeout)
     if a.command=="assets-pull": return runtime_request(target_payload(a,"memory.assets.pull", path=a.path, max_bytes=a.max_bytes), a.timeout)
     if a.command=="xml-pull": return runtime_request(target_payload(a,"memory.xml.pull", resource_id=a.resource_id), a.timeout)
-    if a.command=="apk-entries": return runtime_request(target_payload(a,"memory.apk.entries", prefix=a.prefix, max_entries=a.max_entries), a.timeout)
-    if a.command=="apk-pull": return runtime_request(target_payload(a,"memory.apk.pull", entry=a.entry, source=a.source, max_bytes=a.max_bytes), a.timeout)
+    if a.command=="xml-binary": return runtime_request(target_payload(a,"memory.xml.binary", resource_id=a.resource_id, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
+    if a.command=="apk-entries": return runtime_request(target_payload(a,"memory.apk.entries", prefix=a.prefix, apk_package=a.apk_package, apk_path=a.apk_path, max_entries=a.max_entries), a.timeout)
+    if a.command=="apk-pull": return runtime_request(target_payload(a,"memory.apk.pull", entry=a.entry, source=a.source, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
     raise CliError("INVALID_COMMAND", a.command)
 
 def main(argv=None):
