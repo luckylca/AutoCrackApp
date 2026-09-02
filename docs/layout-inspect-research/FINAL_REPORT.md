@@ -215,5 +215,6 @@ After the first consolidation commit, the UI/runtime-control surface was extende
 - Expanded `ui.action` with enable/clickable/focus/invalidate/text/hint/image/WebView aliases and mutation operations.
 - `control.object.field.set` for bounded scalar field writes through ObjectRegistry handles.
 - `control.object.method.call` for bounded reflected method invocation with exact argument types and scalar JSON arguments.
+- `runtime.activities` now includes lifecycle timing/order metadata from the shared ActivityRegistry, improving Activity Records parity.
 
 These additions improve the rootfs CLI replacement path, but they are still not a complete native clone of Layout Inspect. ART Dex reconstruction, binary XmlBlock/ResXMLTree recovery, linker namespace bypass/dlopen internals, and Compose Semantics extraction remain explicitly version-gated or unsupported until implemented and verified on a real device.

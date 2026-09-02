@@ -82,7 +82,7 @@ public final class RuntimeIntrospector {
             Activity activity = snapshot.activity();
             if (activity == null || seen.containsKey(activity)) continue;
             seen.put(activity, Boolean.TRUE);
-            values.put(activityJson(activity, snapshot.state(), "lifecycle_callback"));
+            values.put(activityJson(activity, snapshot.state(), "lifecycle_callback", snapshot));
         }
         int reflectedRecords = 0;
         JSONArray reflectionErrors = new JSONArray();
@@ -98,7 +98,7 @@ public final class RuntimeIntrospector {
                     Object value = readField(record, "activity");
                     if (!(value instanceof Activity activity) || seen.containsKey(activity)) continue;
                     seen.put(activity, Boolean.TRUE);
-                    values.put(activityJson(activity, reflectedState(record), "ActivityThread.mActivities"));
+                    values.put(activityJson(activity, reflectedState(record), "ActivityThread.mActivities", null));
                 }
             }
         } catch (Throwable error) {
@@ -109,7 +109,7 @@ public final class RuntimeIntrospector {
                 .put("activity_thread_errors", reflectionErrors);
     }
 
-    private static JSONObject activityJson(Activity activity, String state, String source) throws Exception {
+    private static JSONObject activityJson(Activity activity, String state, String source, ActivityRegistry.ActivitySnapshot snapshot) throws Exception {
         JSONObject value = new JSONObject()
                 .put("class", activity.getClass().getName())
                 .put("handle", ObjectRegistry.get().put(activity, false, "runtime"))
@@ -118,6 +118,14 @@ public final class RuntimeIntrospector {
                 .put("task_id", activity.getTaskId())
                 .put("finishing", activity.isFinishing());
         if (Build.VERSION.SDK_INT >= 17) value.put("destroyed", activity.isDestroyed());
+        if (snapshot != null) value.put("lifecycle", new JSONObject()
+                .put("first_seen_at", snapshot.firstSeenAt())
+                .put("last_state_at", snapshot.lastStateAt())
+                .put("last_resumed_at", snapshot.lastResumedAt() == 0L ? JSONObject.NULL : snapshot.lastResumedAt())
+                .put("last_paused_at", snapshot.lastPausedAt() == 0L ? JSONObject.NULL : snapshot.lastPausedAt())
+                .put("last_stopped_at", snapshot.lastStoppedAt() == 0L ? JSONObject.NULL : snapshot.lastStoppedAt())
+                .put("event_order", snapshot.eventOrder())
+                .put("event_count", snapshot.eventCount()));
         Intent intent = activity.getIntent();
         if (intent != null) value.put("intent", intent(intent));
         return value;
