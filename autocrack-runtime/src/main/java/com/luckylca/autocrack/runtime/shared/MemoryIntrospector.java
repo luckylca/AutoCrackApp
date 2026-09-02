@@ -127,7 +127,7 @@ public final class MemoryIntrospector {
         for (ClassLoader loader : ClassLoaderRegistry.get().snapshot()) {
             String handle = ObjectRegistry.get().put(loader, false, "classloader");
             if (selected != null && !selected.isBlank() && !selected.equals(handle)) continue;
-            JSONArray dex = RuntimeIntrospector.dexElements(loader, MAX_DEX, false);
+            JSONArray dex = RuntimeIntrospector.dexElements(loader, MAX_DEX, request.optBoolean("include_class_count", false));
             for (int i=0;i<dex.length();i++) {
                 JSONObject item=dex.getJSONObject(i); String dexHandle=item.optString("dex_handle", null);
                 if (dexHandle != null) {

@@ -16,6 +16,7 @@ import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -41,7 +42,7 @@ public final class WebControlIntrospector {
         return Set.of(
                 "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result",
                 "control.secure.status", "control.secure.disable", "control.so.inject",
-                "control.activity.start", "control.process.kill").contains(kind);
+                "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
 
     public static JSONObject execute(Context context, JSONObject request) throws Exception {
@@ -56,6 +57,8 @@ public final class WebControlIntrospector {
             case "control.so.inject" -> injectSo(request);
             case "control.activity.start" -> startActivity(context, request);
             case "control.process.kill" -> killProcess(request);
+            case "control.object.field.set" -> objectFieldSet(request);
+            case "control.object.method.call" -> objectMethodCall(request);
             default -> error("UNSUPPORTED_KIND", request.optString("kind"));
         };
     }
@@ -199,6 +202,154 @@ public final class WebControlIntrospector {
                 .put("note", "Delayed so the request result can be committed before process termination.");
     }
 
+
+    private static JSONObject objectFieldSet(JSONObject request) throws Exception {
+        String handle = request.optString("handle", "");
+        Object target = ObjectRegistry.get().get(handle);
+        if (target == null) return error("STALE_HANDLE", handle);
+        String name = request.optString("field", "");
+        if (name.isBlank()) return error("FIELD_REQUIRED", "field is required");
+        String declaring = request.optString("declaring_class", "");
+        Field field = findFieldForWrite(target.getClass(), name, declaring);
+        if (field == null) return error("FIELD_NOT_FOUND", (declaring.isBlank() ? target.getClass().getName() : declaring) + "#" + name);
+        field.setAccessible(true);
+        Object receiver = Modifier.isStatic(field.getModifiers()) ? null : target;
+        Object before = null;
+        try { before = field.get(receiver); } catch (Throwable ignored) {}
+        Object raw = request.has("value") ? request.get("value") : JSONObject.NULL;
+        Object coerced = coerceJsonValue(raw, field.getType());
+        field.set(receiver, coerced);
+        Object after = null;
+        try { after = field.get(receiver); } catch (Throwable ignored) {}
+        return ok().put("handle", handle)
+                .put("class", target.getClass().getName())
+                .put("declaring_class", field.getDeclaringClass().getName())
+                .put("field", field.getName())
+                .put("type", field.getType().getName())
+                .put("static", Modifier.isStatic(field.getModifiers()))
+                .put("value_before", summarizeValue(before))
+                .put("value_after", summarizeValue(after))
+                .put("persistent", false)
+                .put("strategy", "bounded reflection field write in target runtime");
+    }
+
+    private static Field findFieldForWrite(Class<?> type, String name, String declaring) {
+        for (Class<?> cursor = type; cursor != null; cursor = cursor.getSuperclass()) {
+            if (!declaring.isBlank() && !cursor.getName().equals(declaring)) continue;
+            try { return cursor.getDeclaredField(name); } catch (NoSuchFieldException ignored) {}
+        }
+        return null;
+    }
+
+    private static Object coerceJsonValue(Object raw, Class<?> type) throws Exception {
+        if (raw == null || raw == JSONObject.NULL) {
+            if (type.isPrimitive()) throw new IllegalArgumentException("Cannot assign null to primitive " + type.getName());
+            return null;
+        }
+        if (type == String.class || CharSequence.class.isAssignableFrom(type)) return String.valueOf(raw);
+        if (type == boolean.class || type == Boolean.class) {
+            if (raw instanceof Boolean b) return b;
+            return Boolean.parseBoolean(String.valueOf(raw));
+        }
+        if (type == byte.class || type == Byte.class) return ((Number) number(raw, type)).byteValue();
+        if (type == short.class || type == Short.class) return ((Number) number(raw, type)).shortValue();
+        if (type == int.class || type == Integer.class) return ((Number) number(raw, type)).intValue();
+        if (type == long.class || type == Long.class) return ((Number) number(raw, type)).longValue();
+        if (type == float.class || type == Float.class) return ((Number) number(raw, type)).floatValue();
+        if (type == double.class || type == Double.class) return ((Number) number(raw, type)).doubleValue();
+        if (type == char.class || type == Character.class) {
+            String text = String.valueOf(raw);
+            if (text.length() != 1) throw new IllegalArgumentException("char field requires a one-character string");
+            return text.charAt(0);
+        }
+        if (type.isEnum()) {
+            String wanted = String.valueOf(raw);
+            Object[] constants = type.getEnumConstants();
+            if (constants != null) for (Object item : constants) if (((Enum<?>) item).name().equals(wanted)) return item;
+            throw new IllegalArgumentException("Unknown enum constant " + wanted + " for " + type.getName());
+        }
+        throw new IllegalArgumentException("Unsupported field write type " + type.getName() + "; use SimpleHook or a typed mutator for complex object assignment");
+    }
+
+    private static Number number(Object raw, Class<?> targetType) {
+        if (raw instanceof Number n) return n;
+        String text = String.valueOf(raw).trim();
+        try {
+            if (targetType == float.class || targetType == Float.class || targetType == double.class || targetType == Double.class) return Double.parseDouble(text);
+            if (text.startsWith("0x") || text.startsWith("0X")) return Long.parseLong(text.substring(2), 16);
+            return Long.parseLong(text);
+        } catch (NumberFormatException error) {
+            throw new IllegalArgumentException("Invalid numeric value for " + targetType.getName() + ": " + raw);
+        }
+    }
+
+    private static Object summarizeValue(Object value) throws Exception {
+        if (value == null) return JSONObject.NULL;
+        Class<?> type = value.getClass();
+        if (type.isPrimitive() || value instanceof Number || value instanceof Boolean || value instanceof CharSequence || value instanceof Character || value instanceof Enum<?>) return cut(String.valueOf(value));
+        return new JSONObject().put("class", type.getName()).put("text", cut(String.valueOf(value))).put("handle", ObjectRegistry.get().put(value, false, "object"));
+    }
+
+
+    private static JSONObject objectMethodCall(JSONObject request) throws Exception {
+        String handle = request.optString("handle", "");
+        Object target = ObjectRegistry.get().get(handle);
+        if (target == null) return error("STALE_HANDLE", handle);
+        String name = request.optString("method", "");
+        if (name.isBlank()) return error("METHOD_REQUIRED", "method is required");
+        String declaring = request.optString("declaring_class", "");
+        JSONArray argValues = request.optJSONArray("args");
+        JSONArray argTypes = request.optJSONArray("arg_types");
+        if (argValues == null) argValues = new JSONArray();
+        if (argTypes == null) argTypes = new JSONArray();
+        if (argValues.length() != argTypes.length()) return error("ARG_MISMATCH", "args and arg_types must have the same length");
+        if (argValues.length() > 16) return error("TOO_MANY_ARGS", "method call supports at most 16 arguments");
+        Class<?>[] parameterTypes = new Class<?>[argTypes.length()];
+        Object[] values = new Object[argValues.length()];
+        ClassLoader loader = target.getClass().getClassLoader();
+        for (int i = 0; i < argTypes.length(); i++) {
+            parameterTypes[i] = resolveType(argTypes.getString(i), loader);
+            values[i] = coerceJsonValue(argValues.get(i), parameterTypes[i]);
+        }
+        Method method = findMethodForCall(target.getClass(), name, declaring, parameterTypes);
+        if (method == null) return error("METHOD_NOT_FOUND", (declaring.isBlank() ? target.getClass().getName() : declaring) + "#" + name);
+        method.setAccessible(true);
+        Object receiver = Modifier.isStatic(method.getModifiers()) ? null : target;
+        Object result = method.invoke(receiver, values);
+        return ok().put("handle", handle)
+                .put("class", target.getClass().getName())
+                .put("declaring_class", method.getDeclaringClass().getName())
+                .put("method", method.getName())
+                .put("return_type", method.getReturnType().getName())
+                .put("static", Modifier.isStatic(method.getModifiers()))
+                .put("result", method.getReturnType() == Void.TYPE ? JSONObject.NULL : summarizeValue(result))
+                .put("persistent", false)
+                .put("strategy", "bounded reflection method call in target runtime");
+    }
+
+    private static Method findMethodForCall(Class<?> type, String name, String declaring, Class<?>[] parameters) {
+        for (Class<?> cursor = type; cursor != null; cursor = cursor.getSuperclass()) {
+            if (!declaring.isBlank() && !cursor.getName().equals(declaring)) continue;
+            try { return cursor.getDeclaredMethod(name, parameters); } catch (NoSuchMethodException ignored) {}
+        }
+        return null;
+    }
+
+    private static Class<?> resolveType(String name, ClassLoader loader) throws ClassNotFoundException {
+        return switch (name) {
+            case "boolean" -> boolean.class;
+            case "byte" -> byte.class;
+            case "short" -> short.class;
+            case "int" -> int.class;
+            case "long" -> long.class;
+            case "float" -> float.class;
+            case "double" -> double.class;
+            case "char" -> char.class;
+            case "void" -> void.class;
+            default -> Class.forName(name, false, loader == null ? WebControlIntrospector.class.getClassLoader() : loader);
+        };
+    }
+
     private static WebView requireWebView(String handle) {
         if (!handle.isBlank()) { Object value = ObjectRegistry.get().get(handle); return value instanceof WebView web ? web : null; }
         List<WebView> all = findWebViews(); return all.isEmpty() ? null : all.get(0);
@@ -247,6 +398,7 @@ public final class WebControlIntrospector {
 
     private static void pruneEvals(){long cutoff=System.currentTimeMillis()-60_000L;EVALS.entrySet().removeIf(e->e.getValue().createdAt<cutoff);}
     private static Object nullable(String value){return value==null?JSONObject.NULL:value;}
+    private static String cut(String value){return value!=null&&value.length()>2048?value.substring(0,2048):value;}
     private static String safe(ThrowingString action){try{return action.get();}catch(Throwable ignored){return null;}}
     private static JSONObject ok()throws Exception{return new JSONObject().put("ok",true);}private static JSONObject error(String c,String m)throws Exception{return new JSONObject().put("ok",false).put("error",new JSONObject().put("code",c).put("message",m));}
     private interface ThrowingString{String get()throws Throwable;}

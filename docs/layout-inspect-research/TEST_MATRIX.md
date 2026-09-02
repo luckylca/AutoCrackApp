@@ -38,3 +38,13 @@ Failures caused by an unsupported API-specific strategy are recorded as
 - Zip/manifest validation passed: each package contains `manifest.json` and `payload.zip`, payload SHA/size match, and schema-v2 packages contain `requires`.
 - Python `pytest` was not available in the current Python 3.14/3.13 environments, so pytest-based tests were not executed.
 - Real-device install/runtime/cross-tool validation was not executed because no Android bridge command was available in the current Runner.
+
+
+## Stage 2 host validation
+
+| Layer | Status | Evidence |
+|---|---|---|
+| UI relationships/find | PASS(host build) | `:autocrack-runtime:assembleDebug` after adding `ui.find`, `ui.parent`, `ui.children`, `ui.siblings` |
+| Runtime object control | PASS(host build) | `:autocrack-runtime:assembleDebug` after adding `control.object.field.set` and `control.object.method.call` |
+| CLI discovery | PASS(host) | `ui-inspect find --help`, `runtime-control object-field-set --help`, `runtime-control object-method-call --help` |
+| Device behavior | BLOCKED | Android host bridge is unavailable in the current WebCodex/Mac session; must run device matrix once bridge variables are present. |

@@ -29,3 +29,10 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 ## Strategy boundaries
 
 `so-inject` uses target-process `System.load` and reports linker namespace/ABI/SELinux failures directly. `secure-disable` clears `Window.FLAG_SECURE` on known Activity windows; private SurfaceControl, DRM, and vendor-secure producers are reported as outside the stable Java strategy.
+
+
+## Object control
+
+`runtime-control object-field-set --package PKG HANDLE FIELD --value-json JSON` writes a scalar field through a runtime object handle. Supported field types are String/CharSequence, primitive/boxed numeric types, boolean, char, enum names, and null for non-primitive fields. Complex object construction is intentionally rejected.
+
+`runtime-control object-method-call --package PKG HANDLE METHOD --arg-types-json JSON --args-json JSON` invokes an explicitly named reflected method with at most 16 scalar arguments. The caller must provide exact parameter type names. This is a bounded runtime-control feature and returns a summarized result or object handle.

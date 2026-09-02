@@ -57,12 +57,12 @@ public final class RuntimeDispatcher {
     public static JSONObject capabilities() throws Exception {
         JSONArray supported = new JSONArray();
         for (String capability : List.of(
-                "ui.windows","ui.tree","ui.at","ui.props","ui.listeners","ui.stack","ui.image","ui.action","ui.compose.status",
+                "ui.windows","ui.tree","ui.at","ui.find","ui.props","ui.parent","ui.children","ui.siblings","ui.listeners","ui.stack","ui.image","ui.image.result","ui.action","ui.compose.status",
                 "runtime.process","runtime.activities","runtime.declared_activities","runtime.classloaders","runtime.class.search","runtime.class.describe",
                 "object.describe","object.fields","object.dump","object.pin","object.release","object.clear_session",
                 "memory.maps","memory.modules","memory.read","memory.module.dump","memory.dex.list","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull",
                 "webview.list","webview.info","webview.debug","webview.eval",
-                "control.secure.status","control.secure.disable","control.so.inject","control.activity.start","control.process.kill",
+                "control.secure.status","control.secure.disable","control.so.inject","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
                 "hook.reload","hook.inspect")) supported.put(capability);
         JSONArray partial = new JSONArray()
                 .put(new JSONObject().put("capability","memory.dex.dump").put("reason","file-backed strategy is stable; ART pointer reconstruction remains Android-version-gated"))

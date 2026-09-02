@@ -32,3 +32,8 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 - Dex dumping supports readable file-backed `DexFile` bytes and exposes cookie metadata for research; ART pointer reconstruction remains API/ABI-gated.
 - Assets use runtime `AssetManager.list/open`, so they describe target-runtime-readable assets rather than only APK zip entries.
 - XML pull currently uses logical `Resources.getXml` serialization; native `XmlBlock`/`ResXMLTree` byte recovery is reported as a separate unsupported strategy when unavailable.
+
+
+## Dump controls
+
+`module-dump`, `dex-dump`, and `assets-pull` expose `--max-bytes` so large outputs fail deterministically instead of flooding stdout. `dex-list --class-count` asks the target runtime to enumerate Dex entries up to its safety cap, which is useful when choosing the correct loader/Dex before dumping.

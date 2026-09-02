@@ -13,8 +13,10 @@ def parser():
     w=sub.add_parser("windows"); add_target(w); w.add_argument("--max-roots", type=int, default=64)
     t=sub.add_parser("tree"); add_target(t); t.add_argument("--max-nodes", type=int, default=4000); t.add_argument("--listeners", action="store_true")
     a=sub.add_parser("at"); add_target(a); a.add_argument("x", type=int); a.add_argument("y", type=int); a.add_argument("--max-nodes", type=int, default=4000); a.add_argument("--listeners", action="store_true"); a.add_argument("--include-hidden", action="store_true")
-    for name in ("props","listeners","stack"):
+    f=sub.add_parser("find"); add_target(f); f.add_argument("--text", default=""); f.add_argument("--resource", default=""); f.add_argument("--class-name", default=""); f.add_argument("--max-nodes", type=int, default=512); f.add_argument("--include-hidden", action="store_true")
+    for name in ("props","parent","siblings","listeners","stack"):
         q=sub.add_parser(name); add_target(q); q.add_argument("handle")
+    ch=sub.add_parser("children"); add_target(ch); ch.add_argument("handle"); ch.add_argument("--max-children", type=int, default=256)
     img=sub.add_parser("image"); add_target(img); img.add_argument("handle")
     ir=sub.add_parser("image-result"); add_target(ir); ir.add_argument("token")
     act=sub.add_parser("action"); add_target(act); act.add_argument("handle"); act.add_argument("--action-json", required=True)
@@ -28,7 +30,11 @@ def execute(args):
     if args.command=="windows": return runtime_request(target_payload(args,"ui.windows", max_roots=args.max_roots), args.timeout)
     if args.command=="tree": return runtime_request(target_payload(args,"ui.tree", max_nodes=args.max_nodes, include_listeners=args.listeners), args.timeout)
     if args.command=="at": return runtime_request(target_payload(args,"ui.at", x=args.x, y=args.y, max_nodes=args.max_nodes, include_listeners=args.listeners, include_hidden=args.include_hidden), args.timeout)
+    if args.command=="find": return runtime_request(target_payload(args,"ui.find", text=args.text, resource=args.resource, class_name=args.class_name, max_nodes=args.max_nodes, include_hidden=args.include_hidden), args.timeout)
     if args.command=="props": return runtime_request(target_payload(args,"ui.props", handle=args.handle), args.timeout)
+    if args.command=="parent": return runtime_request(target_payload(args,"ui.parent", handle=args.handle), args.timeout)
+    if args.command=="children": return runtime_request(target_payload(args,"ui.children", handle=args.handle, max_children=args.max_children), args.timeout)
+    if args.command=="siblings": return runtime_request(target_payload(args,"ui.siblings", handle=args.handle), args.timeout)
     if args.command=="listeners": return runtime_request(target_payload(args,"ui.listeners", handle=args.handle), args.timeout)
     if args.command=="stack": return runtime_request(target_payload(args,"ui.stack", handle=args.handle), args.timeout)
     if args.command=="image": return runtime_request(target_payload(args,"ui.image", handle=args.handle), args.timeout)

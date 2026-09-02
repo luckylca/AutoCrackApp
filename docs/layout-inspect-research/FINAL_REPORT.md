@@ -203,3 +203,17 @@ This supports the required loop: `ui-inspect at -> View handle -> runtime-inspec
    - ClassLoader handle -> `memory-dump dex-list --loader` -> Dex dump -> jadx
    - WebView discovery -> debug enable -> JS eval
 5. Add native/API-specific implementations only after a verified ART/linker/XML strategy exists. Until then, unsupported strategies must remain explicit.
+
+
+## 10. Stage 2 continuation
+
+After the first consolidation commit, the UI/runtime-control surface was extended toward the original Layout Inspect workflow rather than treating the initial architecture as complete. Added capabilities:
+
+- `ui.find` for text/resource/class-name search across current runtime View roots.
+- `ui.parent`, `ui.children`, and `ui.siblings` for handle-based View relationship navigation.
+- Expanded `ui.props` for screen/window/local bounds, parent/root handles, state flags, scrolling, ViewGroup/TextView/ImageView/AdapterView/WebView details.
+- Expanded `ui.action` with enable/clickable/focus/invalidate/text/hint/image/WebView aliases and mutation operations.
+- `control.object.field.set` for bounded scalar field writes through ObjectRegistry handles.
+- `control.object.method.call` for bounded reflected method invocation with exact argument types and scalar JSON arguments.
+
+These additions improve the rootfs CLI replacement path, but they are still not a complete native clone of Layout Inspect. ART Dex reconstruction, binary XmlBlock/ResXMLTree recovery, linker namespace bypass/dlopen internals, and Compose Semantics extraction remain explicitly version-gated or unsupported until implemented and verified on a real device.
