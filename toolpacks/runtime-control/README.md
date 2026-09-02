@@ -27,13 +27,14 @@ runtime-control webview-clear-cache --package com.example.app --handle obj_webvi
 runtime-control secure-status --package com.example.app --json
 runtime-control secure-disable --package com.example.app --json
 runtime-control so-inject --package com.example.app /data/local/tmp/libfoo.so --json
+runtime-control so-dlopen --package com.example.app /data/local/tmp/libfoo.so --flags 2 --json
 runtime-control activity-start --package com.example.app --component com.example.app/.MainActivity --json
 runtime-control process-kill --package com.example.app --delay-ms 350 --json
 ```
 
 ## Strategy boundaries
 
-`so-inject` uses target-process `System.load` and reports linker namespace/ABI/SELinux failures directly. `secure-disable` clears `Window.FLAG_SECURE` on known Activity windows; private SurfaceControl, DRM, and vendor-secure producers are reported as outside the stable Java strategy.
+`so-inject` uses target-process `System.load`; `so-dlopen` uses the AutoCrack JNI bridge and native `dlopen` and reports linker namespace/ABI/SELinux failures directly. `secure-disable` clears `Window.FLAG_SECURE` on known Activity windows; private SurfaceControl, DRM, and vendor-secure producers are reported as outside the stable Java strategy.
 
 
 ## Object control

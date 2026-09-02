@@ -5,6 +5,7 @@ plugins {
 android {
     namespace = "com.luckylca.autocrack.runtime"
     compileSdk = 36
+    ndkVersion = "27.3.13750724"
 
     defaultConfig {
         applicationId = "com.luckylca.autocrack.runtime"
@@ -30,6 +31,13 @@ android {
         "**/InspectorProvider.java",
         "**/InspectorResultReceiver.java",
     )
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }

@@ -52,3 +52,8 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | WebView navigation/control | PASS(host build) | `:autocrack-runtime:assembleDebug`, runtime-control WebView help checks, manifest capability check |
 | Module file-backed dump | PASS(host build) | `:autocrack-runtime:assembleDebug`, `memory-dump module-file-dump --help`, manifest capability check |
 | Device behavior | BLOCKED | Android host bridge is unavailable in the current WebCodex/Mac session; must run device matrix once bridge variables are present. |
+
+
+| Native bridge self probe | PASS(device self) | `runtime_execute_self(memory.capabilities)` and `runtime_execute_self(memory.native.probe)` on `a4976c80`; verified JNI load, `process_vm_readv` marker read, and `dladdr` symbol/file resolution |
+| Runtime request provider-pull channel | PASS(host build), BLOCKED(target refresh) | `runtime_pending` provider method and InspectorChannel provider-first polling compile; target process retest is blocked until LSPosed refreshes `com.luckylca.autocrack.runtime` to the latest installed APK path |
+| Filtered maps return | PASS(host build) | `memory.maps` supports `path_contains` and `permissions_contains` filters to avoid Binder transaction overflow on large `/proc/self/maps` responses |

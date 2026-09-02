@@ -37,7 +37,7 @@ public final class MemoryIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "memory.maps", "memory.modules", "memory.read", "memory.module.dump", "memory.module.file_dump",
+                "memory.maps", "memory.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump",
                 "memory.dex.list", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
@@ -46,8 +46,10 @@ public final class MemoryIntrospector {
         return switch (request.getString("kind")) {
             case "memory.maps" -> maps(request);
             case "memory.modules" -> modules(request);
-            case "memory.read" -> memoryRead(request);
-            case "memory.module.dump" -> moduleDump(request);
+            case "memory.read" -> memoryRead(context, request);
+            case "memory.native.probe" -> NativeBridge.probe(context).put("strategy", "JNI controlled self probe");
+            case "memory.dladdr" -> dladdr(context, request);
+            case "memory.module.dump" -> moduleDump(context, request);
             case "memory.module.file_dump" -> moduleFileDump(request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.dump" -> dexDump(request);
@@ -56,18 +58,31 @@ public final class MemoryIntrospector {
             case "memory.xml.pull" -> xmlPull(context, request);
             case "memory.apk.entries" -> apkEntries(context, request);
             case "memory.apk.pull" -> apkPull(context, request);
-            case "memory.capabilities" -> capabilities();
+            case "memory.capabilities" -> capabilities(context);
             default -> error("UNSUPPORTED_KIND", request.optString("kind"));
         };
     }
 
     private static JSONObject maps(JSONObject request) throws Exception {
         int max = clamp(request.optInt("max_maps", 4096), 1, MAX_MAPS);
-        List<MapEntry> values = readMaps(max + 1);
+        String pathContains = request.optString("path_contains", "");
+        String permissionsContains = request.optString("permissions_contains", "");
+        List<MapEntry> values = readMaps(MAX_MAPS);
         JSONArray out = new JSONArray();
-        for (int i = 0; i < values.size() && i < max; i++) out.put(values.get(i).json());
+        boolean truncated = false;
+        int matched = 0;
+        for (MapEntry entry : values) {
+            if (!pathContains.isEmpty() && (entry.path == null || !entry.path.contains(pathContains))) continue;
+            if (!permissionsContains.isEmpty() && (entry.permissions == null || !entry.permissions.contains(permissionsContains))) continue;
+            matched++;
+            if (out.length() >= max) { truncated = true; break; }
+            out.put(entry.json());
+        }
         return ok().put("pid", android.os.Process.myPid()).put("count", out.length()).put("maps", out)
-                .put("truncated", values.size() > max);
+                .put("matched", matched)
+                .put("path_contains", pathContains.isEmpty() ? JSONObject.NULL : pathContains)
+                .put("permissions_contains", permissionsContains.isEmpty() ? JSONObject.NULL : permissionsContains)
+                .put("truncated", truncated);
     }
 
     private static JSONObject modules(JSONObject request) throws Exception {
@@ -84,21 +99,51 @@ public final class MemoryIntrospector {
                 .put("truncated", grouped.size() > out.length() && out.length() >= max);
     }
 
-    private static JSONObject memoryRead(JSONObject request) throws Exception {
+    private static JSONObject memoryRead(Context context, JSONObject request) throws Exception {
         long address = parseAddress(request.get("address"));
         int size = clamp(request.getInt("size"), 1, MAX_INLINE_BYTES);
+        Throwable nativeError = null;
+        if (NativeBridge.ensureLoaded(context)) {
+            try {
+                byte[] bytes = NativeBridge.readMemory(context, address, size);
+                return ok().put("address", hex(address)).put("size", bytes.length)
+                        .put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                        .put("strategy", "native process_vm_readv/self-pread");
+            } catch (Throwable error) { nativeError = error; }
+        }
         try {
             byte[] bytes = readSelfMemory(address, size);
             return ok().put("address", hex(address)).put("size", bytes.length)
                     .put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
-                    .put("strategy", "/proc/self/mem");
+                    .put("strategy", "/proc/self/mem java fallback")
+                    .put("native_error", nativeError == null ? JSONObject.NULL : nativeError.toString());
         } catch (Throwable error) {
-            return unsupported("memory.read", "/proc/self/mem denied: " + error,
-                    new JSONArray().put("/proc/self/mem").put("native process_vm_readv/MemoryUtil not embedded"));
+            return unsupported("memory.read", "native/java self memory read denied: native=" + nativeError + ", java=" + error,
+                    new JSONArray().put("native process_vm_readv").put("native pread /proc/self/mem").put("java /proc/self/mem"));
         }
     }
 
-    private static JSONObject moduleDump(JSONObject request) throws Exception {
+    private static JSONObject dladdr(Context context, JSONObject request) throws Exception {
+        long address = parseAddress(request.get("address"));
+        JSONObject result = NativeBridge.dladdr(context, address);
+        if (result.optBoolean("ok", false)) {
+            return result.put("address", hex(address)).put("strategy", "native dladdr");
+        }
+        MapEntry containing = findMapContaining(address);
+        if (containing != null) {
+            return ok().put("address", hex(address))
+                    .put("symbol_resolved", false)
+                    .put("native_reason", result.optString("reason", "native dladdr failed"))
+                    .put("file", containing.path == null || containing.path.isEmpty() ? JSONObject.NULL : containing.path)
+                    .put("base", hex(containing.start))
+                    .put("offset_in_mapping", address - containing.start)
+                    .put("mapping", containing.json())
+                    .put("strategy", "native dladdr with /proc/self/maps fallback");
+        }
+        return result.put("address", hex(address)).put("strategy", "native dladdr");
+    }
+
+    private static JSONObject moduleDump(Context context, JSONObject request) throws Exception {
         String path = request.optString("path", "");
         if (path.isBlank()) return error("PATH_REQUIRED", "path is required");
         List<MapEntry> matching = new ArrayList<>();
@@ -111,7 +156,7 @@ public final class MemoryIntrospector {
             int wanted = (int)Math.min(entry.size(), maxBytes - total);
             if (wanted <= 0) { truncated = true; break; }
             try {
-                byte[] bytes = readSelfMemory(entry.start, wanted);
+                byte[] bytes = readMappedMemory(context, entry.start, wanted);
                 segments.put(new JSONObject().put("start", hex(entry.start)).put("end", hex(entry.end))
                         .put("permissions", entry.permissions).put("offset", hex(entry.offset))
                         .put("size", bytes.length).put("encoding", "base64")
@@ -223,12 +268,14 @@ public final class MemoryIntrospector {
                 .put("binary_axml",false).put("warning","Native XmlBlock/ResXMLTree byte recovery remains capability-gated.");
     }
 
-    private static JSONObject capabilities() throws Exception {
+    private static JSONObject capabilities(Context context) throws Exception {
+        boolean bridgeLoaded = context != null && NativeBridge.ensureLoaded(context);
         return ok().put("api_level",android.os.Build.VERSION.SDK_INT)
                 .put("maps",status(true,"/proc/self/maps"))
                 .put("modules",status(true,"maps grouping; split mappings preserved"))
                 .put("module_file_dump",status(true,"readable file-backed module copy with sha256"))
-                .put("memory_read",status(canReadSelfMem(),"/proc/self/mem; native fallback not embedded"))
+                .put("native_bridge",status(bridgeLoaded, bridgeLoaded?"JNI bridge loaded: process_vm_readv, pread, dlopen, dladdr, self probe":"JNI bridge unavailable: "+NativeBridge.loadError()))
+                .put("memory_read",status(bridgeLoaded || canReadSelfMem(),"native process_vm_readv/pread with java /proc/self/mem fallback"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
@@ -328,6 +375,7 @@ public final class MemoryIntrospector {
             return new MapEntry(start,end,parts[1],Long.parseUnsignedLong(parts[2],16),parts[3],Long.parseLong(parts[4]),path,line);
         } catch(Throwable ignored){return null;}
     }
+    private static MapEntry findMapContaining(long address) throws Exception { for (MapEntry entry : readMaps(MAX_MAPS)) if (address >= entry.start && address < entry.end) return entry; return null; }
 
     private static LinkedHashMap<String,List<MapEntry>> groupModules(List<MapEntry> maps) {
         LinkedHashMap<String,List<MapEntry>> out=new LinkedHashMap<>();
@@ -340,6 +388,7 @@ public final class MemoryIntrospector {
                 .put("contiguous",isContiguous(maps));
     }
     private static boolean isContiguous(List<MapEntry> maps){for(int i=1;i<maps.size();i++)if(maps.get(i-1).end!=maps.get(i).start)return false;return true;}
+    private static byte[] readMappedMemory(Context context,long address,int size)throws Exception{if(context!=null&&NativeBridge.ensureLoaded(context))try{return NativeBridge.readMemory(context,address,size);}catch(Throwable ignored){}return readSelfMemory(address,size);}
     private static byte[] readSelfMemory(long address,int size)throws Exception{try(RandomAccessFile f=new RandomAccessFile("/proc/self/mem","r")){f.seek(address);byte[] out=new byte[size];int off=0;while(off<size){int n=f.read(out,off,size-off);if(n<0)break;off+=n;}if(off==size)return out;byte[] shortOut=new byte[off];System.arraycopy(out,0,shortOut,0,off);return shortOut;}}
     private static boolean canReadSelfMem(){try{readSelfMemory(0,1);return true;}catch(Throwable ignored){return new File("/proc/self/mem").canRead();}}
     private static byte[] readFile(File file,int max)throws Exception{try(InputStream in=new FileInputStream(file)){return readLimited(in,max);}}

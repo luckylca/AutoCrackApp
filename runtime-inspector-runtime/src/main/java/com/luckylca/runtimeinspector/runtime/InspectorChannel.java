@@ -24,6 +24,21 @@ final class InspectorChannel {
     }
 
     JSONArray pending(String packageName, String processName) throws Exception {
+        try {
+            JSONObject request = new JSONObject().put("package", packageName);
+            if (processName == null) request.put("process", JSONObject.NULL); else request.put("process", processName);
+            Bundle extras = new Bundle();
+            extras.putString(JSON, request.toString());
+            Bundle raw = context.getContentResolver().call(URI, "runtime_pending", null, extras);
+            String text = raw == null ? null : raw.getString(JSON);
+            if (text != null) {
+                JSONObject value = new JSONObject(text);
+                if (value.optBoolean("ok")) return value.optJSONArray("requests") == null ? new JSONArray() : value.getJSONArray("requests");
+                de.robv.android.xposed.XposedBridge.log("RuntimeInspector provider pending failed: " + value);
+            }
+        } catch (Throwable providerError) {
+            de.robv.android.xposed.XposedBridge.log("RuntimeInspector provider pending unavailable, using XSharedPreferences: " + providerError);
+        }
         preferences.reload();
         JSONObject requests = new JSONObject(preferences.getString(REQUESTS, "{}"));
         JSONArray selected = new JSONArray();

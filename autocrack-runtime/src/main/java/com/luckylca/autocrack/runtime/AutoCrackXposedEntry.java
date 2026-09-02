@@ -6,6 +6,7 @@ import android.content.Context;
 import com.luckylca.autocrack.runtime.shared.ActivityRegistry;
 import com.luckylca.autocrack.runtime.shared.ClassLoaderRegistry;
 import com.luckylca.autocrack.runtime.shared.ObjectRegistry;
+import com.luckylca.autocrack.runtime.shared.NativeBridge;
 import com.luckylca.autocrack.runtime.shared.ViewCreationTracker;
 import com.luckylca.autocrack.runtime.shared.WindowRegistry;
 import com.luckylca.runtimeinspector.runtime.InspectorEngine;
@@ -37,6 +38,7 @@ public final class AutoCrackXposedEntry implements IXposedHookLoadPackage {
                 if (!STARTED.add(key)) return;
                 try {
                     ClassLoader loader = params.classLoader != null ? params.classLoader : context.getClassLoader();
+                    NativeBridge.ensureLoaded(context);
                     ClassLoaderRegistry.get().install(loader);
                     ObjectRegistry.get().bindProcess(params.packageName, processName, android.os.Process.myPid());
                     ActivityRegistry.get().install((Application) param.thisObject);

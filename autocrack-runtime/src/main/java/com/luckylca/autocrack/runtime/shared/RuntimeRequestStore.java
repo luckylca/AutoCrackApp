@@ -44,6 +44,20 @@ public final class RuntimeRequestStore {
         return ok().put("request_id", id);
     }
 
+    public synchronized JSONObject pending(String packageName, String processName) throws Exception {
+        prune();
+        JSONObject requests = object(REQUESTS);
+        org.json.JSONArray selected = new org.json.JSONArray();
+        Iterator<String> keys = requests.keys();
+        while (keys.hasNext()) {
+            JSONObject request = requests.getJSONObject(keys.next());
+            if (!packageName.equals(request.optString("package"))) continue;
+            String wantedProcess = request.isNull("process") ? null : request.optString("process", null);
+            if (wantedProcess == null || wantedProcess.equals(processName)) selected.put(request);
+        }
+        return ok().put("requests", selected);
+    }
+
     public synchronized JSONObject result(String id) throws Exception {
         prune();
         JSONObject results = object(RESULTS);

@@ -47,3 +47,14 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 ## Module file copy
 
 `memory-dump module-file-dump --package PKG /path/to/libfoo.so --max-bytes N` returns a readable file-backed module copy with SHA-256. This is deliberately distinct from `module-dump`, which attempts process memory segments and preserves mapping boundaries.
+
+## Native address lookup
+
+`memory-dump dladdr --package PKG 0xADDR` uses the AutoCrack JNI bridge and native `dladdr` to resolve an address to its backing shared object and nearest exported symbol when the platform loader exposes that information.
+
+
+### Native bridge probe
+
+`memory-dump native-probe --package PKG --json` runs a controlled in-process JNI probe. It verifies that the AutoCrack native bridge is loaded, performs a self-read of a JNI-owned marker through `process_vm_readv` with `/proc/self/mem` fallback, and resolves the probe function through `dladdr`. This is a diagnostic capability; it does not read arbitrary target addresses.
+
+`memory-dump maps --package PKG --path-contains TEXT --permissions-contains x --json` can filter mappings before returning them through Binder. Use this for large processes to avoid Binder transaction limits.

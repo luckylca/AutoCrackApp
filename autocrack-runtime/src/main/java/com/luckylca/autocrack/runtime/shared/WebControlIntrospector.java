@@ -41,7 +41,7 @@ public final class WebControlIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
-                "control.secure.status", "control.secure.disable", "control.so.inject",
+                "control.secure.status", "control.secure.disable", "control.so.inject", "control.so.dlopen",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
 
@@ -60,6 +60,7 @@ public final class WebControlIntrospector {
             case "control.secure.status" -> secureStatus();
             case "control.secure.disable" -> secureDisable();
             case "control.so.inject" -> injectSo(request);
+            case "control.so.dlopen" -> dlopenSo(context, request);
             case "control.activity.start" -> startActivity(context, request);
             case "control.process.kill" -> killProcess(request);
             case "control.object.field.set" -> objectFieldSet(request);
@@ -223,6 +224,18 @@ public final class WebControlIntrospector {
                             .put("root copy into target-visible namespace before retry")
                             .put("native dlopen/linker namespace strategy not embedded"));
         }
+    }
+
+    private static JSONObject dlopenSo(Context context, JSONObject request) throws Exception {
+        String path = request.optString("path", "");
+        if (path.isBlank() || !path.startsWith("/")) return error("ABSOLUTE_PATH_REQUIRED", "An absolute target-process-visible .so path is required");
+        int flags = request.optInt("flags", 2); // RTLD_NOW by default.
+        JSONObject result = NativeBridge.dlopen(context, path, flags);
+        if (result.optBoolean("ok")) return ok().put("path", path).put("loaded", true)
+                .put("handle", result.optString("handle", "")).put("strategy", "native dlopen");
+        return ok().put("supported", false).put("path", path).put("loaded", false)
+                .put("reason", result.optString("reason", "native dlopen failed"))
+                .put("strategies", new JSONArray().put("native dlopen absolute path").put("System.load fallback via control.so.inject"));
     }
 
     private static JSONObject startActivity(Context context, JSONObject request) throws Exception {

@@ -231,4 +231,41 @@ After the first consolidation commit, the UI/runtime-control surface was extende
 - `webview.load_url`, `webview.reload`, `webview.go_back`, `webview.go_forward`, and `webview.clear_cache` extend WebView control beyond eval/debug toggles.
 - `memory.module.file_dump` adds an explicit file-backed SO/module copy path with SHA-256, kept separate from process-memory `memory.module.dump`.
 
+
+
+## 11. Stage 7 native bridge continuation
+
+After ADB was found at `/Users/lucky/Library/Android/sdk/platform-tools/adb`, device `a4976c80` was available and rooted. The shared runtime was extended with an AutoCrack JNI bridge packaged inside `autocrack-runtime` for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
+
+Added native-backed capabilities:
+
+- `memory.native.probe`: controlled JNI self-test for bridge load, `process_vm_readv` self-read, `/proc/self/mem` fallback readiness, and `dladdr` symbol/file resolution.
+- `memory.read`: native `process_vm_readv`/`pread` first, Java `/proc/self/mem` fallback second.
+- `memory.module.dump`: segment dump now uses the native mapped-memory reader when available.
+- `memory.dladdr`: native address resolution with `/proc/self/maps` fallback when `dladdr` cannot resolve a mapping start address.
+- `control.so.dlopen`: native `dlopen(path, flags)` alongside the existing `System.load` path.
+- `memory.maps` filters: `path_contains` and `permissions_contains` reduce Binder payload size for large processes.
+- `runtime_execute_self`: provider-side direct execution path used to validate runtime/native capabilities inside the runtime app process without relying on target-process LSPosed polling.
+
+Device validation performed in the runtime app process:
+
+- `runtime_execute_self(memory.capabilities)` returned `native_bridge.supported=true`.
+- `runtime_execute_self(memory.native.probe)` returned `self_read_supported=true`, `self_read_strategy=process_vm_readv`, `marker_ok=true`, and `dladdr_supported=true`.
+- `dladdr` resolved the probe symbol from `base.apk!/lib/arm64-v8a/libautocrack_runtime_native.so`.
+
+Target-process validation status:
+
+- LSPosed logs showed `AutoCrack Runtime attached` for `com.luckylca.runtimeinspector.testapp`, proving scope/zygisk attachment can work.
+- The installed runtime APK path changed after reinstall, while LSPosed `modules_config.db` still pointed to an older `com.luckylca.autocrack.runtime` base APK path.
+- Direct DB path update was not performed by the tool because system-level LSPosed database mutation was blocked by safety checks. Refresh the module path through LSPosed UI or reboot/refresh LSPosed before rerunning target-process device tests.
+- Until that refresh, target-process tests may keep using stale module code even though provider-side native self-tests pass.
+
+Still not claimed complete:
+
+- ART DexFile/mCookie/DexCaches full native reconstruction.
+- Native XmlBlock/ResXMLTree binary AXML recovery.
+- Linker namespace bypass beyond normal `dlopen`/`System.load` paths.
+- DRM/vendor secure-surface bypass.
+- Compose Semantics tree extraction.
+
 These additions improve the rootfs CLI replacement path, but they are still not a complete native clone of Layout Inspect. ART Dex reconstruction, binary XmlBlock/ResXMLTree recovery, linker namespace bypass/dlopen internals, and Compose Semantics extraction remain explicitly version-gated or unsupported until implemented and verified on a real device.

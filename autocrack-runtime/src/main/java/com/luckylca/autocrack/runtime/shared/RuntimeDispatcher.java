@@ -60,16 +60,16 @@ public final class RuntimeDispatcher {
                 "ui.windows","ui.tree","ui.at","ui.find","ui.props","ui.parent","ui.children","ui.siblings","ui.listeners","ui.stack","ui.image","ui.image.result","ui.action","ui.compose.status",
                 "runtime.process","runtime.activities","runtime.declared_activities","runtime.classloaders","runtime.class.search","runtime.class.describe",
                 "object.describe","object.fields","object.dump","object.pin","object.release","object.clear_session",
-                "memory.maps","memory.modules","memory.read","memory.module.dump","memory.dex.list","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull",
+                "memory.maps","memory.modules","memory.read","memory.native.probe","memory.dladdr","memory.module.dump","memory.module.file_dump","memory.dex.list","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull","memory.apk.entries","memory.apk.pull",
                 "webview.list","webview.info","webview.debug","webview.eval","webview.eval.result","webview.load_url","webview.reload","webview.go_back","webview.go_forward","webview.clear_cache",
-                "control.secure.status","control.secure.disable","control.so.inject","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
+                "control.secure.status","control.secure.disable","control.so.inject","control.so.dlopen","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
                 "hook.reload","hook.inspect")) supported.put(capability);
         JSONArray partial = new JSONArray()
                 .put(new JSONObject().put("capability","memory.dex.dump").put("reason","file-backed strategy is stable; ART pointer reconstruction remains Android-version-gated"))
                 .put(new JSONObject().put("capability","memory.xml.pull").put("reason","logical Resources.getXml is supported; binary XmlBlock/ResXMLTree recovery remains native/version-gated"))
                 .put(new JSONObject().put("capability","ui.compose.tree").put("reason","AndroidComposeView detection is supported; Semantics internals are version-dependent and not exposed as fake View nodes"))
                 .put(new JSONObject().put("capability","ui.image").put("reason","View.draw, TextureView.getBitmap and SurfaceView PixelCopy(Window) are implemented; secure/DRM producer surfaces may still refuse capture"))
-                .put(new JSONObject().put("capability","control.so.inject").put("reason","System.load is stable; namespace bypass/native dlopen is not embedded"));
+                .put(new JSONObject().put("capability","control.so.inject").put("reason","System.load is stable; native dlopen is available when the JNI bridge loads; linker namespace bypass is still not embedded"));
         return ok().put("version", VERSION).put("supported", supported).put("partial", partial)
                 .put("limits", new JSONObject().put("object_handles",ObjectRegistry.MAX_HANDLES)
                         .put("object_pinned_handles",ObjectRegistry.MAX_PINNED_HANDLES)

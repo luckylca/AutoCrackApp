@@ -28,8 +28,8 @@ where only a native declaration is observable.
 | Class loaders | `C1306p.m3484d`, `getClassLoadersOffset` | CONFIRMED ART strategy | shared observer registry; DexPath discovery fallback |
 | Class search/preview | class/member UI and object operation menu | CONFIRMED surface | bounded DexFile entries plus registered loaders and reflection |
 | Object preview/dump | generic object visualization and class member window | CONFIRMED surface | shared weak `ObjectRegistry`, cycle-safe JSON serializer |
-| SO inject | absolute-path input | CONFIRMED surface | target `System.load`; linker namespace failure reported, never hidden |
-| SO/maps dump | `MemoryUtil`, `/proc/self/maps` native string | CONFIRMED low-level primitives | structured maps parser, exact segment dump strategy, and separate file-backed module copy with SHA-256 |
+| SO inject | absolute-path input | CONFIRMED surface | target `System.load` plus JNI `dlopen`; linker namespace failure reported, never hidden |
+| SO/maps dump | `MemoryUtil`, `/proc/self/maps` native string | CONFIRMED low-level primitives | structured maps parser, filtered maps return, native read-backed segment dump, dladdr fallback, and separate file-backed module copy with SHA-256 |
 | Dex dump | mCookie/mInternalCookie/DexCaches modes and `C1187N` offsets | CONFIRMED strategies | Java cookie strategy with API capability matrix; file-backed fallback is labeled |
 | Runtime XML | XML path UI | CONFIRMED surface | logical `Resources.getXml`, raw APK entry pull for `res/*.xml`; binary XmlBlock/ResXMLTree decode remains gated |
 | Runtime assets | `C1289p(AssetManager, String)` | CONFIRMED mechanism | recursive `AssetManager.list/open`, preserving runtime-readable bytes |
