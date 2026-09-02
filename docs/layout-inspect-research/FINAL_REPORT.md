@@ -578,3 +578,23 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - This is still file-backed AXML decoding/rendering. It does not recover an in-memory `XmlBlock` pointer or native `ResXMLTree` object.
+## 24. Stage 20 DEX file metadata and ART cookie probe device evidence
+
+`memory.dex.info` was added to parse file-backed DEX headers and map-lists from APK entries or readable `.dex` files. The earlier `memory.dex.art_probe` was also revalidated on-device after adding the provider-side context classloader fallback.
+
+Implemented coverage:
+
+- Runtime capability: `memory.dex.info`.
+- Toolpack command: `memory-dump dex-info`.
+- Input sources: readable `.dex` path, APK embedded path, installed APK package source, or direct APK entry.
+- DEX fields: magic/version, checksum, SHA-1 signature, file size, header size, endian tag, id-section counts/offsets, class-def count/offset, data size/offset, and map-list entries.
+
+Device evidence on `a4976c80` / API 36:
+
+- Runtime APK contained `classes.dex`, `classes2.dex`, `classes3.dex`, `classes4.dex`, `classes5.dex`, and `classes6.dex`.
+- `runtime_execute_self(memory.dex.info, entry=classes.dex)` returned DEX version `038`, `file_size=27400`, `header_size=112`, `endian_tag=0x12345678`, `string_ids_size=455`, `method_ids_size=146`, `class_defs_size=25`, and `map_items_count=17`.
+- `runtime_execute_self(memory.dex.art_probe)` returned `loader_count=1`, `dex_count=1`, `file_backed_count=1`, `cookie_field_count=2`, `cookie_value_count=14`, with both `mCookie` and `mInternalCookie` shaped as arrays of 7 values.
+
+Boundary:
+
+- `memory.dex.info` is file-backed DEX metadata parsing. `memory.dex.art_probe` exposes reflected cookie shape. Neither reconstructs in-memory ART DexFile objects by native offsets.

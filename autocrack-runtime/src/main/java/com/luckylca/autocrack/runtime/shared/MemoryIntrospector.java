@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -61,6 +61,7 @@ public final class MemoryIntrospector {
             case "memory.elf.dynamic" -> elfDynamic(context, request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
+            case "memory.dex.info" -> dexInfo(context, request);
             case "memory.dex.scan" -> dexScan(context, request);
             case "memory.dex.dump" -> dexDump(request);
             case "memory.assets.list" -> assetsList(context, request);
@@ -286,6 +287,48 @@ public final class MemoryIntrospector {
             truncated = file.length() > bytes.length;
         }
         return new ElfBytes(bytes, source, truncated);
+    }
+
+    private static JSONObject dexInfo(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        DexBytes loaded;
+        try { loaded = loadDexBytes(context, request, max); }
+        catch (IllegalArgumentException error) { return error("DEX_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseDexInfo(loaded.bytes);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("dex", parsed)
+                .put("strategy", "bounded file/APK DEX header and map-list parsing; no ART memory reconstruction");
+    }
+
+    private static DexBytes loadDexBytes(Context context, JSONObject request, int max) throws Exception {
+        String path = request.optString("path", "").trim();
+        String entry = request.optString("entry", "").trim();
+        byte[] bytes;
+        JSONObject source = new JSONObject();
+        boolean truncated = false;
+        if (!entry.isBlank()) {
+            entry = normalizeZipEntry(entry);
+            JSONObject pulled = pullApkEntryAnySource(apkContext(context, request), entry, max);
+            if (!pulled.optBoolean("ok", false)) throw new IllegalArgumentException(pulled.toString());
+            bytes = Base64.decode(pulled.getString("data"), Base64.NO_WRAP);
+            source.put("kind", "apk_entry").put("apk_path", pulled.optString("apk_path", "")).put("entry", entry).put("source", pulled.optString("source", ""));
+            truncated = pulled.optInt("size", bytes.length) >= max;
+        } else if (path.contains("!/")) {
+            int bang = path.indexOf("!/");
+            String apkPath = path.substring(0, bang);
+            String zipEntry = normalizeZipEntry(path.substring(bang + 2));
+            bytes = readZipEntry(new File(apkPath), zipEntry, max);
+            source.put("kind", "apk_embedded_path").put("apk_path", apkPath).put("entry", zipEntry);
+            truncated = bytes.length >= max;
+        } else {
+            if (path.isBlank() || !path.startsWith("/")) throw new IllegalArgumentException("absolute DEX path, APK embedded path, or entry is required");
+            File file = new File(path);
+            if (!file.isFile() || !file.canRead()) throw new IllegalArgumentException("DEX file not readable: " + path);
+            bytes = readFile(file, max);
+            source.put("kind", "file").put("path", path).put("file_size", file.length());
+            truncated = file.length() > bytes.length;
+        }
+        return new DexBytes(bytes, source, truncated);
     }
 
     private static JSONObject dexList(JSONObject request) throws Exception {
@@ -546,6 +589,7 @@ public final class MemoryIntrospector {
                 .put("elf_info",status(true,"bounded ELF header/program header/GNU build-id parsing from file or APK entry"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
                 .put("dex_art_probe",status(true,"DexPathList/DexFile reflected ART cookie shape probe; no memory reconstruction"))
+                .put("dex_file_info",status(true,"bounded file/APK DEX header and map-list parsing"))
                 .put("dex_memory_scan",status(bridgeLoaded,"bounded readable-map DEX magic/header candidate scan; not mCookie reconstruction"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
@@ -1164,6 +1208,59 @@ public final class MemoryIntrospector {
     private static int u32leInt(byte[] bytes, int off) { return (bytes[off] & 0xff) | ((bytes[off+1] & 0xff) << 8) | ((bytes[off+2] & 0xff) << 16) | ((bytes[off+3] & 0xff) << 24); }
     private static String axmlChunkName(int type) { return switch (type) { case 0x0001 -> "RES_STRING_POOL_TYPE"; case 0x0003 -> "RES_XML_TYPE"; case 0x0180 -> "RES_XML_RESOURCE_MAP_TYPE"; case 0x0100 -> "RES_XML_START_NAMESPACE_TYPE"; case 0x0101 -> "RES_XML_END_NAMESPACE_TYPE"; case 0x0102 -> "RES_XML_START_ELEMENT_TYPE"; case 0x0103 -> "RES_XML_END_ELEMENT_TYPE"; case 0x0104 -> "RES_XML_CDATA_TYPE"; default -> "AXML_CHUNK_" + type; }; }
 
+    private static JSONObject parseDexInfo(byte[] bytes) throws Exception {
+        if (bytes.length < 0x70) return error("DEX_TOO_SHORT", String.valueOf(bytes.length));
+        if (bytes[0] != 'd' || bytes[1] != 'e' || bytes[2] != 'x' || bytes[3] != '\n' || bytes[7] != 0) return error("NOT_DEX", "missing dex magic");
+        String version = new String(bytes, 4, 3, java.nio.charset.StandardCharsets.US_ASCII);
+        JSONObject out = ok().put("version", version)
+                .put("checksum", hex(u32le(bytes, 8)))
+                .put("signature", hexBytes(bytes, 12, 20))
+                .put("file_size", u32le(bytes, 0x20))
+                .put("header_size", u32le(bytes, 0x24))
+                .put("endian_tag", hex(u32le(bytes, 0x28)))
+                .put("link_size", u32le(bytes, 0x2c)).put("link_off", u32le(bytes, 0x30))
+                .put("map_off", u32le(bytes, 0x34))
+                .put("string_ids_size", u32le(bytes, 0x38)).put("string_ids_off", u32le(bytes, 0x3c))
+                .put("type_ids_size", u32le(bytes, 0x40)).put("type_ids_off", u32le(bytes, 0x44))
+                .put("proto_ids_size", u32le(bytes, 0x48)).put("proto_ids_off", u32le(bytes, 0x4c))
+                .put("field_ids_size", u32le(bytes, 0x50)).put("field_ids_off", u32le(bytes, 0x54))
+                .put("method_ids_size", u32le(bytes, 0x58)).put("method_ids_off", u32le(bytes, 0x5c))
+                .put("class_defs_size", u32le(bytes, 0x60)).put("class_defs_off", u32le(bytes, 0x64))
+                .put("data_size", u32le(bytes, 0x68)).put("data_off", u32le(bytes, 0x6c))
+                .put("art_memory_reconstruction", false);
+        long mapOff = u32le(bytes, 0x34);
+        JSONArray map = new JSONArray();
+        boolean mapTruncated = false;
+        if (mapOff > 0 && mapOff + 4 <= bytes.length) {
+            int count = (int)Math.min(u32le(bytes, (int)mapOff), 100_000);
+            int base = (int)mapOff + 4;
+            for (int i=0; i<count; i++) {
+                int off = base + i * 12;
+                if (off + 12 > bytes.length) { mapTruncated = true; break; }
+                int type = u16le(bytes, off);
+                int unused = u16le(bytes, off + 2);
+                long size = u32le(bytes, off + 4);
+                long itemOff = u32le(bytes, off + 8);
+                map.put(new JSONObject().put("index", i).put("type", hex(type)).put("type_name", dexMapTypeName(type))
+                        .put("unused", unused).put("size", size).put("offset", itemOff));
+                if (map.length() >= 4096) { mapTruncated = count > map.length(); break; }
+            }
+        }
+        return out.put("map_items", map).put("map_items_count", map.length()).put("map_items_truncated", mapTruncated);
+    }
+
+    private static String dexMapTypeName(int type) {
+        return switch (type) {
+            case 0x0000 -> "TYPE_HEADER_ITEM"; case 0x0001 -> "TYPE_STRING_ID_ITEM"; case 0x0002 -> "TYPE_TYPE_ID_ITEM";
+            case 0x0003 -> "TYPE_PROTO_ID_ITEM"; case 0x0004 -> "TYPE_FIELD_ID_ITEM"; case 0x0005 -> "TYPE_METHOD_ID_ITEM";
+            case 0x0006 -> "TYPE_CLASS_DEF_ITEM"; case 0x1000 -> "TYPE_MAP_LIST"; case 0x1001 -> "TYPE_TYPE_LIST";
+            case 0x1002 -> "TYPE_ANNOTATION_SET_REF_LIST"; case 0x1003 -> "TYPE_ANNOTATION_SET_ITEM"; case 0x2000 -> "TYPE_CLASS_DATA_ITEM";
+            case 0x2001 -> "TYPE_CODE_ITEM"; case 0x2002 -> "TYPE_STRING_DATA_ITEM"; case 0x2003 -> "TYPE_DEBUG_INFO_ITEM";
+            case 0x2004 -> "TYPE_ANNOTATION_ITEM"; case 0x2005 -> "TYPE_ENCODED_ARRAY_ITEM"; case 0x2006 -> "TYPE_ANNOTATIONS_DIRECTORY_ITEM";
+            case 0x2007 -> "TYPE_HIDDENAPI_CLASS_DATA_ITEM"; default -> "TYPE_" + type;
+        };
+    }
+
     private static String renderAxmlText(JSONObject decoded, boolean includeDeclaration) throws Exception {
         JSONArray nodes = decoded.optJSONArray("nodes");
         if (nodes == null) return "";
@@ -1265,6 +1362,7 @@ public final class MemoryIntrospector {
     private static JSONObject unsupported(String capability,String reason,JSONArray strategies)throws Exception{return ok().put("supported",false).put("capability",capability).put("reason",reason).put("strategies",strategies);}
     private static JSONObject ok()throws Exception{return new JSONObject().put("ok",true);}private static JSONObject error(String c,String m)throws Exception{return new JSONObject().put("ok",false).put("error",new JSONObject().put("code",c).put("message",m));}
 
+    private record DexBytes(byte[] bytes, JSONObject source, boolean truncated){}
     private record ElfBytes(byte[] bytes, JSONObject source, boolean truncated){}
     private record ApkSource(String label,String path){JSONObject json()throws Exception{return new JSONObject().put("label",label).put("path",path);}}
 

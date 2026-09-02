@@ -86,3 +86,5 @@ Dump/pull commands that return inline base64 now accept `--output PATH`. Single-
 `memory-dump xml-axml-decode --package PKG --entry res/xml/file.xml --json` decodes a file-backed Android binary XML string pool and start/end/text node stream. It is a readable AXML decoder, not native `XmlBlock` memory recovery.
 
 `memory-dump xml-axml-text --package PKG --entry res/xml/file.xml --output out.xml` renders decoded file-backed AXML into readable XML text, including namespace declarations and typed attribute values when available. This is still APK-backed decoding, not native `XmlBlock` memory recovery.
+
+`memory-dump dex-info --package PKG --entry classes.dex --json` parses a file-backed DEX header and map-list from an APK entry, APK embedded path, or readable `.dex` file. It does not reconstruct ART in-memory DexFile objects.

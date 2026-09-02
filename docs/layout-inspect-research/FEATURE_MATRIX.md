@@ -63,3 +63,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | File-backed ELF dynamic table | Complete for bounded dynamic metadata | `memory.elf.dynamic`, `memory-dump elf-dynamic`; device self-test PASS with `DT_NEEDED` and SONAME from runtime native library |
 | File-backed Android binary XML decode | Complete for bounded APK-backed AXML chunk/node decode | `memory.xml.axml_decode`, `memory-dump xml-axml-decode`; device self-test PASS on runtime probe XML |
 | AXML namespace/text rendering | Complete for bounded APK-backed readable XML | `memory.xml.axml_text`, `memory-dump xml-axml-text`; device self-test PASS with namespace events and rendered `android:*` attributes |
+| DEX file metadata | Complete for bounded file/APK DEX header and map-list | `memory.dex.info`, `memory-dump dex-info`; device self-test PASS on runtime `classes.dex`; ART cookie probe device evidence updated |
