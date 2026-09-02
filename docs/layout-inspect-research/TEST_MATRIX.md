@@ -59,3 +59,5 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | Filtered maps return | PASS(host build) | `memory.maps` supports `path_contains` and `permissions_contains` filters to avoid Binder transaction overflow on large `/proc/self/maps` responses |
 
 | Binary APK XML extraction | PASS(device self) | `runtime_execute_self(memory.xml.binary)` extracted `res/xml/autocrack_runtime_probe.xml`; returned base64 raw APK AXML with `binary_axml=true`, `memory_reconstruction=false`, size 340, SHA-256 `62c63b30f0e773b1511f223cbe6ff5c7e11e7fc983afa33839147530059c1400` |
+
+| Native ELF module enumeration | PASS(device self) | `runtime_execute_self(memory.native.modules, filter=autocrack)` used JNI `dl_iterate_phdr`; returned the runtime native library from `base.apk!/lib/arm64-v8a/libautocrack_runtime_native.so` with base/load ranges, `phdr_count=9`, `load_segments=3` |

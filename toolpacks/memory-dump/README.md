@@ -64,3 +64,5 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 `memory-dump apk-entries --package RUNTIME_PKG --apk-package TARGET_PKG --prefix res/ --json` can enumerate another installed APK through `createPackageContext`, which is useful when provider-side diagnostics are available but target-process Xposed polling has not refreshed yet.
 
 `memory-dump apk-entries --package RUNTIME_PKG --apk-path /data/app/.../base.apk --prefix res/ --json` reads an explicit APK path. This is useful when package visibility prevents `createPackageContext` from resolving `--apk-package`.
+
+`memory-dump native-modules --package PKG --filter libc --json` uses the AutoCrack JNI bridge and `dl_iterate_phdr` to enumerate ELF loader modules with base/load ranges. This complements `/proc/self/maps`; it does not include anonymous or non-ELF mappings.

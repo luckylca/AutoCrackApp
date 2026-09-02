@@ -38,7 +38,7 @@ public final class MemoryIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "memory.maps", "memory.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump",
+                "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump",
                 "memory.dex.list", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
@@ -47,6 +47,7 @@ public final class MemoryIntrospector {
         return switch (request.getString("kind")) {
             case "memory.maps" -> maps(request);
             case "memory.modules" -> modules(request);
+            case "memory.native.modules" -> nativeModules(context, request);
             case "memory.read" -> memoryRead(context, request);
             case "memory.native.probe" -> NativeBridge.probe(context).put("strategy", "JNI controlled self probe");
             case "memory.dladdr" -> dladdr(context, request);
@@ -99,6 +100,14 @@ public final class MemoryIntrospector {
         }
         return ok().put("count", out.length()).put("modules", out)
                 .put("truncated", grouped.size() > out.length() && out.length() >= max);
+    }
+
+    private static JSONObject nativeModules(Context context, JSONObject request) throws Exception {
+        int max = clamp(request.optInt("max_modules", 1024), 1, MAX_MODULES);
+        String filter = request.optString("filter", "");
+        JSONObject out = NativeBridge.modules(context, max, filter);
+        return out.put("strategy", "native dl_iterate_phdr")
+                .put("maps_comparison_note", "This is loader PHDR enumeration, not a replacement for /proc/self/maps; anonymous mappings and non-ELF regions remain maps-only.");
     }
 
     private static JSONObject memoryRead(Context context, JSONObject request) throws Exception {
@@ -310,7 +319,8 @@ public final class MemoryIntrospector {
                 .put("maps",status(true,"/proc/self/maps"))
                 .put("modules",status(true,"maps grouping; split mappings preserved"))
                 .put("module_file_dump",status(true,"readable file-backed module copy with sha256"))
-                .put("native_bridge",status(bridgeLoaded, bridgeLoaded?"JNI bridge loaded: process_vm_readv, pread, dlopen, dladdr, self probe":"JNI bridge unavailable: "+NativeBridge.loadError()))
+                .put("native_bridge",status(bridgeLoaded, bridgeLoaded?"JNI bridge loaded: process_vm_readv, pread, dlopen, dladdr, dl_iterate_phdr, self probe":"JNI bridge unavailable: "+NativeBridge.loadError()))
+                .put("native_modules",status(bridgeLoaded,"native dl_iterate_phdr loader PHDR enumeration"))
                 .put("memory_read",status(bridgeLoaded || canReadSelfMem(),"native process_vm_readv/pread with java /proc/self/mem fallback"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))

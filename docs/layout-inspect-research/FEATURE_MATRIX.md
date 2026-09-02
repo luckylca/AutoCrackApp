@@ -44,3 +44,5 @@ An AutoCrack command is `supported` only when its selected strategy ran. A
 fallback that copies an APK or reads a backing file is not labeled as an
 in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 `supported:false`, a reason, and the strategies considered.
+
+| Native ELF loader modules | Complete for loader PHDR view; not a maps replacement | `memory.native.modules`, `memory-dump native-modules`; device self-test PASS on `a4976c80` |

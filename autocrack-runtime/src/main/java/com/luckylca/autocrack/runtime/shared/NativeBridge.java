@@ -68,8 +68,15 @@ public final class NativeBridge {
         return new JSONObject(nativeProbe());
     }
 
+    public static JSONObject modules(Context context, int maxModules, String filter) throws Exception {
+        if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("supported", false).put("reason", loadError);
+        int boundedMax = Math.max(1, Math.min(maxModules, 4096));
+        return new JSONObject(nativeModules(boundedMax, filter == null ? "" : filter));
+    }
+
     private static native byte[] nativeReadMemory(long address, int size) throws Exception;
     private static native String nativeDlopen(String path, int flags);
     private static native String nativeDladdr(long address);
+    private static native String nativeModules(int maxModules, String filter);
     private static native String nativeProbe();
 }

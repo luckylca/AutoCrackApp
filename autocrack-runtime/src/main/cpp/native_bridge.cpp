@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <link.h>
 #include <string.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -25,6 +26,35 @@ static std::string jstr(JNIEnv* env, jstring value) {
     std::string out = raw ? raw : "";
     if (raw) env->ReleaseStringUTFChars(value, raw);
     return out;
+}
+
+static std::string json_escape(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 16);
+    for (char c : in) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
+static std::string hex_ptr(uintptr_t value) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "0x%" PRIxPTR, value);
+    return std::string(buf);
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
@@ -87,6 +117,80 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeDladdr(
     return env->NewStringUTF(buf);
 }
 
+
+
+struct NativeModuleState {
+    int max;
+    std::string filter;
+    int matched;
+    int emitted;
+    bool truncated;
+    std::string json;
+};
+
+static int module_callback(struct dl_phdr_info* info, size_t, void* data) {
+    auto* state = reinterpret_cast<NativeModuleState*>(data);
+    const char* raw_name = info->dlpi_name ? info->dlpi_name : "";
+    std::string name(raw_name);
+    if (!state->filter.empty() && name.find(state->filter) == std::string::npos) {
+        return 0;
+    }
+    state->matched++;
+    if (state->emitted >= state->max) {
+        state->truncated = true;
+        return 0;
+    }
+
+    uintptr_t min_addr = UINTPTR_MAX;
+    uintptr_t max_addr = 0;
+    int load_segments = 0;
+    for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i) {
+        const ElfW(Phdr)& phdr = info->dlpi_phdr[i];
+        if (phdr.p_type != PT_LOAD) continue;
+        uintptr_t start = static_cast<uintptr_t>(info->dlpi_addr) + static_cast<uintptr_t>(phdr.p_vaddr);
+        uintptr_t end = start + static_cast<uintptr_t>(phdr.p_memsz);
+        if (start < min_addr) min_addr = start;
+        if (end > max_addr) max_addr = end;
+        load_segments++;
+    }
+    if (load_segments == 0) {
+        min_addr = static_cast<uintptr_t>(info->dlpi_addr);
+        max_addr = static_cast<uintptr_t>(info->dlpi_addr);
+    }
+
+    if (state->emitted > 0) state->json += ",";
+    state->json += "{\"index\":" + std::to_string(state->emitted)
+            + ",\"name\":\"" + json_escape(name) + "\""
+            + ",\"base\":\"" + hex_ptr(static_cast<uintptr_t>(info->dlpi_addr)) + "\""
+            + ",\"load_start\":\"" + hex_ptr(min_addr) + "\""
+            + ",\"load_end\":\"" + hex_ptr(max_addr) + "\""
+            + ",\"phdr_count\":" + std::to_string(info->dlpi_phnum)
+            + ",\"load_segments\":" + std::to_string(load_segments)
+            + "}";
+    state->emitted++;
+    return 0;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeModules(
+        JNIEnv* env, jclass, jint max, jstring filter) {
+    NativeModuleState state{};
+    state.max = max <= 0 ? 1 : max;
+    state.filter = jstr(env, filter);
+    state.matched = 0;
+    state.emitted = 0;
+    state.truncated = false;
+    state.json.reserve(8192);
+
+    int rc = dl_iterate_phdr(module_callback, &state);
+    std::string out = "{\"ok\":true,\"count\":" + std::to_string(state.emitted)
+            + ",\"matched\":" + std::to_string(state.matched)
+            + ",\"truncated\":" + (state.truncated ? std::string("true") : std::string("false"))
+            + ",\"dl_iterate_phdr_rc\":" + std::to_string(rc)
+            + ",\"filter\":" + (state.filter.empty() ? std::string("null") : (std::string("\"") + json_escape(state.filter) + "\""))
+            + ",\"modules\":[" + state.json + "]}";
+    return env->NewStringUTF(out.c_str());
+}
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeProbe(

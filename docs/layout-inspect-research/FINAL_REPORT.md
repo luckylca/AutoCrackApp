@@ -293,3 +293,30 @@ Boundary:
 This is file-backed APK binary XML extraction. It is useful for layouts, XML resources, manifests, and split APK resources, but it is still not native in-memory `XmlBlock` / `ResXMLTree` recovery.
 
 These additions improve the rootfs CLI replacement path, but they are still not a complete native clone of Layout Inspect. ART Dex reconstruction, binary XmlBlock/ResXMLTree recovery, linker namespace bypass/dlopen internals, and Compose Semantics extraction remain explicitly version-gated or unsupported until implemented and verified on a real device.
+
+
+## 13. Stage 9 native ELF loader module enumeration
+
+`memory.native.modules` was added to improve the SO/module view beyond `/proc/self/maps` grouping.
+
+Implemented:
+
+- Native C++ `dl_iterate_phdr` bridge in `libautocrack_runtime_native.so`.
+- Java bridge exposure through `NativeBridge.modules(...)`.
+- Runtime capability `memory.native.modules`.
+- `memory-dump native-modules --filter TEXT --max-modules N` CLI command.
+- Manifest capability declaration for the memory-dump toolpack.
+
+Device evidence:
+
+- Installed runtime APK on device `a4976c80`.
+- `runtime_execute_self(memory.capabilities)` reported `native_modules.supported=true`.
+- `runtime_execute_self(memory.native.modules, filter=autocrack)` returned one module from the loader view:
+  `/data/app/.../base.apk!/lib/arm64-v8a/libautocrack_runtime_native.so`.
+- The returned record included `base`, `load_start`, `load_end`, `phdr_count=9`, and `load_segments=3`.
+
+Boundary:
+
+- This is loader PHDR enumeration, not a replacement for `/proc/self/maps`.
+- Anonymous mappings, JIT regions, ashmem/memfd mappings, and non-ELF ranges remain maps-only.
+- It does not implement linker namespace bypass; `control.so.dlopen` still reports linker failures directly.
