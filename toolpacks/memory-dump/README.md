@@ -98,3 +98,5 @@ Dump/pull commands that return inline base64 now accept `--output PATH`. Single-
 `memory-dump dex-methods --package PKG --entry classes.dex --filter onCreate --json` parses bounded DEX method_id records, resolves proto return/parameter descriptors, and renders Dalvik-style method signatures from file-backed DEX data.
 
 `memory-dump dex-class-data --package PKG --entry classes.dex --filter MyClass --json` parses bounded DEX `class_data_item` records, direct/virtual method lists, field lists, and `code_item` metadata such as register/ins/out sizes and `insns_size`. It does not disassemble bytecode and does not reconstruct ART memory.
+
+`memory-dump dex-apk-index --package PKG --json` enumerates all `classes*.dex` entries in the target APK and returns bounded DEX header/map metadata for each entry. It is useful before choosing a specific `classesN.dex` for string/class/method inspection.

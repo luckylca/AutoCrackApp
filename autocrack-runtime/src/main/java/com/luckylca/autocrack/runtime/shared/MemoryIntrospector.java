@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -62,6 +62,7 @@ public final class MemoryIntrospector {
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.info" -> dexInfo(context, request);
+            case "memory.dex.apk_index" -> dexApkIndex(context, request);
             case "memory.dex.strings" -> dexStrings(context, request);
             case "memory.dex.classes" -> dexClasses(context, request);
             case "memory.dex.fields" -> dexFields(context, request);
@@ -334,6 +335,50 @@ public final class MemoryIntrospector {
             truncated = file.length() > bytes.length;
         }
         return new DexBytes(bytes, source, truncated);
+    }
+
+    private static JSONObject dexApkIndex(Context context, JSONObject request) throws Exception {
+        int maxDex = clamp(request.optInt("max_dex", 32), 1, 256);
+        int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        Context apkCtx = apkContext(context, request);
+        List<ApkSource> sources = apkSources(apkCtx);
+        JSONArray dexFiles = new JSONArray();
+        boolean dexTruncated = false;
+        for (ApkSource src : sources) {
+            String label = src.label;
+            String path = src.path;
+            try (ZipFile zip = new ZipFile(path)) {
+                ArrayList<String> names = new ArrayList<>();
+                java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    String name = entry.getName();
+                    if (!entry.isDirectory() && name.matches("classes(\\d*)?\\.dex")) names.add(name);
+                }
+                names.sort(Comparator.comparingInt(MemoryIntrospector::dexEntryOrder));
+                for (String name : names) {
+                    if (dexFiles.length() >= maxDex) { dexTruncated = true; break; }
+                    ZipEntry entry = zip.getEntry(name);
+                    if (entry == null || entry.isDirectory()) continue;
+                    JSONObject item = new JSONObject().put("source", label).put("apk_path", path).put("entry", name)
+                            .put("compressed_size", entry.getCompressedSize()).put("entry_size", entry.getSize());
+                    try (InputStream in = zip.getInputStream(entry)) {
+                        byte[] bytes = readLimited(in, maxBytes + 1);
+                        boolean truncated = bytes.length > maxBytes;
+                        if (truncated) bytes = java.util.Arrays.copyOf(bytes, maxBytes);
+                        JSONObject info = parseDexInfo(bytes);
+                        item.put("bytes_read", bytes.length).put("truncated", truncated).put("sha256_prefix", sha256(bytes)).put("dex", info);
+                    } catch (Throwable error) {
+                        item.put("ok", false).put("error", error.getClass().getName() + ": " + error.getMessage());
+                    }
+                    dexFiles.put(item);
+                }
+            }
+            if (dexTruncated) break;
+        }
+        return ok().put("package", apkCtx.getPackageName()).put("source_count", sources.size())
+                .put("dex_count", dexFiles.length()).put("dex_files", dexFiles).put("truncated", dexTruncated)
+                .put("strategy", "APK classes*.dex index with bounded header/map parsing; no ART memory reconstruction");
     }
 
     private static JSONObject dexStrings(Context context, JSONObject request) throws Exception {
@@ -1402,6 +1447,14 @@ public final class MemoryIntrospector {
         }
         return ok().put("total", classTotal).put("count", values.length()).put("classes", values)
                 .put("truncated", truncated).put("filter", filter == null || filter.isEmpty() ? JSONObject.NULL : filter);
+    }
+
+    private static int dexEntryOrder(String name) {
+        if ("classes.dex".equals(name)) return 1;
+        try {
+            String n = name.substring("classes".length(), name.length() - ".dex".length());
+            return n.isEmpty() ? 1 : Integer.parseInt(n);
+        } catch (Throwable ignored) { return Integer.MAX_VALUE; }
     }
 
     private static JSONObject parseDexFields(byte[] bytes, int maxFields, String filter) throws Exception {
