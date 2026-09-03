@@ -16,6 +16,7 @@ where only a native declaration is observable.
 | Surface | Original evidence | Original confidence | AutoCrack target |
 |---|---|---:|---|
 | Process list/info/kill | `module_window_app_process.xml`; runtime Xposed scope | CONFIRMED surface | runtime info in-process; host `/proc` and `am force-stop` control |
+| Runtime doctor | shared runtime/provider health surface | AUTOCRACK extension | read-only aggregate check for process, activities, classloaders, memory/native, secure, Compose and linker state; no LSPosed DB/path mutation |
 | All windows | capture layouts; injected process; window package | CONFIRMED surface, STRONG mechanism | `WindowManagerGlobal.mViews` plus one shared add/remove observer |
 | View tree and pick | `hook/window/capture_layout/*`; parent/child/previous/next UI | CONFIRMED surface | transform-aware traversal, hit-test, text/resource/class find, parent/children/siblings handles |
 | View properties | `object/visualization/C1151t` overloads and typed editors | CONFIRMED typed object surface | public getters first, bounded reflection second |

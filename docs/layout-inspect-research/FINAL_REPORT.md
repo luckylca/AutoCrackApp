@@ -766,3 +766,9 @@ This makes linker failures more diagnosable without falsely claiming private lin
 Extended `control.so.diagnose` so each resolved libdl symbol is immediately passed through `dladdr`. The diagnostic now correlates `dlopen`, `dlsym`, `dlerror`, and `android_dlopen_ext` addresses back to their owning object and symbol name, in addition to reporting the raw address.
 
 Device provider-self validation confirmed all four symbols resolve through `RTLD_DEFAULT` and map back to `/apex/com.android.runtime/lib64/bionic/libdl.so` with matching `dladdr.symbol` values. This makes native-loader failures easier to separate into symbol-visibility, linker-module, and namespace-policy problems while still keeping private namespace bypass unimplemented.
+
+## Stage 34 - Read-only runtime doctor
+
+Added `runtime.doctor` and `runtime-inspect doctor` as a single read-only health summary for the shared AutoCrack Runtime. It aggregates eight checks without changing LSPosed state: runtime capabilities, process metadata, Activity registry/reflection state, ClassLoader registry state, memory/native capability status, secure-window diagnostics, native/linker diagnostics, and Compose status. UI-dependent secure/Compose checks are dispatched to the main looper while the doctor itself remains on the caller worker thread, so memory/linker/classloader checks do not unnecessarily occupy the UI thread.
+
+Device provider-self validation on API 36 returned `ok=true`, `runtime_doctor=true`, `healthy=true`, `check_count=8`, and `failed_check_count=0`. All eight named checks returned `ok=true`; native/linker diagnostics still explicitly report `namespace_bypass_supported=false`, and Compose correctly reports zero current Compose roots in the runtime provider process. The doctor does not edit LSPosed databases, module paths, preferences, or reboot state, and target-process availability still depends on LSPosed actually loading the runtime module into that target.

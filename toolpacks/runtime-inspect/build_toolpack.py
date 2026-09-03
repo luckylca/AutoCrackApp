@@ -45,9 +45,9 @@ def main():
         "payloadSizeBytes": payload_zip.stat().st_size,
         "requiredPaths": ["bin/runtime-inspect", "libexec/runtime_inspect_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"],
         "commands": [{"name": "runtime-inspect", "relativePath": "bin/runtime-inspect", "description": "Inspect target process, Activity, ClassLoader, class metadata and object handles."}],
-        "selfTests": [{"id": "runtime-inspect-help", "title": "AutoCrack Runtime Inspect CLI surface", "command": f"{pack_root}/bin/runtime-inspect --help", "expectedExitCodes": [0], "outputContains": ["class-search", "object-dump", "activities"]}],
+        "selfTests": [{"id": "runtime-inspect-help", "title": "AutoCrack Runtime Inspect CLI surface", "command": f"{pack_root}/bin/runtime-inspect --help", "expectedExitCodes": [0], "outputContains": ["doctor", "class-search", "object-dump", "activities"]}],
         "sources": [{"name": "runtime-inspect-cli", "version": "1.0.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/runtime-inspect", "sha256": sha(root / "libexec" / "runtime_inspect_cli.py")}],
-        "requires": {"runtime": ">=1.0.0", "capabilities": ["runtime.process", "runtime.activities", "runtime.declared_activities", "runtime.classloaders", "runtime.class.search", "runtime.class.describe", "object.describe", "object.fields", "object.dump", "object.release"], "commands": ["android-shell"], "optionalCapabilities": ["object.pin", "object.clear_session"]}
+        "requires": {"runtime": ">=1.0.0", "capabilities": ["runtime.process", "runtime.doctor", "runtime.activities", "runtime.declared_activities", "runtime.classloaders", "runtime.class.search", "runtime.class.describe", "object.describe", "object.fields", "object.dump", "object.release"], "commands": ["android-shell"], "optionalCapabilities": ["object.pin", "object.clear_session"]}
     }
     manifest_path = dist / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

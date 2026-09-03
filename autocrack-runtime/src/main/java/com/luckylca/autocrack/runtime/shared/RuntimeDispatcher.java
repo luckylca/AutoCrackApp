@@ -26,6 +26,7 @@ public final class RuntimeDispatcher {
             String kind = request.optString("kind", "");
             if (kind.isBlank()) return error("KIND_REQUIRED", "kind is required");
             if ("runtime.capabilities".equals(kind)) return capabilities();
+            if ("runtime.doctor".equals(kind)) return doctor(context);
             if (UiIntrospector.supports(kind)) return UiIntrospector.execute(request);
             if (RuntimeIntrospector.supports(kind)) return RuntimeIntrospector.execute(context, request);
             if (MemoryIntrospector.supports(kind)) return MemoryIntrospector.execute(context, request);
@@ -47,6 +48,7 @@ public final class RuntimeDispatcher {
         if (kind.startsWith("webview.")) return true;
         return Set.of(
                 "control.secure.status",
+                "control.secure.diagnose",
                 "control.secure.disable",
                 "control.activity.start",
                 "control.process.kill",
@@ -58,9 +60,9 @@ public final class RuntimeDispatcher {
         JSONArray supported = new JSONArray();
         for (String capability : List.of(
                 "ui.windows","ui.tree","ui.at","ui.find","ui.props","ui.parent","ui.children","ui.siblings","ui.listeners","ui.stack","ui.image","ui.image.result","ui.action","ui.compose.status","ui.compose.tree",
-                "runtime.process","runtime.activities","runtime.declared_activities","runtime.classloaders","runtime.class.search","runtime.class.describe",
+                "runtime.process","runtime.doctor","runtime.activities","runtime.declared_activities","runtime.classloaders","runtime.class.search","runtime.class.describe",
                 "object.describe","object.fields","object.dump","object.pin","object.release","object.clear_session",
-                "memory.maps","memory.modules","memory.native.modules","memory.read","memory.native.probe","memory.dladdr","memory.module.dump","memory.module.file_dump","memory.elf.info","memory.elf.symbols","memory.elf.relocations","memory.elf.dynamic","memory.dex.list","memory.dex.art_probe","memory.dex.art_pointer_probe","memory.dex.info","memory.dex.apk_index","memory.dex.strings","memory.dex.classes","memory.dex.fields","memory.dex.methods","memory.dex.class_data","memory.dex.scan","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull","memory.xml.block_probe","memory.xml.binary","memory.xml.axml_decode","memory.xml.axml_text","memory.apk.entries","memory.apk.pull",
+                "memory.maps","memory.modules","memory.native.modules","memory.read","memory.native.probe","memory.dladdr","memory.module.dump","memory.module.file_dump","memory.elf.info","memory.elf.symbols","memory.elf.relocations","memory.elf.dynamic","memory.dex.list","memory.dex.art_probe","memory.dex.art_pointer_probe","memory.dex.info","memory.dex.apk_index","memory.dex.strings","memory.dex.classes","memory.dex.fields","memory.dex.methods","memory.dex.class_data","memory.dex.scan","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull","memory.xml.block_probe","memory.xml.binary","memory.xml.axml_decode","memory.xml.axml_text","memory.apk.entries","memory.apk.pull","memory.capabilities",
                 "webview.list","webview.info","webview.debug","webview.eval","webview.eval.result","webview.load_url","webview.reload","webview.go_back","webview.go_forward","webview.clear_cache",
                 "control.secure.status","control.secure.diagnose","control.secure.disable","control.so.inject","control.so.diagnose","control.so.dlopen","control.so.android_dlopen_ext","control.so.dlsym","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
                 "hook.reload","hook.inspect")) supported.put(capability);
@@ -80,6 +82,45 @@ public final class RuntimeDispatcher {
                 .put("threading", new JSONObject().put("ui_main_looper", true)
                         .put("reflection_worker", true).put("main_call_timeout_ms", RuntimeThreading.MAIN_CALL_TIMEOUT_MS));
     }
+
+    private static JSONObject doctor(Context context) throws Exception {
+        JSONObject checks = new JSONObject();
+        int failures = 0;
+        if (!putCheck(checks, "capabilities", RuntimeDispatcher::capabilities)) failures++;
+        if (!putCheck(checks, "process", () -> RuntimeIntrospector.execute(context, new JSONObject().put("kind", "runtime.process")))) failures++;
+        if (!putCheck(checks, "activities", () -> RuntimeIntrospector.execute(context, new JSONObject().put("kind", "runtime.activities")))) failures++;
+        if (!putCheck(checks, "classloaders", () -> RuntimeIntrospector.execute(context, new JSONObject().put("kind", "runtime.classloaders")))) failures++;
+        if (!putCheck(checks, "memory_capabilities", () -> MemoryIntrospector.execute(context, new JSONObject().put("kind", "memory.capabilities")))) failures++;
+        if (!putCheck(checks, "secure_diagnose", () -> RuntimeThreading.callOnMain(
+                () -> WebControlIntrospector.execute(context, new JSONObject().put("kind", "control.secure.diagnose"))))) failures++;
+        if (!putCheck(checks, "native_linker", () -> WebControlIntrospector.execute(context, new JSONObject().put("kind", "control.so.diagnose")))) failures++;
+        if (!putCheck(checks, "compose_status", () -> RuntimeThreading.callOnMain(
+                () -> UiIntrospector.execute(new JSONObject().put("kind", "ui.compose.status"))))) failures++;
+        return ok().put("runtime_doctor", true)
+                .put("healthy", failures == 0)
+                .put("check_count", 8)
+                .put("failed_check_count", failures)
+                .put("version", VERSION)
+                .put("pid", android.os.Process.myPid())
+                .put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("package", context == null ? JSONObject.NULL : context.getPackageName())
+                .put("thread", Thread.currentThread().getName())
+                .put("checks", checks)
+                .put("lsposed_note", "Doctor is read-only and does not modify LSPosed config, module paths, databases, or reboot state. Target-process availability still depends on LSPosed loading the runtime module into that target.");
+    }
+
+    private static boolean putCheck(JSONObject out, String name, JsonSupplier action) throws Exception {
+        try {
+            JSONObject value = action.get();
+            out.put(name, value);
+            return value != null && value.optBoolean("ok", false);
+        } catch (Throwable error) {
+            out.put(name, error("CHECK_FAILED", error.toString()));
+            return false;
+        }
+    }
+
+    private interface JsonSupplier { JSONObject get() throws Exception; }
 
     private static JSONObject ok() throws Exception { return new JSONObject().put("ok", true); }
     private static JSONObject error(String code, String message) {

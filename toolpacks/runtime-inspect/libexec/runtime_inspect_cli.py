@@ -9,6 +9,7 @@ def parser():
     sub=p.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
     cap=sub.add_parser("capabilities"); add_target(cap)
+    doc=sub.add_parser("doctor"); add_target(doc)
     proc=sub.add_parser("process"); add_target(proc)
     acts=sub.add_parser("activities"); add_target(acts)
     decl=sub.add_parser("declared-activities"); add_target(decl)
@@ -25,6 +26,7 @@ def parser():
 def execute(a):
     if a.command=="status": return provider_call("runtime_status")
     if a.command=="capabilities": return runtime_request(target_payload(a,"runtime.capabilities"), a.timeout)
+    if a.command=="doctor": return runtime_request(target_payload(a,"runtime.doctor"), a.timeout)
     if a.command=="process": return runtime_request(target_payload(a,"runtime.process"), a.timeout)
     if a.command=="activities": return runtime_request(target_payload(a,"runtime.activities"), a.timeout)
     if a.command=="declared-activities": return runtime_request(target_payload(a,"runtime.declared_activities"), a.timeout)
