@@ -1550,7 +1550,7 @@ public final class MemoryIntrospector {
                             out.put("native_replay_probe", pulled);
                         } else {
                             byte[] axml = Base64.decode(pulled.getString("data"), Base64.NO_WRAP);
-                            JSONObject replay = NativeBridge.xmlBlockReplay(context, axml, id, maxEvents)
+                            JSONObject replay = NativeBridge.xmlBlockReplay(context, axml, id, maxEvents, maxAttributes)
                                     .put("source_entry", sourceEntry)
                                     .put("source_size", axml.length)
                                     .put("file_backed_input", true);

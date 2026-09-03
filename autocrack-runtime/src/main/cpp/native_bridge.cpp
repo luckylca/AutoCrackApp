@@ -202,13 +202,14 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockBackendPro
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockReplay(
-        JNIEnv* env, jclass, jbyteArray axml, jint resource_id, jint max_events) {
+        JNIEnv* env, jclass, jbyteArray axml, jint resource_id, jint max_events, jint max_attributes) {
     if (!axml) return env->NewStringUTF("{\"ok\":false,\"error\":\"AXML_BYTES_REQUIRED\"}");
     jsize length = env->GetArrayLength(axml);
     if (length <= 0 || length > 4 * 1024 * 1024) {
         return env->NewStringUTF("{\"ok\":false,\"error\":\"AXML_SIZE_OUT_OF_RANGE\"}");
     }
     int bounded_events = max_events < 1 ? 1 : (max_events > 2048 ? 2048 : max_events);
+    int bounded_attributes = max_attributes < 0 ? 0 : (max_attributes > 512 ? 512 : max_attributes);
 
     ModuleScanState state{};
     bool all_exec = false;
@@ -221,13 +222,27 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockReplay(
     using CreateParseFn = jlong (*)(JNIEnv*, jclass, jlong, jint);
     using DestroyFn = void (*)(JNIEnv*, jclass, jlong);
     using CriticalInt1Fn = jint (*)(jlong);
+    using CriticalInt2Fn = jint (*)(jlong, jint);
     auto create = reinterpret_cast<CreateFn>(table[0 * 3 + 2]);
     auto create_parse = reinterpret_cast<CreateParseFn>(table[2 * 3 + 2]);
     auto destroy_parse = reinterpret_cast<DestroyFn>(table[3 * 3 + 2]);
     auto destroy_tree = reinterpret_cast<DestroyFn>(table[4 * 3 + 2]);
     auto next = reinterpret_cast<CriticalInt1Fn>(table[5 * 3 + 2]);
+    auto namespace_index = reinterpret_cast<CriticalInt1Fn>(table[6 * 3 + 2]);
+    auto name_index = reinterpret_cast<CriticalInt1Fn>(table[7 * 3 + 2]);
+    auto text_index = reinterpret_cast<CriticalInt1Fn>(table[8 * 3 + 2]);
     auto line_number = reinterpret_cast<CriticalInt1Fn>(table[9 * 3 + 2]);
     auto attribute_count = reinterpret_cast<CriticalInt1Fn>(table[10 * 3 + 2]);
+    auto attribute_namespace = reinterpret_cast<CriticalInt2Fn>(table[11 * 3 + 2]);
+    auto attribute_name = reinterpret_cast<CriticalInt2Fn>(table[12 * 3 + 2]);
+    auto attribute_resource = reinterpret_cast<CriticalInt2Fn>(table[13 * 3 + 2]);
+    auto attribute_data_type = reinterpret_cast<CriticalInt2Fn>(table[14 * 3 + 2]);
+    auto attribute_data = reinterpret_cast<CriticalInt2Fn>(table[15 * 3 + 2]);
+    auto attribute_string_value = reinterpret_cast<CriticalInt2Fn>(table[16 * 3 + 2]);
+    auto id_attribute = reinterpret_cast<CriticalInt1Fn>(table[18 * 3 + 2]);
+    auto class_attribute = reinterpret_cast<CriticalInt1Fn>(table[19 * 3 + 2]);
+    auto style_attribute = reinterpret_cast<CriticalInt1Fn>(table[20 * 3 + 2]);
+    auto source_res_id = reinterpret_cast<CriticalInt1Fn>(table[21 * 3 + 2]);
 
     jlong tree = 0;
     jlong parser = 0;
@@ -257,12 +272,44 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockReplay(
             for (int i = 0; i < bounded_events; ++i) {
                 jint event = next(parser);
                 jint line = line_number(parser);
+                jint ns = (event == 2 || event == 3) ? namespace_index(parser) : -1;
+                jint name = (event == 2 || event == 3) ? name_index(parser) : -1;
+                jint text = event == 4 ? text_index(parser) : -1;
                 jint attrs = event == 2 ? attribute_count(parser) : 0;
+                jint source = source_res_id(parser);
+                std::string attrs_json;
+                int emitted_attrs = 0;
+                if (event == 2 && attrs > 0 && bounded_attributes > 0) {
+                    int limit = attrs < bounded_attributes ? attrs : bounded_attributes;
+                    for (int a = 0; a < limit; ++a) {
+                        if (emitted_attrs > 0) attrs_json += ",";
+                        attrs_json += "{\"index\":" + std::to_string(a)
+                                + ",\"namespace_index\":" + std::to_string(attribute_namespace(parser, a))
+                                + ",\"name_index\":" + std::to_string(attribute_name(parser, a))
+                                + ",\"resource_id\":" + std::to_string(attribute_resource(parser, a))
+                                + ",\"data_type\":" + std::to_string(attribute_data_type(parser, a))
+                                + ",\"data\":" + std::to_string(attribute_data(parser, a))
+                                + ",\"string_value_index\":" + std::to_string(attribute_string_value(parser, a)) + "}";
+                        emitted_attrs++;
+                    }
+                }
                 if (event_count > 0) events_json += ",";
                 events_json += "{\"index\":" + std::to_string(i)
                         + ",\"event\":" + std::to_string(event)
                         + ",\"line\":" + std::to_string(line)
-                        + ",\"attribute_count\":" + std::to_string(attrs) + "}";
+                        + ",\"namespace_index\":" + std::to_string(ns)
+                        + ",\"name_index\":" + std::to_string(name)
+                        + ",\"text_index\":" + std::to_string(text)
+                        + ",\"source_res_id\":" + std::to_string(source)
+                        + ",\"attribute_count\":" + std::to_string(attrs)
+                        + ",\"attributes_truncated\":" + (attrs > emitted_attrs ? std::string("true") : std::string("false"))
+                        + ",\"attributes\":[" + attrs_json + "]";
+                if (event == 2) {
+                    events_json += ",\"id_attribute_index\":" + std::to_string(id_attribute(parser))
+                            + ",\"class_attribute_index\":" + std::to_string(class_attribute(parser))
+                            + ",\"style_attribute_data\":" + std::to_string(style_attribute(parser));
+                }
+                events_json += "}";
                 event_count++;
                 if (event == 1 || event < 0) {
                     ended = event == 1;
