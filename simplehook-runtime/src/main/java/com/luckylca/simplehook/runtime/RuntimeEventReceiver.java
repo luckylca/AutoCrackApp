@@ -52,6 +52,7 @@ public final class RuntimeEventReceiver extends BroadcastReceiver {
                     requirePackage(request, payload.getString("package"), "inspection request");
                     rules.completeInspection(payload.getString("request_id"), payload.getJSONObject("result"));
                 }
+                case "runtime_complete" -> new com.luckylca.autocrack.runtime.shared.RuntimeRequestStore(context).complete(payload);
                 default -> throw new IllegalArgumentException("Unknown runtime event: " + event);
             }
             remember(eventId);

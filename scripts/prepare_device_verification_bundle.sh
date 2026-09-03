@@ -50,6 +50,7 @@ copy_doc_if_present docs/layout-inspect-research/TEST_MATRIX.md "$OUT/docs/TEST_
 copy_doc_if_present docs/layout-inspect-research/FINAL_REPORT.md "$OUT/docs/FINAL_REPORT.md"
 copy_doc_if_present docs/layout-inspect-research/CROSS_TOOL_INTEGRATION.md "$OUT/docs/CROSS_TOOL_INTEGRATION.md"
 copy_doc_if_present scripts/validate_cross_tool_contract.py "$OUT/scripts/validate_cross_tool_contract.py"
+copy_doc_if_present scripts/verify_runtime_request_broadcast_on_device.sh "$OUT/scripts/verify_runtime_request_broadcast_on_device.sh"
 copy_doc_if_present toolpacks/simplehook/tests/device_runtime_test.py "$OUT/scripts/simplehook_device_runtime_test.py"
 
 build_runtime_toolpack() {
@@ -128,6 +129,7 @@ copy_newest 'AutoCrackApp-elf-native-static-toolpack.zip' 'AutoCrackApp-elf-nati
   echo '## Host checks included'
   echo '- logs/cross-tool-contract.json records the Phase I host-side Toolpack/flow contract check.'
   echo '- scripts/simplehook_device_runtime_test.py is copied for owned-device SimpleHook regression runs after LSPosed scope refresh.'
+  echo '- scripts/verify_runtime_request_broadcast_on_device.sh replays the Stage 52 runtime request broadcast fallback on an owned device.'
   echo '- docs/CROSS_TOOL_INTEGRATION.md describes manual target-positive checks for the four required cross-tool flows.'
 } > "$OUT/VERIFY.md"
 ln -sfn "$(basename "$OUT")" "$OUT_ROOT/device-verification-current"

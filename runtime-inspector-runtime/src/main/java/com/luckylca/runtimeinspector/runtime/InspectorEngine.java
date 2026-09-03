@@ -33,26 +33,28 @@ public final class InspectorEngine {
 
     public void start() throws Throwable {
         WindowRootRegistry.install();
+        channel.registerRequestReceiver(packageName, processName, this::enqueue);
         main.post(this::poll);
     }
 
     private void poll() {
         try {
             org.json.JSONArray requests = channel.pending(packageName, processName);
-            for (int i = 0; i < requests.length(); i++) {
-                JSONObject request = requests.getJSONObject(i);
-                String id = request.getString("request_id");
-                if (!inFlight.add(id)) continue;
-                workers.execute(() -> {
-                    try { handle(request); }
-                    finally { main.postDelayed(() -> inFlight.remove(id), 1_000L); }
-                });
-            }
+            for (int i = 0; i < requests.length(); i++) enqueue(requests.getJSONObject(i));
         } catch (Throwable error) {
             XposedBridge.log("RuntimeInspector poll failed: " + error);
         } finally {
             main.postDelayed(this::poll, 250L);
         }
+    }
+
+    private void enqueue(JSONObject request) throws Exception {
+        String id = request.getString("request_id");
+        if (!inFlight.add(id)) return;
+        workers.execute(() -> {
+            try { handle(request); }
+            finally { main.postDelayed(() -> inFlight.remove(id), 1_000L); }
+        });
     }
 
     private void handle(JSONObject request) {

@@ -41,7 +41,7 @@ public final class RuntimeRequestStore {
                 .put("created_at", System.currentTimeMillis());
         requests.put(id, stored);
         save(REQUESTS, requests);
-        return ok().put("request_id", id);
+        return ok().put("request_id", id).put("request", new JSONObject(stored.toString()));
     }
 
     public synchronized JSONObject pending(String packageName, String processName) throws Exception {

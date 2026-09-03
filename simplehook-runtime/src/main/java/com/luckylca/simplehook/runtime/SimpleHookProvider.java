@@ -1,12 +1,17 @@
 package com.luckylca.simplehook.runtime;
 
+import android.app.Activity;
+import android.app.BroadcastOptions;
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Process;
+import android.util.Log;
 import android.util.Base64;
 import com.luckylca.autocrack.runtime.shared.RuntimeRequestStore;
 import com.luckylca.autocrack.runtime.shared.RuntimeDispatcher;
@@ -65,7 +70,7 @@ public final class SimpleHookProvider extends ContentProvider {
                 case "inspect_complete" -> inspectComplete(request);
                 case "inspect_result" -> inspectResult(request.getString("request_id"));
                 case "limits" -> limits();
-                case "runtime_submit" -> runtimeRequests.submit(request);
+                case "runtime_submit" -> runtimeSubmit(request);
                 case "runtime_pending" -> runtimeRequests.pending(request.getString("package"), nullable(request, "process"));
                 case "runtime_result" -> runtimeRequests.result(request.getString("request_id"));
                 case "runtime_status" -> runtimeRequests.status();
@@ -179,6 +184,34 @@ public final class SimpleHookProvider extends ContentProvider {
     static void recordHeartbeat(JSONObject request) throws JSONException {
         JSONObject value = new JSONObject(request.toString()).put("last_seen", System.currentTimeMillis());
         HEARTBEATS.put(request.getString("package") + ":" + request.getInt("pid"), value);
+    }
+
+    private JSONObject runtimeSubmit(JSONObject request) throws Exception {
+        JSONObject result = runtimeRequests.submit(request);
+        JSONObject stored = result.optJSONObject("request");
+        if (result.optBoolean("ok") && stored != null) broadcastRuntimeRequest(stored);
+        result.remove("request");
+        return result;
+    }
+
+    private void broadcastRuntimeRequest(JSONObject stored) {
+        try {
+            Intent intent = new Intent("com.luckylca.autocrack.runtime.REQUEST")
+                    .setPackage(stored.getString("package"))
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+                    .putExtra("json", stored.toString());
+            if (Build.VERSION.SDK_INT >= 34) {
+                BroadcastOptions options = BroadcastOptions.makeBasic()
+                        .setShareIdentityEnabled(true)
+                        .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_NONE);
+                contextOrThrow().sendOrderedBroadcast(intent, null, options.toBundle(), null,
+                        null, Activity.RESULT_CANCELED, null, null);
+            } else {
+                contextOrThrow().sendBroadcast(intent);
+            }
+        } catch (Throwable error) {
+            Log.w("SimpleHook", "Runtime request broadcast failed", error);
+        }
     }
 
     private JSONObject inspectSubmit(JSONObject request) throws JSONException {
