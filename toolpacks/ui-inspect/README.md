@@ -26,7 +26,8 @@ ui-inspect stack --package com.example.app obj_view --json
 ui-inspect image --package com.example.app obj_view --json
 ui-inspect image-result --package com.example.app img_token --json
 ui-inspect action --package com.example.app obj_view --action-json '{"type":"set_visibility","value":"gone"}' --json
-ui-inspect compose-tree --package com.example.app --json
+ui-inspect compose-tree --package com.example.app --max-nodes 512 --json
+ui-inspect compose-tree --package com.example.app --merged --json
 ```
 
 ## Scope
@@ -41,3 +42,7 @@ This Toolpack owns Window roots, View tree traversal, hit testing, View properti
 ## Mutation surface
 
 `action` supports visibility, enable/clickable toggles, focus, invalidation, size, padding, margin, background color, TextView text/hint/color/size, ImageView clear/resource operations, WebView URL/user-agent/eval operations, and legacy aliases such as `perform_click`, `remove_view`, and `webview_eval_js`. Actions are temporary runtime mutations; they do not patch APK resources.
+
+## Compose Semantics
+
+`compose-tree` now requests `ui.compose.tree`, which reflectively probes `AndroidComposeView -> SemanticsOwner -> SemanticsNode` and returns best-effort node/config text, bounds, ids, and children. It does not fake Compose nodes as Android View children, and exact config fields remain Compose-version dependent.

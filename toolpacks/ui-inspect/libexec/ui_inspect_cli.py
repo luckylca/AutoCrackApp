@@ -20,7 +20,7 @@ def parser():
     img=sub.add_parser("image"); add_target(img); img.add_argument("handle")
     ir=sub.add_parser("image-result"); add_target(ir); ir.add_argument("token")
     act=sub.add_parser("action"); add_target(act); act.add_argument("handle"); act.add_argument("--action-json", required=True)
-    comp=sub.add_parser("compose-tree"); add_target(comp)
+    comp=sub.add_parser("compose-tree"); add_target(comp); comp.add_argument("--max-nodes", type=int, default=512); comp.add_argument("--merged", action="store_true")
     return p
 
 def execute(args):
@@ -40,7 +40,7 @@ def execute(args):
     if args.command=="image": return runtime_request(target_payload(args,"ui.image", handle=args.handle), args.timeout)
     if args.command=="image-result": return runtime_request(target_payload(args,"ui.image.result", token=args.token), args.timeout)
     if args.command=="action": return runtime_request(target_payload(args,"ui.action", handle=args.handle, action=parse_json_arg(args.action_json,"INVALID_ACTION_JSON")), args.timeout)
-    if args.command=="compose-tree": return runtime_request(target_payload(args,"ui.compose.status"), args.timeout)
+    if args.command=="compose-tree": return runtime_request(target_payload(args,"ui.compose.tree", max_nodes=args.max_nodes, unmerged=not args.merged), args.timeout)
     raise CliError("INVALID_COMMAND", args.command)
 
 def main(argv=None):

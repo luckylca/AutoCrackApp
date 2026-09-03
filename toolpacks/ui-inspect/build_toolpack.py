@@ -47,7 +47,7 @@ def main():
         "commands": [{"name": "ui-inspect", "relativePath": "bin/ui-inspect", "description": "Inspect live Android windows, View trees, listeners, images and runtime-only View mutations."}],
         "selfTests": [{"id": "ui-inspect-help", "title": "AutoCrack UI Inspect CLI surface", "command": f"{pack_root}/bin/ui-inspect --help", "expectedExitCodes": [0], "outputContains": ["windows", "listeners", "compose-tree"]}],
         "sources": [{"name": "ui-inspect-cli", "version": "1.0.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/ui-inspect", "sha256": sha(root / "libexec" / "ui_inspect_cli.py")}],
-        "requires": {"runtime": ">=1.0.0", "capabilities": ["ui.windows", "ui.tree", "ui.at", "ui.find", "ui.props", "ui.parent", "ui.children", "ui.siblings", "ui.listeners", "ui.stack", "ui.image", "ui.action", "ui.compose.status", "object.describe"], "commands": ["android-shell"], "optionalCapabilities": ["ui.compose.tree"]}
+        "requires": {"runtime": ">=1.0.0", "capabilities": ["ui.windows", "ui.tree", "ui.at", "ui.find", "ui.props", "ui.parent", "ui.children", "ui.siblings", "ui.listeners", "ui.stack", "ui.image", "ui.action", "ui.compose.status", "ui.compose.tree", "object.describe"], "commands": ["android-shell"], "optionalCapabilities": ["ui.compose.tree"]}
     }
     manifest_path = dist / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

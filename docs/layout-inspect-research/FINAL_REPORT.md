@@ -686,3 +686,24 @@ Device evidence on `a4976c80` / Android API 36:
 - `apk_dex_size_matches[0].entry_size=27400`
 
 This is a meaningful ART-layout correlation step beyond file-backed parsing, but it is still intentionally reported as `art_memory_reconstruction=false`: it does not assume stable ART private C++ offsets across Android versions and does not export in-memory DEX bytes.
+
+## Stage 27 - Reflective Compose Semantics tree probe
+
+Implemented `ui.compose.tree` and changed `ui-inspect compose-tree` to call the new tree endpoint instead of only returning `ui.compose.status`.
+
+Capability added:
+
+- Detects `AndroidComposeView` inside registered window roots.
+- Reflectively probes `SemanticsOwner`.
+- Attempts `getUnmergedRootSemanticsNode` first by default, with `--merged` selecting merged-root behavior.
+- Walks `SemanticsNode` children with a bounded node budget.
+- Emits node handles, class, id, bounds text, config text/property fields, depth, and child arrays.
+- Keeps Compose nodes separate from Android `View` nodes instead of fabricating fake View children.
+
+Validation:
+
+- `:autocrack-runtime:assembleDebug` passed.
+- `ui-inspect` toolpack rebuild passed.
+- Manifest contains `ui.compose.tree`.
+- Device provider-self validation passed for `ui.compose.status` and `ui.compose.tree` with zero windows.
+- Target app runtime request remained pending because the existing LSPosed target-process request path did not consume the request after APK reinstall; this is the same target-chain refresh limitation recorded earlier, not a compile failure.

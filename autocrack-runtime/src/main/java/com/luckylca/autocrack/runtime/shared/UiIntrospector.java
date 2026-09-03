@@ -42,7 +42,7 @@ public final class UiIntrospector {
     private UiIntrospector() {}
 
     public static boolean supports(String kind) {
-        return Set.of("ui.windows","ui.tree","ui.at","ui.find","ui.props","ui.parent","ui.children","ui.siblings","ui.listeners","ui.stack","ui.image","ui.image.result","ui.action","ui.compose.status").contains(kind);
+        return Set.of("ui.windows","ui.tree","ui.at","ui.find","ui.props","ui.parent","ui.children","ui.siblings","ui.listeners","ui.stack","ui.image","ui.image.result","ui.action","ui.compose.status","ui.compose.tree").contains(kind);
     }
 
     public static JSONObject execute(JSONObject request) throws Exception {
@@ -62,6 +62,7 @@ public final class UiIntrospector {
             case "ui.image" -> image(request);
             case "ui.image.result" -> imageResult(request);
             case "ui.compose.status" -> composeStatus();
+            case "ui.compose.tree" -> composeTree(request);
             default -> error("UNSUPPORTED_KIND",kind);
         };
     }
@@ -209,11 +210,51 @@ public final class UiIntrospector {
 
     private static JSONObject composeStatus()throws Exception{
         JSONArray roots=new JSONArray();Set<View> seen=Collections.newSetFromMap(new IdentityHashMap<>());for(View root:WindowRegistry.get().snapshot(64))findCompose(root,roots,seen);
+        int semanticsReady=0;for(int i=0;i<roots.length();i++)if(roots.getJSONObject(i).optBoolean("semantics_owner_available",false))semanticsReady++;
         boolean present=roots.length()>0;return ok().put("android_compose_view_count",roots.length()).put("android_compose_views",roots)
-                .put("semantics_tree_supported",false)
-                .put("reason",present?"AndroidComposeView is identified, but Compose Semantics internals vary by Compose runtime version and are not exposed as fake Android View children.":"No AndroidComposeView observed in current windows");
+                .put("semantics_owner_count",semanticsReady)
+                .put("semantics_tree_supported",semanticsReady>0)
+                .put("reason",present?(semanticsReady>0?"AndroidComposeView and SemanticsOwner are reachable through reflective Compose runtime probing.":"AndroidComposeView is identified, but SemanticsOwner was not reachable on this Compose runtime."):"No AndroidComposeView observed in current windows");
     }
-    private static void findCompose(View v,JSONArray out,Set<View> seen)throws Exception{if(v==null||!seen.add(v)||out.length()>=64)return;if(v.getClass().getName().endsWith("AndroidComposeView"))out.put(base(v));if(v instanceof ViewGroup g)for(int i=0;i<g.getChildCount();i++)findCompose(g.getChildAt(i),out,seen);}
+
+    private static JSONObject composeTree(JSONObject request)throws Exception{
+        int maxNodes=Math.max(1,Math.min(request.optInt("max_nodes",512),4000));
+        boolean unmerged=request.optBoolean("unmerged",true);
+        JSONArray roots=new JSONArray();Set<View> seen=Collections.newSetFromMap(new IdentityHashMap<>());ComposeBudget budget=new ComposeBudget(maxNodes);
+        for(View root:WindowRegistry.get().snapshot(64)){findComposeTree(root,roots,seen,budget,unmerged);if(budget.exhausted())break;}
+        return ok().put("android_compose_view_count",roots.length()).put("node_count",budget.count).put("truncated",budget.exhausted())
+                .put("unmerged",unmerged).put("roots",roots)
+                .put("strategy","Reflect AndroidComposeView -> SemanticsOwner -> root SemanticsNode -> children/config. Version-dependent fields are reported best-effort; nodes are not faked as Android View children.");
+    }
+
+    private static void findCompose(View v,JSONArray out,Set<View> seen)throws Exception{if(v==null||!seen.add(v)||out.length()>=64)return;if(isComposeView(v))out.put(composeRootSummary(v));if(v instanceof ViewGroup g)for(int i=0;i<g.getChildCount();i++)findCompose(g.getChildAt(i),out,seen);}
+    private static void findComposeTree(View v,JSONArray out,Set<View> seen,ComposeBudget budget,boolean unmerged)throws Exception{if(v==null||!seen.add(v)||out.length()>=64||budget.exhausted())return;if(isComposeView(v))out.put(composeRootTree(v,budget,unmerged));if(v instanceof ViewGroup g)for(int i=0;i<g.getChildCount();i++)findComposeTree(g.getChildAt(i),out,seen,budget,unmerged);}
+    private static boolean isComposeView(View v){String n=v.getClass().getName();return n.endsWith("AndroidComposeView")||n.equals("androidx.compose.ui.platform.AndroidComposeView");}
+    private static JSONObject composeRootSummary(View view)throws Exception{JSONObject out=base(view).put("screen_bounds",boundsOnScreen(view));Object owner=semanticsOwner(view);out.put("semantics_owner_available",owner!=null);if(owner!=null)out.put("semantics_owner_class",owner.getClass().getName());return out;}
+    private static JSONObject composeRootTree(View view,ComposeBudget budget,boolean unmerged)throws Exception{JSONObject out=composeRootSummary(view);Object owner=semanticsOwner(view);if(owner==null)return out.put("semantics_tree_available",false).put("reason","SemanticsOwner not reachable reflectively");Object root=semanticsRoot(owner,unmerged);if(root==null)return out.put("semantics_tree_available",false).put("reason","Root SemanticsNode not reachable reflectively");return out.put("semantics_tree_available",true).put("semantics_root",semanticsNode(root,budget,0));}
+    private static Object semanticsOwner(View view){Object owner=callAny(view,"getSemanticsOwner","semanticsOwner");if(owner!=null)return owner;return fieldAny(view,"semanticsOwner","semanticsOwner$delegate");}
+    private static Object semanticsRoot(Object owner,boolean unmerged){Object root=unmerged?callAny(owner,"getUnmergedRootSemanticsNode","unmergedRootSemanticsNode"):null;if(root==null)root=callAny(owner,"getRootSemanticsNode","rootSemanticsNode");if(root==null)root=fieldAny(owner,"unmergedRootSemanticsNode","rootSemanticsNode","rootNode");return root;}
+    private static JSONObject semanticsNode(Object node,ComposeBudget budget,int depth)throws Exception{
+        budget.count++;JSONObject out=new JSONObject().put("handle",ObjectRegistry.get().put(node,false,"compose_semantics")).put("class",node.getClass().getName()).put("depth",depth);
+        Object id=callAny(node,"getId","id");if(id!=null)out.put("id",String.valueOf(id));
+        Object bounds=callAny(node,"getBoundsInRoot","boundsInRoot");if(bounds!=null)out.put("bounds_in_root",cut(String.valueOf(bounds)));
+        Object win=callAny(node,"getBoundsInWindow","boundsInWindow");if(win!=null)out.put("bounds_in_window",cut(String.valueOf(win)));
+        Object config=callAny(node,"getConfig","config");if(config!=null)out.put("config",semanticsConfig(config));
+        JSONArray children=new JSONArray();if(!budget.exhausted()){for(Object child:semanticsChildren(node)){if(budget.exhausted())break;children.put(semanticsNode(child,budget,depth+1));}}
+        return out.put("child_count",children.length()).put("children",children);
+    }
+    private static JSONObject semanticsConfig(Object config)throws Exception{
+        JSONObject out=new JSONObject().put("class",config.getClass().getName()).put("text",cut(String.valueOf(config)));
+        Object merge=callAny(config,"isMergingSemanticsOfDescendants","getMergingSemanticsOfDescendants");if(merge!=null)out.put("merge_descendants",String.valueOf(merge));
+        Object clear=callAny(config,"isClearingSemantics","getClearingSemantics");if(clear!=null)out.put("clear_and_set",String.valueOf(clear));
+        JSONArray props=new JSONArray();for(Field f:allFields(config.getClass())){String name=f.getName();if(name.toLowerCase().contains("map")||name.toLowerCase().contains("props")){try{f.setAccessible(true);Object value=f.get(config);props.put(new JSONObject().put("field",name).put("value",cut(String.valueOf(value))));}catch(Throwable ignored){}}}
+        return out.put("property_fields",props);
+    }
+    private static List<Object> semanticsChildren(Object node){Object children=callAny(node,"getChildren","children");if(children instanceof List<?> list)return new ArrayList<Object>(list);Object repl=callAny(node,"replacedChildren");if(repl instanceof List<?> list)return new ArrayList<Object>(list);return new ArrayList<>();}
+    private static Object callAny(Object target,String...names){if(target==null)return null;for(String name:names){Class<?> c=target.getClass();while(c!=null){for(Method m:c.getDeclaredMethods()){if(!m.getName().equals(name)||m.getParameterCount()!=0)continue;try{m.setAccessible(true);return m.invoke(target);}catch(Throwable ignored){}}c=c.getSuperclass();}}return null;}
+    private static Object fieldAny(Object target,String...names){if(target==null)return null;for(String name:names){Class<?> c=target.getClass();while(c!=null){try{Field f=c.getDeclaredField(name);f.setAccessible(true);return f.get(target);}catch(Throwable ignored){c=c.getSuperclass();}}}return null;}
+    private static List<Field> allFields(Class<?> c){ArrayList<Field> out=new ArrayList<>();while(c!=null){Collections.addAll(out,c.getDeclaredFields());c=c.getSuperclass();}return out;}
+    private static final class ComposeBudget { final int max; int count; ComposeBudget(int max){this.max=max;} boolean exhausted(){return count>=max;} }
 
     private static View requireView(JSONObject request){String handle=request.optString("handle","");Object value=ObjectRegistry.get().get(handle);if(value instanceof View view)return view;throw new IllegalArgumentException("STALE_OR_NON_VIEW_HANDLE:"+handle);}
     private static JSONObject base(View v)throws Exception{return new JSONObject().put("handle",ObjectRegistry.get().put(v,false,"ui")).put("class",v.getClass().getName()).put("simple_class",v.getClass().getSimpleName()).put("id",v.getId()).put("resource_name",resourceName(v)).put("width",v.getWidth()).put("height",v.getHeight()).put("visibility",v.getVisibility()).put("shown",v.isShown()).put("attached",v.isAttachedToWindow()).put("enabled",v.isEnabled()).put("clickable",v.isClickable()).put("long_clickable",v.isLongClickable()).put("focusable",v.isFocusable()).put("translation_x",v.getTranslationX()).put("translation_y",v.getTranslationY()).put("scale_x",v.getScaleX()).put("scale_y",v.getScaleY()).put("rotation",v.getRotation()).put("rotation_x",v.getRotationX()).put("rotation_y",v.getRotationY()).put("elevation",v.getElevation()).put("z",v.getZ()).put("alpha",v.getAlpha());}
