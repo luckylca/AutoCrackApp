@@ -28,8 +28,9 @@ target and return before/after state when available.
 
 Remains a separate command, rule schema and responsibility: method,
 constructor and field hooks; record/before/after/replace/skip behavior; logging,
-conditions and persistent rules. It shares only Runtime transport, registries
-and class-loader observation.
+conditions and persistent rules. Its Toolpack manifest uses schema v2 like the
+other maintained Toolpacks, while rule files remain schema v1. It shares only
+Runtime transport, registries and class-loader observation.
 
 No Toolpack registers model-facing functions. The Agent composes all commands
 through Bash. All commands implement `--json` with deterministic success/error

@@ -45,7 +45,7 @@ def main():
     payload_size = payload_zip.stat().st_size
     pack_root = "/opt/autocrack/toolpacks/active/simplehook"
     manifest_data = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "id": "simplehook",
         "title": "SimpleHook Android Java method debugger",
         "version": VERSION,
@@ -61,6 +61,12 @@ def main():
             {"id": "simplehook-schema-validation", "title": "SimpleHook v1 example rule validation", "command": f"SIMPLEHOOK_HOME=/tmp/simplehook-self-test {pack_root}/bin/simplehook rules validate {pack_root}/examples/replace-return-int.json --json", "expectedExitCodes": [0], "outputContains": ["\"valid\":true"]},
         ],
         "sources": [{"name": "simplehook-cli", "version": "0.1.1", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook", "sha256": sha256(root / "libexec/simplehook_cli.py")}],
+        "requires": {
+            "runtime": ">=1.0.0",
+            "capabilities": ["hook.reload", "hook.inspect"],
+            "commands": ["android-shell"],
+            "optionalCapabilities": ["runtime.process", "runtime.class.search", "runtime.class.describe"]
+        },
     }
     manifest = dist / "manifest.json"
     manifest.write_text(json.dumps(manifest_data, indent=2) + "\n", encoding="utf-8")

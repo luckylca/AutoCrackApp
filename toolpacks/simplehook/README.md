@@ -15,6 +15,8 @@ SimpleHook is an Android Java/Kotlin runtime debugging tool for applications and
 
 The CLI talks to the Android provider through the existing `android-shell` bridge. No new toolpack manager or Agent prompt is introduced.
 
+The packaged Toolpack manifest uses schema version 2 so AutoCrackApp can read runtime, capability, command, and self-test requirements consistently with `ui-inspect`, `runtime-inspect`, `memory-dump`, and `runtime-control`. This does not change the SimpleHook rule format: rules remain `schema_version: 1` and are still validated by `schema/simplehook-rule-v1.schema.json`.
+
 ## Installation
 
 1. Install the trusted `simplehook-toolpack-0.1.1.zip` in AutoCrackApp.
