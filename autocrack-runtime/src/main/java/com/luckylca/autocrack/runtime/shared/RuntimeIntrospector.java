@@ -49,9 +49,9 @@ public final class RuntimeIntrospector {
             case "runtime.process" -> process(context);
             case "runtime.activities" -> activities();
             case "runtime.declared_activities" -> declaredActivities(context);
-            case "runtime.classloaders" -> classLoaders();
-            case "runtime.class.search" -> classSearch(request);
-            case "runtime.class.describe" -> classDescribe(request);
+            case "runtime.classloaders" -> classLoaders(context);
+            case "runtime.class.search" -> classSearch(context, request);
+            case "runtime.class.describe" -> classDescribe(context, request);
             case "object.describe" -> objectDescribe(request);
             case "object.fields" -> objectFields(request);
             case "object.dump" -> objectDump(request);
@@ -64,6 +64,7 @@ public final class RuntimeIntrospector {
 
     private static JSONObject process(Context context) throws Exception {
         ObjectRegistry registry = ObjectRegistry.get();
+        ClassLoaderDiscovery loaderDiscovery = discoverClassLoaders(context);
         return ok().put("package", context.getPackageName())
                 .put("process", registry.processName())
                 .put("pid", Process.myPid()).put("uid", Process.myUid())
@@ -71,7 +72,8 @@ public final class RuntimeIntrospector {
                 .put("release", Build.VERSION.RELEASE)
                 .put("data_dir", context.getApplicationInfo().dataDir)
                 .put("source_dir", context.getApplicationInfo().sourceDir)
-                .put("classloader_count", ClassLoaderRegistry.get().snapshot().size())
+                .put("classloader_count", loaderDiscovery.loaders().size())
+                .put("registry_classloader_count", ClassLoaderRegistry.get().snapshot().size())
                 .put("object_handle_count", registry.size());
     }
 
@@ -159,15 +161,20 @@ public final class RuntimeIntrospector {
                 .put("truncated", info.activities != null && info.activities.length > values.length());
     }
 
-    private static JSONObject classLoaders() throws Exception {
-        List<ClassLoader> loaders = ClassLoaderRegistry.get().snapshot();
+    private static JSONObject classLoaders(Context context) throws Exception {
+        ClassLoaderDiscovery discovery = discoverClassLoaders(context);
+        List<ClassLoader> loaders = discovery.loaders();
         JSONArray values = new JSONArray();
         int limit = Math.min(MAX_CLASSLOADERS, loaders.size());
         for (int i = 0; i < limit; i++) {
             ClassLoader loader = loaders.get(i);
+            JSONArray sources = new JSONArray();
+            LinkedHashSet<String> sourceSet = discovery.sources().get(loader);
+            if (sourceSet != null) for (String source : sourceSet) sources.put(source);
             JSONObject value = new JSONObject().put("index", i)
                     .put("handle", ObjectRegistry.get().put(loader, false, "classloader"))
-                    .put("class", loader.getClass().getName()).put("text", cut(String.valueOf(loader)));
+                    .put("class", loader.getClass().getName()).put("text", cut(String.valueOf(loader)))
+                    .put("sources", sources).put("source_count", sources.length());
             ClassLoader parent = loader.getParent();
             if (parent != null) value.put("parent_handle", ObjectRegistry.get().put(parent, false, "classloader"));
             JSONArray dex = dexElements(loader, 256, false);
@@ -175,16 +182,18 @@ public final class RuntimeIntrospector {
             values.put(value);
         }
         return ok().put("count", values.length()).put("classloaders", values)
+                .put("registry_count", ClassLoaderRegistry.get().snapshot().size())
+                .put("discovery_sources", new JSONArray().put("context").put("application_context").put("thread_context").put("runtime_class").put("registry").put("activity").put("parent_chain"))
                 .put("truncated", loaders.size() > limit);
     }
 
-    private static JSONObject classSearch(JSONObject request) throws Exception {
+    private static JSONObject classSearch(Context context, JSONObject request) throws Exception {
         String query = request.optString("query", "");
         if (query.length() > 512) return error("QUERY_TOO_LONG", "query exceeds 512 characters");
         String mode = request.optString("mode", "substring");
         int max = clamp(request.optInt("max_classes", 1000), 1, MAX_CLASSES);
         Pattern regex = "regex".equals(mode) ? Pattern.compile(query) : null;
-        List<ClassLoader> loaders = selectedLoaders(request.optString("loader", null));
+        List<ClassLoader> loaders = selectedLoaders(context, request.optString("loader", null));
         LinkedHashSet<String> matches = new LinkedHashSet<>();
         int scanned = 0;
         boolean scanTruncated = false;
@@ -209,9 +218,9 @@ public final class RuntimeIntrospector {
                 .put("truncated", scanTruncated || matches.size() >= max);
     }
 
-    private static JSONObject classDescribe(JSONObject request) throws Exception {
+    private static JSONObject classDescribe(Context context, JSONObject request) throws Exception {
         String className = request.getString("class");
-        Class<?> type = findClass(className, request.optString("loader", null), request.optBoolean("allow_load", true));
+        Class<?> type = findClass(context, className, request.optString("loader", null), request.optBoolean("allow_load", true));
         if (type == null) return error("CLASS_NOT_FOUND", className);
         return describeClass(type, request.optInt("max_members", MAX_MEMBERS));
     }
@@ -387,17 +396,55 @@ public final class RuntimeIntrospector {
         catch(Throwable ignored){return null;}
     }
 
-    private static List<ClassLoader> selectedLoaders(String handle) throws Exception {
+    private record ClassLoaderDiscovery(List<ClassLoader> loaders, IdentityHashMap<ClassLoader, LinkedHashSet<String>> sources) {}
+
+    private static ClassLoaderDiscovery discoverClassLoaders(Context context) {
+        ArrayList<ClassLoader> loaders = new ArrayList<>();
+        IdentityHashMap<ClassLoader, LinkedHashSet<String>> sources = new IdentityHashMap<>();
+        if (context != null) {
+            addDiscoveredLoader(loaders, sources, context.getClassLoader(), "context");
+            Context app = context.getApplicationContext();
+            if (app != null) addDiscoveredLoader(loaders, sources, app.getClassLoader(), "application_context");
+        }
+        addDiscoveredLoader(loaders, sources, Thread.currentThread().getContextClassLoader(), "thread_context");
+        addDiscoveredLoader(loaders, sources, RuntimeIntrospector.class.getClassLoader(), "runtime_class");
+        for (ClassLoader loader : ClassLoaderRegistry.get().snapshot()) addDiscoveredLoader(loaders, sources, loader, "registry");
+        for (ActivityRegistry.ActivitySnapshot snapshot : ActivityRegistry.get().snapshot()) {
+            Activity activity = snapshot.activity();
+            if (activity == null) continue;
+            addDiscoveredLoader(loaders, sources, activity.getClassLoader(), "activity:" + activity.getClass().getName());
+            addDiscoveredLoader(loaders, sources, activity.getClass().getClassLoader(), "activity_class:" + activity.getClass().getName());
+        }
+        for (int i = 0; i < loaders.size() && i < MAX_CLASSLOADERS; i++) {
+            ClassLoader parent = loaders.get(i).getParent();
+            if (parent != null) addDiscoveredLoader(loaders, sources, parent, "parent_chain");
+        }
+        return new ClassLoaderDiscovery(loaders, sources);
+    }
+
+    private static void addDiscoveredLoader(List<ClassLoader> loaders,
+            IdentityHashMap<ClassLoader, LinkedHashSet<String>> sources, ClassLoader loader, String source) {
+        if (loader == null) return;
+        LinkedHashSet<String> labels = sources.get(loader);
+        if (labels == null) {
+            labels = new LinkedHashSet<>();
+            sources.put(loader, labels);
+            loaders.add(loader);
+        }
+        labels.add(source);
+    }
+
+    private static List<ClassLoader> selectedLoaders(Context context, String handle) throws Exception {
         if (handle != null && !handle.isBlank()) {
             Object value = ObjectRegistry.get().get(handle); if (!(value instanceof ClassLoader loader)) throw new IllegalArgumentException("loader handle is stale or not ClassLoader");
             return List.of(loader);
         }
-        return ClassLoaderRegistry.get().snapshot();
+        return discoverClassLoaders(context).loaders();
     }
 
-    private static Class<?> findClass(String name, String loaderHandle, boolean allowLoad) throws Exception {
+    private static Class<?> findClass(Context context, String name, String loaderHandle, boolean allowLoad) throws Exception {
         Method findLoaded = ClassLoader.class.getDeclaredMethod("findLoadedClass", String.class); findLoaded.setAccessible(true);
-        for (ClassLoader loader : selectedLoaders(loaderHandle)) {
+        for (ClassLoader loader : selectedLoaders(context, loaderHandle)) {
             try { Object loaded=findLoaded.invoke(loader,name); if(loaded instanceof Class<?> type)return type; } catch(Throwable ignored){}
             if (allowLoad) try { return Class.forName(name,false,loader); } catch(Throwable ignored){}
         }

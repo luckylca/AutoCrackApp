@@ -26,7 +26,7 @@ where only a native declaration is observable.
 | Runtime-only mutation | typed View/WebView editors | CONFIRMED surface | main-looper action dispatcher, no APK rewrite |
 | Running activities | Activity visualization and bootstrap `Activity` callback | CONFIRMED surface | lifecycle callbacks plus `ActivityThread.mActivities` snapshot |
 | Declared/start activity | Activity manager UI | CONFIRMED surface | PackageManager describe; host `am start` |
-| Class loaders | `C1306p.m3484d`, `getClassLoadersOffset` | CONFIRMED ART strategy | shared observer registry; DexPath discovery fallback |
+| Class loaders | `C1306p.m3484d`, `getClassLoadersOffset` | CONFIRMED ART strategy | context/application/thread/runtime/activity/registry discovery + parent-chain dedupe; DexPath metadata; ART heap-wide enumeration still gated |
 | Class search/preview | class/member UI and object operation menu | CONFIRMED surface | bounded DexFile entries plus registered loaders and reflection |
 | Object preview/dump | generic object visualization and class member window | CONFIRMED surface | shared weak `ObjectRegistry`, cycle-safe JSON serializer |
 | SO inject | absolute-path input | CONFIRMED surface | target `System.load` plus JNI `dlopen`; linker namespace failure reported, never hidden |

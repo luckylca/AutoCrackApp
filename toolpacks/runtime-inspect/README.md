@@ -30,7 +30,7 @@ runtime-inspect object-clear-session --package com.example.app ui --json
 
 ## Scope
 
-This Toolpack owns process information, Activity records, declared Activity metadata, ClassLoader discovery, class search/preview, and generic object preview/dump. It intentionally does not perform method hooks; those stay in the independent `simplehook` Toolpack.
+This Toolpack owns process information, Activity records, declared Activity metadata, ClassLoader discovery, class search/preview, and generic object preview/dump. ClassLoader discovery merges context/application/thread/runtime/activity/registry loaders plus parent chains, so it still works when the Xposed observer registry is empty; each result reports its discovery sources. It intentionally does not perform method hooks; those stay in the independent `simplehook` Toolpack.
 
 
 `runtime-inspect doctor --package PKG --json` runs a read-only provider/process/capability health summary across process, Activity, ClassLoader, memory capabilities, secure diagnostics, native/linker diagnostics, and Compose status. It does not modify LSPosed configuration, module paths, databases, or reboot state.
