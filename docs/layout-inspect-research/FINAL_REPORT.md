@@ -912,3 +912,11 @@ The App model layer already parsed schema-v2 Toolpack `requires`, but the built-
 The built-in `simplehook` trust entry now matches the current schema-v2 manifest: payload SHA-256 `52de7ef3f08bc698300d7a4abd9163450d0b50356e01ab29210d5f8d6dffaa7b`, payload size `43215`, source SHA-256 `af22a087912fd465b10d5f5bdef651ce38ced92341f40d47b60d2771cb2ed88e`, runtime requirement `>=1.0.0`, required capabilities `hook.reload` and `hook.inspect`, required command `android-shell`, and optional runtime-inspection capabilities.
 
 Offline validation passed with isolated Gradle state for `SimpleHookToolpackTrustPolicyTest` and `ToolpackPackageManifestTest`. The SimpleHook trust test now rejects modified requirements and verifies schema-v2 requirements round-trip through manifest serialization.
+
+## Stage 56 - Pin shared-runtime Toolpack v2 trust entries
+
+Extended the main AutoCrackApp built-in Toolpack trust catalog beyond `simplehook` so the four shared-runtime Toolpacks are also first-class trusted packages: `ui-inspect`, `runtime-inspect`, `memory-dump`, and `runtime-control`. Each entry now pins the current schema-v2 manifest identity, payload SHA-256, payload size, required paths, command mapping, self-test contract, source hash, and `requires` runtime/capability/command declarations from its generated `dist/manifest.json`.
+
+Added `SharedRuntimeToolpackTrustPolicyTest` to parse the exact generated v2 manifests for the four Toolpacks and run them through `BuiltInToolpackTrustPolicy.requireTrusted`. The test also mutates a pinned `requires.capabilities` list to ensure the trust policy rejects capability drift instead of only checking payload hashes.
+
+Host validation passed with isolated Gradle state: `:app:testDebugUnitTest --tests com.luckylca.autocrack.runtime.SharedRuntimeToolpackTrustPolicyTest`. This closes the gap where Stage 50/51 generated schema-v2 manifests, but the main App installer trust policy did not yet recognize the four shared-runtime Toolpacks as pinned built-ins.
