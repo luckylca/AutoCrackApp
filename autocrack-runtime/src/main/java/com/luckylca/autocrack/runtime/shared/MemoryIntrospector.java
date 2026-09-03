@@ -1525,6 +1525,12 @@ public final class MemoryIntrospector {
                 out.put("native_peer_probe", new JSONObject().put("ok", false)
                         .put("supported", false).put("reason", error.toString()));
             }
+            try {
+                out.put("xposed_existing_peer", XmlBlockPeerRegistry.get().describe(parser));
+            } catch (Throwable error) {
+                out.put("xposed_existing_peer", new JSONObject().put("ok", false)
+                        .put("captured", false).put("reason", error.toString()));
+            }
             out.put("native_backend_probe_requested", includeNativeBackendProbe);
             if (includeNativeBackendProbe) {
                 try {
@@ -1832,7 +1838,7 @@ public final class MemoryIntrospector {
                 .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field/event/method probe plus opt-in loaded native-backend discovery"))
                 .put("xml_native_replay",status(bridgeLoaded,"isolated APK-backed binary AXML replay through a newly-created platform XmlBlock/ResXMLTree and parse state; device-validated lifecycle plus native name/namespace/text indices, sourceResId, and typed attribute metadata"))
                 .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
-                .put("xml_binary_memory",status(false,"existing runtime XmlBlock hidden mNative/mParseState peer extraction and direct peer-memory reconstruction remain unavailable on this API; isolated native replay is exposed separately"))
+                .put("xml_binary_memory",status(false,"target-only Xposed capture can record existing XmlBlock mNative/mParseState peers when LSPosed loads the current module; direct arbitrary peer-memory reconstruction remains unavailable, and isolated native replay is exposed separately"))
                 .put("xml_axml_decode",status(true,"file-backed Android binary XML chunk/string-pool decode"))
                 .put("xml_axml_text",status(true,"file-backed Android binary XML readable text rendering"))
                 .put("apk_entries",status(true,"base/split APK ZipFile entry enumeration and bounded entry pull"));

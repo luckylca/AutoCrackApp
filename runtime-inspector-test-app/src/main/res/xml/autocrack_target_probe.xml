@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<autocrack-target-probe xmlns:android="http://schemas.android.com/apk/res/android"
+    android:name="autocrack_target_probe"
+    android:version="47" />
