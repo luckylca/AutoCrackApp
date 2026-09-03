@@ -23,6 +23,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import org.json.JSONArray;
@@ -36,12 +38,35 @@ public final class MemoryIntrospector {
     private static final int MAX_DEX = 2_048;
     private static final int MAX_ASSETS = 20_000;
     private static final int MAX_INLINE_BYTES = 4 * 1024 * 1024;
+    private static final long MAX_ART_DEX_BYTES = 512L * 1024L * 1024L;
+    private static final int MAX_ART_EXPORT_CHUNK_BYTES = 512 * 1024;
+    private static final long ART_EXPORT_TTL_MS = 10L * 60L * 1000L;
+    private static final int MAX_ART_EXPORT_SESSIONS = 32;
+    private static final ConcurrentHashMap<String, ArtDexExportSession> ART_DEX_EXPORTS = new ConcurrentHashMap<>();
+
+    private static final class ArtDexExportSession {
+        final long address;
+        final long size;
+        final String version;
+        final String signature;
+        final String headerSha256;
+        volatile long expiresAtMs;
+
+        ArtDexExportSession(long address, long size, String version, String signature, String headerSha256, long expiresAtMs) {
+            this.address = address;
+            this.size = size;
+            this.version = version;
+            this.signature = signature;
+            this.headerSha256 = headerSha256;
+            this.expiresAtMs = expiresAtMs;
+        }
+    }
     private MemoryIntrospector() {}
 
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.art_pointer_probe", "memory.dex.art_dump", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.art_pointer_probe", "memory.dex.art_dump", "memory.dex.art_export.open", "memory.dex.art_export.chunk", "memory.dex.art_export.close", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.block_probe", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -63,6 +88,9 @@ public final class MemoryIntrospector {
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.art_pointer_probe" -> dexArtPointerProbe(context, request);
             case "memory.dex.art_dump" -> dexArtDump(context, request);
+            case "memory.dex.art_export.open" -> dexArtExportOpen(context, request);
+            case "memory.dex.art_export.chunk" -> dexArtExportChunk(context, request);
+            case "memory.dex.art_export.close" -> dexArtExportClose(request);
             case "memory.dex.info" -> dexInfo(context, request);
             case "memory.dex.apk_index" -> dexApkIndex(context, request);
             case "memory.dex.strings" -> dexStrings(context, request);
@@ -635,6 +663,202 @@ public final class MemoryIntrospector {
                 .put("warning", "Default mode is a pointer-shape/neighborhood probe. try_layout_dex_header may reconstruct validated DEX header/map metadata; try_layout_dex_tables additionally parses bounded strings/classes/fields/methods/class_data directly from that validated in-memory candidate. Full raw DEX byte export/reconstruction remains unsupported.");
     }
 
+
+    private static JSONObject dexArtExportOpen(Context context, JSONObject request) throws Exception {
+        pruneArtDexExports();
+        if (ART_DEX_EXPORTS.size() >= MAX_ART_EXPORT_SESSIONS) {
+            return error("ART_EXPORT_SESSION_LIMIT", "too many active ART DEX export sessions");
+        }
+        JSONObject probeRequest = new JSONObject()
+                .put("kind", "memory.dex.art_pointer_probe")
+                .put("loader", request.optString("loader", ""))
+                .put("max_dex", clamp(request.optInt("max_dex", 256), 1, MAX_DEX))
+                .put("max_pointers", clamp(request.optInt("max_pointers", 64), 1, 1024))
+                .put("window_bytes", clamp(request.optInt("window_bytes", 4096), 0x70, MAX_INLINE_BYTES))
+                .put("scan_back_bytes", clamp(request.optInt("scan_back_bytes", 512), 0, MAX_INLINE_BYTES))
+                .put("include_context_loader", request.optBoolean("include_context_loader", true))
+                .put("include_class_count", false)
+                .put("include_words", true)
+                .put("word_count", clamp(request.optInt("word_count", 16), 1, 256))
+                .put("try_layout_dex_header", false)
+                .put("try_layout_dex_tables", false);
+        JSONObject probe = dexArtPointerProbe(context, probeRequest);
+        JSONArray candidates = artExportCandidates(context, probe);
+        if (candidates.length() == 0) {
+            return unsupported("memory.dex.art_export.open", "no validated ART DEX export candidate was found",
+                    new JSONArray().put("candidate discovery requires a readable ART data_begin pointer and matching file_size word")
+                            .put("maximum export candidate size is " + MAX_ART_DEX_BYTES + " bytes"));
+        }
+        int selected = request.optInt("candidate_index", 0);
+        if (selected < 0 || selected >= candidates.length()) {
+            return error("ART_DEX_CANDIDATE_INDEX", "candidate_index must be between 0 and " + (candidates.length() - 1));
+        }
+        JSONObject candidate = candidates.getJSONObject(selected);
+        long address = parseAddress(candidate.getString("data_address"));
+        long size = candidate.getLong("size");
+        JSONObject dex = candidate.getJSONObject("dex_header");
+        String token = "adex_" + UUID.randomUUID().toString().replace("-", "");
+        long expiresAt = System.currentTimeMillis() + ART_EXPORT_TTL_MS;
+        ART_DEX_EXPORTS.put(token, new ArtDexExportSession(address, size, dex.optString("version", ""),
+                dex.optString("signature", ""), candidate.optString("header_sha256", ""), expiresAt));
+        return ok().put("token", token)
+                .put("candidate_index", selected)
+                .put("candidate_count", candidates.length())
+                .put("data_address", hex(address))
+                .put("size", size)
+                .put("dex_header", dex)
+                .put("header_sha256", candidate.optString("header_sha256", ""))
+                .put("chunk_max_bytes", MAX_ART_EXPORT_CHUNK_BYTES)
+                .put("expires_at_ms", expiresAt)
+                .put("candidate", candidate)
+                .put("chunked_raw_reconstruction", true)
+                .put("strategy", "validated ART DEX export session bound to data_begin/file_size/header invariants");
+    }
+
+    private static JSONObject dexArtExportChunk(Context context, JSONObject request) throws Exception {
+        pruneArtDexExports();
+        String token = request.optString("token", "");
+        ArtDexExportSession session = ART_DEX_EXPORTS.get(token);
+        if (session == null) return error("ART_EXPORT_SESSION_MISSING", token);
+        long now = System.currentTimeMillis();
+        if (session.expiresAtMs < now) {
+            ART_DEX_EXPORTS.remove(token);
+            return error("ART_EXPORT_SESSION_EXPIRED", token);
+        }
+        byte[] header = readMappedMemory(context, session.address, 0x70);
+        if (header.length < 0x70 || !looksLikeDexHeader(header, 0)) {
+            ART_DEX_EXPORTS.remove(token);
+            return error("ART_EXPORT_REVALIDATION_FAILED", "DEX header is no longer readable");
+        }
+        JSONObject dex = parseDexInfo(header);
+        if (dex.optLong("file_size", -1L) != session.size
+                || !session.version.equals(dex.optString("version", ""))
+                || !session.signature.equals(dex.optString("signature", ""))
+                || !session.headerSha256.equals(sha256(header))) {
+            ART_DEX_EXPORTS.remove(token);
+            return error("ART_EXPORT_REVALIDATION_FAILED", "DEX header/signature changed after export session open");
+        }
+        long offset = request.optLong("offset", 0L);
+        if (offset < 0L || offset > session.size) return error("ART_EXPORT_OFFSET", "offset is outside candidate range");
+        int requested = clamp(request.optInt("size", MAX_ART_EXPORT_CHUNK_BYTES), 1, MAX_ART_EXPORT_CHUNK_BYTES);
+        if (offset == session.size) {
+            session.expiresAtMs = now + ART_EXPORT_TTL_MS;
+            return ok().put("token", token).put("offset", offset).put("size", 0)
+                    .put("total_size", session.size).put("eof", true).put("encoding", "base64").put("data", "");
+        }
+        int wanted = (int)Math.min((long)requested, session.size - offset);
+        byte[] bytes = readMappedMemory(context, session.address + offset, wanted);
+        if (bytes.length != wanted) return error("ART_EXPORT_SHORT_READ", "expected " + wanted + " bytes, got " + bytes.length);
+        session.expiresAtMs = now + ART_EXPORT_TTL_MS;
+        return ok().put("token", token)
+                .put("offset", offset)
+                .put("size", bytes.length)
+                .put("total_size", session.size)
+                .put("eof", offset + bytes.length >= session.size)
+                .put("chunk_sha256", sha256(bytes))
+                .put("encoding", "base64")
+                .put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                .put("expires_at_ms", session.expiresAtMs);
+    }
+
+    private static JSONObject dexArtExportClose(JSONObject request) throws Exception {
+        pruneArtDexExports();
+        String token = request.optString("token", "");
+        ArtDexExportSession removed = ART_DEX_EXPORTS.remove(token);
+        return ok().put("token", token).put("closed", removed != null).put("active_sessions", ART_DEX_EXPORTS.size());
+    }
+
+    private static JSONArray artExportCandidates(Context context, JSONObject probe) throws Exception {
+        LinkedHashMap<String, JSONObject> unique = new LinkedHashMap<>();
+        JSONArray pointers = probe.optJSONArray("pointers");
+        if (pointers == null) return new JSONArray();
+        List<MapEntry> maps = readMaps(MAX_MAPS);
+        for (int p = 0; p < pointers.length() && unique.size() < 64; p++) {
+            JSONObject pointer = pointers.optJSONObject(p);
+            if (pointer == null) continue;
+            JSONArray words = pointer.optJSONArray("words");
+            if (words == null) continue;
+            ArrayList<JSONObject> pointerWords = new ArrayList<>();
+            ArrayList<JSONObject> sizeWords = new ArrayList<>();
+            for (int i = 0; i < words.length(); i++) {
+                JSONObject word = words.optJSONObject(i);
+                if (word == null) continue;
+                JSONObject pointsTo = word.optJSONObject("points_to");
+                Long numeric = cookiePointerValue(word.optString("value", ""));
+                if (pointsTo != null && numeric != null && pointsTo.optString("permissions", "").startsWith("r")) pointerWords.add(word);
+                if (numeric != null && numeric >= 0x70L && numeric <= MAX_ART_DEX_BYTES) sizeWords.add(word);
+            }
+            for (JSONObject ptrWord : pointerWords) {
+                Long rawAddress = cookiePointerValue(ptrWord.optString("value", ""));
+                if (rawAddress == null || rawAddress == 0L) continue;
+                long address = rawAddress;
+                if (findMapContaining(maps, address) == null) {
+                    long untagged = address & 0x00ffffffffffffffL;
+                    if (untagged != address && findMapContaining(maps, untagged) != null) address = untagged;
+                }
+                MapEntry startMap = findMapContaining(maps, address);
+                if (startMap == null || startMap.permissions == null || !startMap.permissions.startsWith("r")) continue;
+                for (JSONObject sizeWord : sizeWords) {
+                    Long sizeValue = cookiePointerValue(sizeWord.optString("value", ""));
+                    if (sizeValue == null || sizeValue < 0x70L || sizeValue > MAX_ART_DEX_BYTES) continue;
+                    if (!artReadableRange(maps, address, sizeValue)) continue;
+                    byte[] header;
+                    try { header = readMappedMemory(context, address, 0x70); }
+                    catch (Throwable ignored) { continue; }
+                    if (header.length < 0x70 || !looksLikeDexHeader(header, 0)) continue;
+                    JSONObject dex = parseDexInfo(header);
+                    boolean valid = dex.optLong("file_size", -1L) == sizeValue
+                            && dex.optLong("header_size", -1L) == 0x70L
+                            && "0x12345678".equals(dex.optString("endian_tag", ""));
+                    if (!valid) continue;
+                    String key = hex(address) + ":" + sizeValue;
+                    JSONObject existing = unique.get(key);
+                    if (existing != null) {
+                        existing.getJSONArray("data_word_indices").put(ptrWord.optInt("index"));
+                        continue;
+                    }
+                    unique.put(key, new JSONObject()
+                            .put("pointer_record_index", p)
+                            .put("data_word_indices", new JSONArray().put(ptrWord.optInt("index")))
+                            .put("size_word_index", sizeWord.optInt("index"))
+                            .put("data_address", hex(address))
+                            .put("size", sizeValue)
+                            .put("confidence", "high")
+                            .put("validation_scope", "header_plus_readable_range")
+                            .put("header_sha256", sha256(header))
+                            .put("dex_header", dex)
+                            .put("map", startMap.json())
+                            .put("origins", pointer.optJSONArray("origins") == null ? new JSONArray() : pointer.optJSONArray("origins")));
+                    break;
+                }
+            }
+        }
+        JSONArray out = new JSONArray();
+        for (JSONObject candidate : unique.values()) out.put(candidate);
+        return out;
+    }
+
+    private static boolean artReadableRange(List<MapEntry> maps, long start, long size) {
+        if (size < 0L || start < 0L || start + size < start) return false;
+        long end = start + size;
+        long cursor = start;
+        for (MapEntry map : maps) {
+            if (map.permissions == null || !map.permissions.startsWith("r")) continue;
+            if (map.end <= cursor) continue;
+            if (map.start > cursor) return false;
+            if (map.start <= cursor && map.end > cursor) cursor = map.end;
+            if (cursor >= end) return true;
+        }
+        return false;
+    }
+
+    private static void pruneArtDexExports() {
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, ArtDexExportSession> entry : ART_DEX_EXPORTS.entrySet()) {
+            ArtDexExportSession value = entry.getValue();
+            if (value == null || value.expiresAtMs < now) ART_DEX_EXPORTS.remove(entry.getKey(), value);
+        }
+    }
 
     private static JSONObject dexArtDump(Context context, JSONObject request) throws Exception {
         int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
@@ -1467,7 +1691,8 @@ public final class MemoryIntrospector {
                 .put("dex_art_memory_tables",status(bridgeLoaded || canReadSelfMem(),"opt-in bounded strings/classes/fields/methods/class_data parsing from a validated ART memory DEX candidate"))
                 .put("dex_art_memory_fingerprint",status(bridgeLoaded || canReadSelfMem(),"SHA-256 and DEX-signature fingerprinting of validated ART memory candidates with same-size originating APK classes*.dex correlation"))
                 .put("dex_art_memory_dump",status(bridgeLoaded || canReadSelfMem(),"bounded raw byte reconstruction for high-confidence validated ART DEX candidates up to the 4 MiB inline cap with header/endian/size/SHA-256 revalidation"))
-                .put("dex_art_memory",status(false,"unbounded/chunked ART DexFile raw reconstruction remains version-specific and unsupported; bounded validated raw dump plus header/tables/fingerprints are exposed separately"))
+                .put("dex_art_memory_stream",status(bridgeLoaded || canReadSelfMem(),"token-bound chunked ART DEX export for validated readable candidates up to 512 MiB; each chunk is limited to 512 KiB and the DEX header is revalidated before every read"))
+                .put("dex_art_memory",status(false,"arbitrary ART layouts, candidates above 512 MiB, and non-contiguous unreadable mappings remain unsupported; validated bounded and chunked raw export paths are exposed separately"))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
                 .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field and event probe; no native byte export"))
@@ -1660,7 +1885,8 @@ public final class MemoryIntrospector {
             return new MapEntry(start,end,parts[1],Long.parseUnsignedLong(parts[2],16),parts[3],Long.parseLong(parts[4]),path,line);
         } catch(Throwable ignored){return null;}
     }
-    private static MapEntry findMapContaining(long address) throws Exception { for (MapEntry entry : readMaps(MAX_MAPS)) if (Long.compareUnsigned(address, entry.start) >= 0 && Long.compareUnsigned(address, entry.end) < 0) return entry; return null; }
+    private static MapEntry findMapContaining(long address) throws Exception { return findMapContaining(readMaps(MAX_MAPS), address); }
+    private static MapEntry findMapContaining(List<MapEntry> maps, long address) { for (MapEntry entry : maps) if (Long.compareUnsigned(address, entry.start) >= 0 && Long.compareUnsigned(address, entry.end) < 0) return entry; return null; }
 
     private static LinkedHashMap<String,List<MapEntry>> groupModules(List<MapEntry> maps) {
         LinkedHashMap<String,List<MapEntry>> out=new LinkedHashMap<>();

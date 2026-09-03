@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, os, sys, base64, copy, json
+import argparse, os, sys, base64, copy, json, hashlib
 sys.path.insert(0, os.path.dirname(__file__))
 from autocrack_runtime_client import *
 
@@ -28,6 +28,7 @@ def parser():
     dap=sub.add_parser("dex-art-probe"); add_target(dap); dap.add_argument("--loader", default="", help="optional ClassLoader handle"); dap.add_argument("--class-count", action="store_true"); dap.add_argument("--max-dex", type=int, default=256); dap.add_argument("--no-context-loader", action="store_true")
     dapp=sub.add_parser("dex-art-pointer-probe"); add_target(dapp); dapp.add_argument("--loader", default="", help="optional ClassLoader handle"); dapp.add_argument("--class-count", action="store_true"); dapp.add_argument("--max-dex", type=int, default=256); dapp.add_argument("--max-pointers", type=int, default=64); dapp.add_argument("--window-bytes", type=int, default=65536); dapp.add_argument("--scan-back-bytes", type=int, default=4096); dapp.add_argument("--include-words", action="store_true"); dapp.add_argument("--word-count", type=int, default=32); dapp.add_argument("--try-layout-dex-header", action="store_true"); dapp.add_argument("--try-layout-dex-tables", action="store_true"); dapp.add_argument("--layout-table-limit", type=int, default=32); dapp.add_argument("--layout-member-limit", type=int, default=16); dapp.add_argument("--layout-filter", default=""); dapp.add_argument("--no-context-loader", action="store_true")
     dad=sub.add_parser("dex-art-dump"); add_target(dad); dad.add_argument("--loader", default=""); dad.add_argument("--candidate-index", type=int, default=0); dad.add_argument("--max-dex", type=int, default=256); dad.add_argument("--max-pointers", type=int, default=64); dad.add_argument("--window-bytes", type=int, default=4096); dad.add_argument("--scan-back-bytes", type=int, default=512); dad.add_argument("--word-count", type=int, default=16); dad.add_argument("--max-bytes", type=int, default=4194304); dad.add_argument("--no-context-loader", action="store_true"); add_output(dad)
+    dae=sub.add_parser("dex-art-export"); add_target(dae); dae.set_defaults(timeout=20.0); dae.add_argument("--loader", default=""); dae.add_argument("--candidate-index", type=int, default=0); dae.add_argument("--max-dex", type=int, default=256); dae.add_argument("--max-pointers", type=int, default=64); dae.add_argument("--window-bytes", type=int, default=4096); dae.add_argument("--scan-back-bytes", type=int, default=512); dae.add_argument("--word-count", type=int, default=16); dae.add_argument("--chunk-bytes", type=int, default=524288); dae.add_argument("--output", required=True); dae.add_argument("--no-context-loader", action="store_true")
     di=sub.add_parser("dex-info"); add_target(di); di.add_argument("--path", default=""); di.add_argument("--entry", default=""); di.add_argument("--apk-package", default=""); di.add_argument("--apk-path", default=""); di.add_argument("--max-bytes", type=int, default=4194304)
     dai=sub.add_parser("dex-apk-index"); add_target(dai); dai.add_argument("--apk-package", default=""); dai.add_argument("--max-dex", type=int, default=32); dai.add_argument("--max-bytes", type=int, default=4194304)
     dstr=sub.add_parser("dex-strings"); add_target(dstr); dstr.add_argument("--path", default=""); dstr.add_argument("--entry", default=""); dstr.add_argument("--apk-package", default=""); dstr.add_argument("--apk-path", default=""); dstr.add_argument("--filter", default=""); dstr.add_argument("--max-strings", type=int, default=1024); dstr.add_argument("--max-bytes", type=int, default=4194304)
@@ -48,6 +49,57 @@ def parser():
     apkp=sub.add_parser("apk-pull"); add_target(apkp); apkp.add_argument("entry"); apkp.add_argument("--source", default="base"); apkp.add_argument("--apk-package", default=""); apkp.add_argument("--apk-path", default=""); apkp.add_argument("--max-bytes", type=int, default=4194304); add_output(apkp)
     return p
 
+def _dex_art_export(a):
+    opened = runtime_request(target_payload(a, "memory.dex.art_export.open",
+        loader=a.loader, candidate_index=a.candidate_index, max_dex=a.max_dex,
+        max_pointers=a.max_pointers, window_bytes=a.window_bytes,
+        scan_back_bytes=a.scan_back_bytes, word_count=a.word_count,
+        include_context_loader=not a.no_context_loader), a.timeout)
+    token = opened["token"]
+    total = int(opened["size"])
+    server_max = int(opened.get("chunk_max_bytes", 524288))
+    chunk_size = max(1, min(int(a.chunk_bytes), server_max))
+    target = _safe_output_path(a.output)
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    digest = hashlib.sha256()
+    offset = 0
+    chunks = 0
+    try:
+        with open(target, "wb") as f:
+            while offset < total:
+                wanted = min(chunk_size, total - offset)
+                part = runtime_request(target_payload(a, "memory.dex.art_export.chunk",
+                    token=token, offset=offset, size=wanted), a.timeout)
+                if int(part.get("offset", -1)) != offset or int(part.get("total_size", -1)) != total:
+                    raise CliError("ART_EXPORT_PROTOCOL", "chunk offset/total mismatch")
+                if part.get("encoding") != "base64":
+                    raise CliError("ART_EXPORT_ENCODING", f"unexpected chunk encoding: {part.get('encoding')!r}")
+                raw = base64.b64decode(part.get("data", ""))
+                if len(raw) != int(part.get("size", -1)) or len(raw) != wanted:
+                    raise CliError("ART_EXPORT_SHORT_CHUNK", f"expected {wanted} bytes, got {len(raw)}")
+                if part.get("chunk_sha256") and hashlib.sha256(raw).hexdigest() != part["chunk_sha256"]:
+                    raise CliError("ART_EXPORT_CHUNK_HASH", f"chunk hash mismatch at offset {offset}")
+                f.write(raw)
+                digest.update(raw)
+                offset += len(raw)
+                chunks += 1
+    except Exception:
+        try: runtime_request(target_payload(a, "memory.dex.art_export.close", token=token), a.timeout)
+        except Exception: pass
+        raise
+    closed = runtime_request(target_payload(a, "memory.dex.art_export.close", token=token), a.timeout)
+    out = copy.deepcopy(opened)
+    out.pop("token", None)
+    out["ok"] = True
+    out["output_path"] = target
+    out["output_bytes"] = offset
+    out["chunk_bytes"] = chunk_size
+    out["chunk_count"] = chunks
+    out["sha256"] = digest.hexdigest()
+    out["export_token_closed"] = bool(closed.get("closed"))
+    out["data_omitted"] = True
+    return out
+
 def execute(a):
     if a.command=="capabilities": return runtime_request(target_payload(a,"memory.capabilities"), a.timeout)
     if a.command=="maps": return runtime_request(target_payload(a,"memory.maps", max_maps=a.max_maps, path_contains=a.path_contains, permissions_contains=a.permissions_contains), a.timeout)
@@ -66,6 +118,7 @@ def execute(a):
     if a.command=="dex-art-probe": return runtime_request(target_payload(a,"memory.dex.art_probe", loader=a.loader, include_class_count=a.class_count, max_dex=a.max_dex, include_context_loader=not a.no_context_loader), a.timeout)
     if a.command=="dex-art-pointer-probe": return runtime_request(target_payload(a,"memory.dex.art_pointer_probe", loader=a.loader, include_class_count=a.class_count, max_dex=a.max_dex, max_pointers=a.max_pointers, window_bytes=a.window_bytes, scan_back_bytes=a.scan_back_bytes, include_words=(a.include_words or a.try_layout_dex_header or a.try_layout_dex_tables), word_count=a.word_count, try_layout_dex_header=(a.try_layout_dex_header or a.try_layout_dex_tables), try_layout_dex_tables=a.try_layout_dex_tables, layout_table_limit=a.layout_table_limit, layout_member_limit=a.layout_member_limit, layout_filter=a.layout_filter, include_context_loader=not a.no_context_loader), a.timeout)
     if a.command=="dex-art-dump": return runtime_request(target_payload(a,"memory.dex.art_dump", loader=a.loader, candidate_index=a.candidate_index, max_dex=a.max_dex, max_pointers=a.max_pointers, window_bytes=a.window_bytes, scan_back_bytes=a.scan_back_bytes, word_count=a.word_count, max_bytes=a.max_bytes, include_context_loader=not a.no_context_loader), a.timeout)
+    if a.command=="dex-art-export": return _dex_art_export(a)
     if a.command=="dex-info": return runtime_request(target_payload(a,"memory.dex.info", path=a.path, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, max_bytes=a.max_bytes), a.timeout)
     if a.command=="dex-apk-index": return runtime_request(target_payload(a,"memory.dex.apk_index", apk_package=a.apk_package, max_dex=a.max_dex, max_bytes=a.max_bytes), a.timeout)
     if a.command=="dex-strings": return runtime_request(target_payload(a,"memory.dex.strings", path=a.path, entry=a.entry, apk_package=a.apk_package, apk_path=a.apk_path, filter=a.filter, max_strings=a.max_strings, max_bytes=a.max_bytes), a.timeout)
@@ -190,6 +243,8 @@ def _write_module_segments(result, output_path):
 def write_output_if_requested(args, result):
     output = getattr(args, "output", None)
     if not output:
+        return result
+    if getattr(args, "command", "") == "dex-art-export":
         return result
     if getattr(args, "command", "") == "module-dump":
         return _write_module_segments(result, output)
