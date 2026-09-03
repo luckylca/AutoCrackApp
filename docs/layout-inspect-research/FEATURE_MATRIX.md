@@ -64,3 +64,5 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | File-backed Android binary XML decode | Complete for bounded APK-backed AXML chunk/node decode | `memory.xml.axml_decode`, `memory-dump xml-axml-decode`; device self-test PASS on runtime probe XML |
 | AXML namespace/text rendering | Complete for bounded APK-backed readable XML | `memory.xml.axml_text`, `memory-dump xml-axml-text`; device self-test PASS with namespace events and rendered `android:*` attributes |
 | DEX file metadata | Complete for bounded file/APK DEX header and map-list | `memory.dex.info`, `memory-dump dex-info`; device self-test PASS on runtime `classes.dex`; ART cookie probe device evidence updated |
+| Stage 21 | `memory.dex.strings` | Parse file/APK DEX string table with optional filter | Implemented | File-backed only |
+| Stage 21 | `memory.dex.classes` | Parse DEX class_def descriptors, superclass and source file | Implemented | File-backed only |

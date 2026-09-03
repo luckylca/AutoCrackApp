@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.strings", "memory.dex.classes", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -62,6 +62,8 @@ public final class MemoryIntrospector {
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.info" -> dexInfo(context, request);
+            case "memory.dex.strings" -> dexStrings(context, request);
+            case "memory.dex.classes" -> dexClasses(context, request);
             case "memory.dex.scan" -> dexScan(context, request);
             case "memory.dex.dump" -> dexDump(request);
             case "memory.assets.list" -> assetsList(context, request);
@@ -331,6 +333,34 @@ public final class MemoryIntrospector {
         return new DexBytes(bytes, source, truncated);
     }
 
+    private static JSONObject dexStrings(Context context, JSONObject request) throws Exception {
+        int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxStrings = clamp(request.optInt("max_strings", 1024), 1, 100_000);
+        String filter = request.optString("filter", "");
+        DexBytes loaded;
+        try { loaded = loadDexBytes(context, request, maxBytes); }
+        catch (IllegalArgumentException error) { return error("DEX_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseDexStrings(loaded.bytes, maxStrings, filter);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("strings", parsed)
+                .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
+                .put("strategy", "bounded file/APK DEX string table parsing; no ART memory reconstruction");
+    }
+
+    private static JSONObject dexClasses(Context context, JSONObject request) throws Exception {
+        int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxClasses = clamp(request.optInt("max_classes", 2048), 1, 100_000);
+        String filter = request.optString("filter", "");
+        DexBytes loaded;
+        try { loaded = loadDexBytes(context, request, maxBytes); }
+        catch (IllegalArgumentException error) { return error("DEX_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseDexClasses(loaded.bytes, maxClasses, filter);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("classes", parsed)
+                .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
+                .put("strategy", "bounded file/APK DEX class_def descriptor parsing; no ART memory reconstruction");
+    }
+
     private static JSONObject dexList(JSONObject request) throws Exception {
         JSONArray loaders = new JSONArray(); int dexCount = 0;
         String selected = request.optString("loader", null);
@@ -590,6 +620,8 @@ public final class MemoryIntrospector {
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
                 .put("dex_art_probe",status(true,"DexPathList/DexFile reflected ART cookie shape probe; no memory reconstruction"))
                 .put("dex_file_info",status(true,"bounded file/APK DEX header and map-list parsing"))
+                .put("dex_strings",status(true,"bounded file/APK DEX string table parsing"))
+                .put("dex_classes",status(true,"bounded file/APK DEX class_def descriptor parsing"))
                 .put("dex_memory_scan",status(bridgeLoaded,"bounded readable-map DEX magic/header candidate scan; not mCookie reconstruction"))
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
@@ -1208,6 +1240,58 @@ public final class MemoryIntrospector {
     private static int u32leInt(byte[] bytes, int off) { return (bytes[off] & 0xff) | ((bytes[off+1] & 0xff) << 8) | ((bytes[off+2] & 0xff) << 16) | ((bytes[off+3] & 0xff) << 24); }
     private static String axmlChunkName(int type) { return switch (type) { case 0x0001 -> "RES_STRING_POOL_TYPE"; case 0x0003 -> "RES_XML_TYPE"; case 0x0180 -> "RES_XML_RESOURCE_MAP_TYPE"; case 0x0100 -> "RES_XML_START_NAMESPACE_TYPE"; case 0x0101 -> "RES_XML_END_NAMESPACE_TYPE"; case 0x0102 -> "RES_XML_START_ELEMENT_TYPE"; case 0x0103 -> "RES_XML_END_ELEMENT_TYPE"; case 0x0104 -> "RES_XML_CDATA_TYPE"; default -> "AXML_CHUNK_" + type; }; }
 
+    private static JSONObject parseDexStrings(byte[] bytes, int maxStrings, String filter) throws Exception {
+        JSONObject header = parseDexInfo(bytes);
+        if (!header.optBoolean("ok", false)) return header;
+        long total = u32le(bytes, 0x38);
+        long idsOff = u32le(bytes, 0x3c);
+        JSONArray values = new JSONArray();
+        boolean truncated = false;
+        for (int i=0; i<total; i++) {
+            if (values.length() >= maxStrings) { truncated = true; break; }
+            long entryOff = idsOff + (long)i * 4;
+            if (entryOff < 0 || entryOff + 4 > bytes.length) { truncated = true; break; }
+            long dataOff = u32le(bytes, (int)entryOff);
+            String value = dexStringData(bytes, (int)dataOff);
+            if (filter != null && !filter.isEmpty() && !value.contains(filter)) continue;
+            values.put(new JSONObject().put("index", i).put("offset", dataOff).put("value", value));
+        }
+        return ok().put("total", total).put("count", values.length()).put("strings", values)
+                .put("truncated", truncated).put("filter", filter == null || filter.isEmpty() ? JSONObject.NULL : filter);
+    }
+
+    private static JSONObject parseDexClasses(byte[] bytes, int maxClasses, String filter) throws Exception {
+        JSONObject header = parseDexInfo(bytes);
+        if (!header.optBoolean("ok", false)) return header;
+        long classTotal = u32le(bytes, 0x60);
+        long classOff = u32le(bytes, 0x64);
+        JSONArray values = new JSONArray();
+        boolean truncated = false;
+        for (int i=0; i<classTotal; i++) {
+            if (values.length() >= maxClasses) { truncated = true; break; }
+            long off = classOff + (long)i * 32;
+            if (off < 0 || off + 32 > bytes.length) { truncated = true; break; }
+            int classIdx = (int)u32le(bytes, (int)off);
+            int accessFlags = (int)u32le(bytes, (int)off + 4);
+            int superIdx = (int)u32le(bytes, (int)off + 8);
+            int sourceFileIdx = (int)u32le(bytes, (int)off + 16);
+            String descriptor = dexTypeDescriptor(bytes, classIdx);
+            if (filter != null && !filter.isEmpty() && !descriptor.contains(filter)) continue;
+            values.put(new JSONObject().put("index", i).put("class_idx", classIdx).put("descriptor", descriptor)
+                    .put("access_flags", hex(accessFlags))
+                    .put("superclass_idx", superIdx == -1 ? JSONObject.NULL : superIdx)
+                    .put("superclass", superIdx == -1 ? JSONObject.NULL : dexTypeDescriptor(bytes, superIdx))
+                    .put("interfaces_off", u32le(bytes, (int)off + 12))
+                    .put("source_file_idx", sourceFileIdx == -1 ? JSONObject.NULL : sourceFileIdx)
+                    .put("source_file", sourceFileIdx == -1 ? JSONObject.NULL : dexStringByIndex(bytes, sourceFileIdx))
+                    .put("annotations_off", u32le(bytes, (int)off + 20))
+                    .put("class_data_off", u32le(bytes, (int)off + 24))
+                    .put("static_values_off", u32le(bytes, (int)off + 28)));
+        }
+        return ok().put("total", classTotal).put("count", values.length()).put("classes", values)
+                .put("truncated", truncated).put("filter", filter == null || filter.isEmpty() ? JSONObject.NULL : filter);
+    }
+
     private static JSONObject parseDexInfo(byte[] bytes) throws Exception {
         if (bytes.length < 0x70) return error("DEX_TOO_SHORT", String.valueOf(bytes.length));
         if (bytes[0] != 'd' || bytes[1] != 'e' || bytes[2] != 'x' || bytes[3] != '\n' || bytes[7] != 0) return error("NOT_DEX", "missing dex magic");
@@ -1247,6 +1331,33 @@ public final class MemoryIntrospector {
             }
         }
         return out.put("map_items", map).put("map_items_count", map.length()).put("map_items_truncated", mapTruncated);
+    }
+
+    private static String dexTypeDescriptor(byte[] bytes, int typeIndex) {
+        try {
+            long typeTotal = u32le(bytes, 0x40);
+            long typeOff = u32le(bytes, 0x44);
+            if (typeIndex < 0 || typeIndex >= typeTotal) return "#type" + typeIndex;
+            int stringIndex = (int)u32le(bytes, (int)(typeOff + (long)typeIndex * 4));
+            return dexStringByIndex(bytes, stringIndex);
+        } catch (Throwable error) { return "#type" + typeIndex; }
+    }
+    private static String dexStringByIndex(byte[] bytes, int stringIndex) {
+        try {
+            long total = u32le(bytes, 0x38);
+            long idsOff = u32le(bytes, 0x3c);
+            if (stringIndex < 0 || stringIndex >= total) return "#string" + stringIndex;
+            long dataOff = u32le(bytes, (int)(idsOff + (long)stringIndex * 4));
+            return dexStringData(bytes, (int)dataOff);
+        } catch (Throwable error) { return "#string" + stringIndex; }
+    }
+    private static String dexStringData(byte[] bytes, int off) {
+        if (off < 0 || off >= bytes.length) return "";
+        int p = off;
+        while (p < bytes.length) { int b = bytes[p++] & 0xff; if ((b & 0x80) == 0) break; }
+        int start = p;
+        while (p < bytes.length && bytes[p] != 0) p++;
+        return new String(bytes, start, Math.max(0, p - start), java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private static String dexMapTypeName(int type) {
