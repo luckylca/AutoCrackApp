@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.art_pointer_probe", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -61,6 +61,7 @@ public final class MemoryIntrospector {
             case "memory.elf.dynamic" -> elfDynamic(context, request);
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
+            case "memory.dex.art_pointer_probe" -> dexArtPointerProbe(context, request);
             case "memory.dex.info" -> dexInfo(context, request);
             case "memory.dex.apk_index" -> dexApkIndex(context, request);
             case "memory.dex.strings" -> dexStrings(context, request);
@@ -540,6 +541,294 @@ public final class MemoryIntrospector {
                 .put("warning", "This exposes ART cookie shape for research. It does not reconstruct DexFile memory by native ART offsets.");
     }
 
+
+    private static JSONObject dexArtPointerProbe(Context context, JSONObject request) throws Exception {
+        int maxDex = clamp(request.optInt("max_dex", 256), 1, MAX_DEX);
+        int maxPointers = clamp(request.optInt("max_pointers", 64), 1, 1024);
+        int windowBytes = clamp(request.optInt("window_bytes", 65536), 0x70, MAX_INLINE_BYTES);
+        int scanBackBytes = clamp(request.optInt("scan_back_bytes", 4096), 0, MAX_INLINE_BYTES);
+        boolean includeContextLoader = request.optBoolean("include_context_loader", true);
+        boolean includeClassCount = request.optBoolean("include_class_count", false);
+        boolean includeWords = request.optBoolean("include_words", false);
+        boolean tryLayoutDexHeader = request.optBoolean("try_layout_dex_header", false);
+        int wordCount = clamp(request.optInt("word_count", 32), 1, 256);
+        String selected = request.optString("loader", "");
+        ArrayList<ClassLoader> probeLoaders = new ArrayList<>(ClassLoaderRegistry.get().snapshot());
+        if (includeContextLoader && context != null && context.getClassLoader() != null && !probeLoaders.contains(context.getClassLoader())) {
+            probeLoaders.add(context.getClassLoader());
+        }
+        LinkedHashMap<Long, JSONArray> pointers = new LinkedHashMap<>();
+        JSONArray dexRecords = new JSONArray();
+        int loaderCount = 0;
+        int dexCount = 0;
+        boolean pointerTruncated = false;
+        for (ClassLoader loader : probeLoaders) {
+            String loaderHandle = ObjectRegistry.get().put(loader, false, "classloader");
+            if (!selected.isBlank() && !selected.equals(loaderHandle)) continue;
+            loaderCount++;
+            JSONArray dex = RuntimeIntrospector.dexElements(loader, maxDex, includeClassCount);
+            for (int i = 0; i < dex.length(); i++) {
+                if (dexCount >= maxDex) break;
+                JSONObject item = dex.getJSONObject(i);
+                dexRecords.put(new JSONObject().put("loader_handle", loaderHandle).put("loader_class", loader.getClass().getName()).put("dex", item));
+                String dexHandle = item.optString("dex_handle", "");
+                Object dexObject = dexHandle.isBlank() ? null : ObjectRegistry.get().get(dexHandle);
+                if (dexObject != null) {
+                    addCookiePointerField(pointers, field(dexObject, "mCookie"), loaderHandle, item.optString("name", ""), i, "mCookie", maxPointers);
+                    addCookiePointerField(pointers, field(dexObject, "mInternalCookie"), loaderHandle, item.optString("name", ""), i, "mInternalCookie", maxPointers);
+                    if (pointers.size() >= maxPointers) pointerTruncated = true;
+                }
+                dexCount++;
+            }
+        }
+        JSONArray pointerRecords = new JSONArray();
+        int readablePointers = 0;
+        int dexCandidateCount = 0;
+        for (Map.Entry<Long, JSONArray> e : pointers.entrySet()) {
+            if (pointerRecords.length() >= maxPointers) { pointerTruncated = true; break; }
+            JSONObject record = probeArtCookiePointer(context, e.getKey(), e.getValue(), windowBytes, scanBackBytes, includeWords, wordCount, tryLayoutDexHeader);
+            if (record.optBoolean("readable", false)) readablePointers++;
+            dexCandidateCount += record.optJSONArray("dex_candidates") == null ? 0 : record.optJSONArray("dex_candidates").length();
+            pointerRecords.put(record);
+        }
+        return ok().put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("loader_count", loaderCount)
+                .put("dex_count", dexCount)
+                .put("dex_records", dexRecords)
+                .put("pointer_count", pointerRecords.length())
+                .put("readable_pointer_count", readablePointers)
+                .put("dex_candidate_count", dexCandidateCount)
+                .put("pointers", pointerRecords)
+                .put("window_bytes", windowBytes)
+                .put("scan_back_bytes", scanBackBytes)
+                .put("include_words", includeWords)
+                .put("word_count", includeWords ? wordCount : 0)
+                .put("try_layout_dex_header", tryLayoutDexHeader)
+                .put("truncated", pointerTruncated)
+                .put("include_context_loader", includeContextLoader)
+                .put("strategy", "ART DexFile cookie pointer collection + /proc/self/maps resolution + bounded DEX magic/header neighborhood scan")
+                .put("art_memory_reconstruction", false)
+                .put("warning", "This is a pointer-shape and neighborhood probe. It deliberately avoids Android-version-specific ART DexFile offset assumptions and does not claim full in-memory DEX reconstruction.");
+    }
+
+
+    private static JSONArray artPointerWords(byte[] bytes, long probeStart, int pointerOffset, int wordCount) throws Exception {
+        JSONArray out = new JSONArray();
+        int base = Math.max(0, pointerOffset);
+        for (int i = 0; i < wordCount; i++) {
+            int off = base + i * 8;
+            if (off + 8 > bytes.length) break;
+            long value = u64le(bytes, off);
+            JSONObject item = new JSONObject()
+                    .put("index", i)
+                    .put("address", hex(probeStart + off))
+                    .put("value", hex(value))
+                    .put("value_signed", Long.toString(value));
+            MapEntry rawMap = findMapContaining(value);
+            long untagged = value & 0x00ffffffffffffffL;
+            MapEntry untaggedMap = rawMap == null && untagged != value ? findMapContaining(untagged) : null;
+            if (rawMap != null) {
+                item.put("points_to", rawMap.json()).put("pointer_transform", "raw");
+            } else if (untaggedMap != null) {
+                item.put("resolved_value", hex(untagged)).put("points_to", untaggedMap.json()).put("pointer_transform", "aarch64_tbi_untagged_low56");
+            } else {
+                item.put("points_to", JSONObject.NULL).put("pointer_transform", JSONObject.NULL);
+            }
+            out.put(item);
+        }
+        return out;
+    }
+
+
+
+    private static JSONArray artPointerLayoutDexCandidates(Context context, JSONArray words) throws Exception {
+        JSONArray out = new JSONArray();
+        ArrayList<JSONObject> pointerWords = new ArrayList<>();
+        ArrayList<JSONObject> sizeWords = new ArrayList<>();
+        for (int i = 0; i < words.length(); i++) {
+            JSONObject word = words.getJSONObject(i);
+            JSONObject pointsTo = word.optJSONObject("points_to");
+            Long numeric = cookiePointerValue(word.optString("value", ""));
+            if (pointsTo != null && numeric != null && pointsTo.optString("permissions", "").startsWith("r")) pointerWords.add(word);
+            if (numeric != null && numeric >= 0x70L && numeric <= MAX_INLINE_BYTES) sizeWords.add(word);
+        }
+        for (JSONObject ptrWord : pointerWords) {
+            if (out.length() >= 8) break;
+            Long rawAddress = cookiePointerValue(ptrWord.optString("value", ""));
+            if (rawAddress == null || rawAddress == 0L) continue;
+            long address = rawAddress;
+            if (findMapContaining(address) == null) {
+                long untagged = address & 0x00ffffffffffffffL;
+                if (untagged != address && findMapContaining(untagged) != null) address = untagged;
+            }
+            MapEntry map = findMapContaining(address);
+            if (map == null || map.permissions == null || !map.permissions.startsWith("r")) continue;
+            for (JSONObject sizeWord : sizeWords) {
+                Long sizeValue = cookiePointerValue(sizeWord.optString("value", ""));
+                if (sizeValue == null || sizeValue < 0x70L || sizeValue > MAX_INLINE_BYTES) continue;
+                if (Long.compareUnsigned(address + sizeValue, map.end) > 0) continue;
+                int readSize = (int)Math.min(sizeValue, (long)MAX_INLINE_BYTES);
+                byte[] candidate;
+                try { candidate = readMappedMemory(context, address, readSize); }
+                catch (Throwable ignored) { continue; }
+                if (candidate.length < 0x70 || !looksLikeDexHeader(candidate, 0)) continue;
+                JSONObject dex = parseDexInfo(candidate);
+                out.put(new JSONObject()
+                        .put("data_word_index", ptrWord.optInt("index"))
+                        .put("size_word_index", sizeWord.optInt("index"))
+                        .put("data_address", hex(address))
+                        .put("size", sizeValue)
+                        .put("map", map.json())
+                        .put("dex", dex)
+                        .put("strategy", "heuristic ART DexFile data_begin pointer + file_size word; header parsed from memory without exporting bytes"));
+                break;
+            }
+        }
+        return out;
+    }
+
+    private static JSONObject artPointerLayoutHints(JSONArray words) throws Exception {
+        JSONArray likelyPointers = new JSONArray();
+        JSONArray likelySizes = new JSONArray();
+        JSONObject out = new JSONObject().put("likely_libdexfile_vtable", false);
+        for (int i = 0; i < words.length(); i++) {
+            JSONObject word = words.getJSONObject(i);
+            JSONObject pointsTo = word.optJSONObject("points_to");
+            if (pointsTo != null) {
+                String path = pointsTo.optString("pathname", "");
+                likelyPointers.put(new JSONObject().put("word_index", word.optInt("index"))
+                        .put("value", word.optString("value"))
+                        .put("pathname", path.isBlank() ? JSONObject.NULL : path)
+                        .put("permissions", pointsTo.optString("permissions", "")));
+                if (word.optInt("index") == 0 && path.contains("libdexfile.so")) {
+                    out.put("likely_libdexfile_vtable", true)
+                            .put("vtable_word", word.optInt("index"))
+                            .put("vtable_value", word.optString("value"))
+                            .put("vtable_path", path);
+                }
+            }
+            Long numeric = cookiePointerValue(word.optString("value", ""));
+            if (numeric != null && numeric >= 0x70L && numeric <= MAX_INLINE_BYTES) {
+                likelySizes.put(new JSONObject().put("word_index", word.optInt("index"))
+                        .put("value", word.optString("value"))
+                        .put("decimal", numeric)
+                        .put("reason", "small positive value within configured inline DEX size cap"));
+            }
+        }
+        return out.put("pointer_word_count", likelyPointers.length())
+                .put("pointer_words", likelyPointers)
+                .put("candidate_size_words", likelySizes)
+                .put("confidence", out.optBoolean("likely_libdexfile_vtable", false) && likelySizes.length() > 0 ? "medium" : "low")
+                .put("note", "Heuristic only: useful for ART layout research, not a stable Android-version-independent DexFile parser.");
+    }
+
+    private static void addCookiePointerField(LinkedHashMap<Long, JSONArray> pointers, Object value, String loaderHandle, String dexName, int dexIndex, String fieldName, int maxPointers) throws Exception {
+        if (value == null || pointers.size() >= maxPointers) return;
+        Class<?> c = value.getClass();
+        if (c.isArray()) {
+            int n = Math.min(java.lang.reflect.Array.getLength(value), 64);
+            for (int i = 0; i < n && pointers.size() < maxPointers; i++) {
+                addCookiePointer(pointers, java.lang.reflect.Array.get(value, i), loaderHandle, dexName, dexIndex, fieldName, i);
+            }
+        } else {
+            addCookiePointer(pointers, value, loaderHandle, dexName, dexIndex, fieldName, -1);
+        }
+    }
+
+    private static void addCookiePointer(LinkedHashMap<Long, JSONArray> pointers, Object raw, String loaderHandle, String dexName, int dexIndex, String fieldName, int elementIndex) throws Exception {
+        Long pointer = cookiePointerValue(raw);
+        if (pointer == null || pointer == 0L) return;
+        JSONArray origins = pointers.computeIfAbsent(pointer, ignored -> new JSONArray());
+        origins.put(new JSONObject()
+                .put("loader_handle", loaderHandle)
+                .put("dex_name", dexName.isBlank() ? JSONObject.NULL : dexName)
+                .put("dex_index", dexIndex)
+                .put("field", fieldName)
+                .put("element_index", elementIndex < 0 ? JSONObject.NULL : elementIndex)
+                .put("raw", String.valueOf(raw)));
+    }
+
+    private static Long cookiePointerValue(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof Number) return ((Number) raw).longValue();
+        String text = String.valueOf(raw).trim();
+        if (text.isEmpty()) return null;
+        try {
+            if (text.startsWith("0x") || text.startsWith("0X")) return Long.parseUnsignedLong(text.substring(2), 16);
+            return Long.parseLong(text);
+        } catch (Throwable ignored) {
+            try { return Long.parseUnsignedLong(text); } catch (Throwable ignoredAgain) { return null; }
+        }
+    }
+
+    private static JSONObject probeArtCookiePointer(Context context, long pointer, JSONArray origins, int windowBytes, int scanBackBytes, boolean includeWords, int wordCount, boolean tryLayoutDexHeader) throws Exception {
+        JSONObject out = new JSONObject()
+                .put("pointer", hex(pointer))
+                .put("pointer_signed", Long.toString(pointer))
+                .put("origins", origins)
+                .put("readable", false)
+                .put("dex_candidates", new JSONArray());
+        long resolvedPointer = pointer;
+        String pointer_transform = "raw";
+        MapEntry map = findMapContaining(pointer);
+        if (map == null && android.os.Build.SUPPORTED_64_BIT_ABIS.length > 0) {
+            long untagged = pointer & 0x00ffffffffffffffL;
+            if (untagged != pointer) {
+                MapEntry untaggedMap = findMapContaining(untagged);
+                if (untaggedMap != null) {
+                    resolvedPointer = untagged;
+                    map = untaggedMap;
+                    pointer_transform = "aarch64_tbi_untagged_low56";
+                }
+            }
+        }
+        out.put("resolved_pointer", hex(resolvedPointer)).put("pointer_transform", pointer_transform);
+        if (map == null) return out.put("map", JSONObject.NULL).put("reason", "pointer not found in /proc/self/maps, including AArch64 TBI low-56 untag attempt");
+        out.put("map", map.json());
+        if (map.permissions == null || !map.permissions.startsWith("r")) return out.put("reason", "mapped region is not readable");
+        long before = Math.max(0, Math.min((long)scanBackBytes, resolvedPointer - map.start));
+        long after = Math.max(0, Math.min((long)windowBytes, map.end - resolvedPointer));
+        long total = Math.max(0x70L, Math.min((long)MAX_INLINE_BYTES, before + after));
+        long start = resolvedPointer - before;
+        if (Long.compareUnsigned(start, map.start) < 0) start = map.start;
+        if (Long.compareUnsigned(start + total, map.end) > 0) total = Math.max(0, map.end - start);
+        int size = (int)Math.min(MAX_INLINE_BYTES, total);
+        if (size < 0x70) return out.put("reason", "read window too small");
+        byte[] bytes;
+        try { bytes = readMappedMemory(context, start, size); }
+        catch (Throwable error) { return out.put("reason", error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage())); }
+        out.put("readable", true).put("probe_start", hex(start)).put("bytes_read", bytes.length).put("pointer_offset", resolvedPointer - start);
+        if (includeWords) {
+            JSONArray words = artPointerWords(bytes, start, (int)Math.max(0, resolvedPointer - start), wordCount);
+            out.put("words", words).put("layout_hints", artPointerLayoutHints(words));
+            if (tryLayoutDexHeader) out.put("layout_dex_candidates", artPointerLayoutDexCandidates(context, words));
+        } else if (tryLayoutDexHeader) {
+            out.put("layout_dex_candidates", new JSONArray()).put("layout_dex_note", "try_layout_dex_header requires include_words=true");
+        }
+        JSONArray candidates = new JSONArray();
+        for (int off = 0; off + 0x70 <= bytes.length && candidates.length() < 16; off++) {
+            if (!looksLikeDexHeader(bytes, off)) continue;
+            long address = start + off;
+            long fileSize = u32le(bytes, off + 0x20);
+            JSONObject header = new JSONObject()
+                    .put("address", hex(address))
+                    .put("offset_in_probe", off)
+                    .put("relative_to_pointer", off - (resolvedPointer - start))
+                    .put("version", new String(bytes, off + 4, 3, java.nio.charset.StandardCharsets.US_ASCII))
+                    .put("file_size", fileSize)
+                    .put("header_size", u32le(bytes, off + 0x24))
+                    .put("endian_tag", hex(u32le(bytes, off + 0x28)))
+                    .put("string_ids_size", u32le(bytes, off + 0x38))
+                    .put("type_ids_size", u32le(bytes, off + 0x40))
+                    .put("method_ids_size", u32le(bytes, off + 0x58))
+                    .put("class_defs_size", u32le(bytes, off + 0x60));
+            candidates.put(header);
+        }
+        return out.put("dex_candidates", candidates)
+                .put("dex_candidate_count", candidates.length())
+                .put("reason", candidates.length() == 0 ? "no DEX magic/header found in bounded pointer neighborhood" : JSONObject.NULL);
+    }
+
     private static JSONObject dexScan(Context context, JSONObject request) throws Exception {
         int maxMaps = clamp(request.optInt("max_maps", 256), 1, MAX_MAPS);
         int maxCandidates = clamp(request.optInt("max_candidates", 64), 1, 1024);
@@ -886,7 +1175,7 @@ public final class MemoryIntrospector {
             return new MapEntry(start,end,parts[1],Long.parseUnsignedLong(parts[2],16),parts[3],Long.parseLong(parts[4]),path,line);
         } catch(Throwable ignored){return null;}
     }
-    private static MapEntry findMapContaining(long address) throws Exception { for (MapEntry entry : readMaps(MAX_MAPS)) if (address >= entry.start && address < entry.end) return entry; return null; }
+    private static MapEntry findMapContaining(long address) throws Exception { for (MapEntry entry : readMaps(MAX_MAPS)) if (Long.compareUnsigned(address, entry.start) >= 0 && Long.compareUnsigned(address, entry.end) < 0) return entry; return null; }
 
     private static LinkedHashMap<String,List<MapEntry>> groupModules(List<MapEntry> maps) {
         LinkedHashMap<String,List<MapEntry>> out=new LinkedHashMap<>();
@@ -1743,6 +2032,10 @@ public final class MemoryIntrospector {
     }
     private static long u32le(byte[] bytes, int off) {
         return ((long)bytes[off] & 0xff) | (((long)bytes[off+1] & 0xff) << 8) | (((long)bytes[off+2] & 0xff) << 16) | (((long)bytes[off+3] & 0xff) << 24);
+    }
+    private static long u64le(byte[] bytes, int off) {
+        return ((long)bytes[off] & 0xff) | (((long)bytes[off+1] & 0xff) << 8) | (((long)bytes[off+2] & 0xff) << 16) | (((long)bytes[off+3] & 0xff) << 24)
+                | (((long)bytes[off+4] & 0xff) << 32) | (((long)bytes[off+5] & 0xff) << 40) | (((long)bytes[off+6] & 0xff) << 48) | (((long)bytes[off+7] & 0xff) << 56);
     }
 
     private static long parseAddress(Object value){String text=String.valueOf(value).trim().toLowerCase();if(text.startsWith("0x"))text=text.substring(2);return Long.parseUnsignedLong(text,16);}

@@ -88,3 +88,5 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | Stage 23 | Runtime APK install with class_data parser | Device install | PASS | Updated APK installed successfully after full Gradle build |
 | Stage 23 | Provider-self class_data assertion | Device | BLOCKED | Tool safety layer blocked direct provider-self invocation; no device PASS claimed |
 | Stage 24 | `memory-dump dex-apk-index` / provider-self | Device | PASS | Runtime APK returned 6 `classes*.dex` entries and parsed `classes.dex` header/map |
+
+| ART Dex cookie pointer probe | PASS(device small) | `memory.dex.art_pointer_probe` resolved TBI-untagged cookie pointers into scudo heap and emitted libdexfile vtable/size layout hints without byte export. |

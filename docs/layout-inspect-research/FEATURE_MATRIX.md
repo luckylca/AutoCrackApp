@@ -72,3 +72,5 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | Stage 24 | `memory.dex.apk_index` | Enumerate APK `classes*.dex` entries and parse each DEX header/map | Implemented | Device provider-self validated |
 | Stage 21 | `memory.dex.strings` | Parse file/APK DEX string table with optional filter | Implemented | Device provider-self validated |
 | Stage 21 | `memory.dex.classes` | Parse DEX class_def descriptors, superclass and source file | Implemented | Device provider-self validated |
+
+- `memory.dex.art_pointer_probe`: ART `mCookie`/`mInternalCookie` pointer collection, AArch64 TBI untagging, maps resolution, bounded word-level layout hints, and explicit opt-in header-only heuristic probing. Not full ART memory DEX reconstruction.

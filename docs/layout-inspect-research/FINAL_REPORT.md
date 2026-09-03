@@ -641,3 +641,29 @@ Device provider-self validation on API 36 passed against the runtime APK:
 - `source_count=1`
 - `dex_count=6`
 - `classes.dex` parsed as DEX version `038` with 455 strings, 85 types, 63 fields, 146 methods and 25 class_defs.
+
+
+## Stage 25 - ART Dex cookie pointer probe with AArch64 TBI handling
+
+Implemented `memory.dex.art_pointer_probe` and `memory-dump dex-art-pointer-probe` to move beyond file-backed DEX parsing toward the ART `DexFile` cookie layer.
+
+Validated behavior:
+
+- Collects `mCookie` and `mInternalCookie` values from reflected `dalvik.system.DexFile` objects.
+- Handles AArch64 tagged pointers by trying the raw value first, then a low-56-bit TBI-untagged address.
+- Resolves cookie pointers into `/proc/self/maps` with unsigned address comparison.
+- Performs a bounded neighborhood scan for DEX magic/header candidates without exporting bytes.
+- Optional `--include-words` emits a bounded 64-bit word table with map back-references for ART layout research.
+- Layout hints identify likely `libdexfile.so` vtable pointers and candidate size words.
+- `--try-layout-dex-header` is intentionally explicit opt-in. It is not enabled by default and still does not export reconstructed DEX bytes.
+
+Device evidence from API 36 runtime provider-self:
+
+- `pointer_count=1` in the small validation request.
+- `readable_pointer_count=1` after AArch64 TBI untagging.
+- `pointer_transform=aarch64_tbi_untagged_low56`.
+- Resolved pointer landed in `[anon:scudo:primary]`.
+- First word pointed into `/apex/com.android.art/lib64/libdexfile.so`.
+- Word 4 was `0x6b08` / `27400`, matching the `classes.dex` file size seen in `memory.dex.info`.
+
+This is meaningful progress toward ART memory DEX reconstruction, but the stage still reports `art_memory_reconstruction=false` because it does not hard-code API-specific `art::DexFile` layout offsets or emit full in-memory DEX bytes.
