@@ -96,3 +96,5 @@ Dump/pull commands that return inline base64 now accept `--output PATH`. Single-
 `memory-dump dex-fields --package PKG --entry classes.dex --filter someName --json` parses bounded DEX field_id records and resolves owner/type/name descriptors from file-backed DEX data.
 
 `memory-dump dex-methods --package PKG --entry classes.dex --filter onCreate --json` parses bounded DEX method_id records, resolves proto return/parameter descriptors, and renders Dalvik-style method signatures from file-backed DEX data.
+
+`memory-dump dex-class-data --package PKG --entry classes.dex --filter MyClass --json` parses bounded DEX `class_data_item` records, direct/virtual method lists, field lists, and `code_item` metadata such as register/ins/out sizes and `insns_size`. It does not disassemble bytecode and does not reconstruct ART memory.

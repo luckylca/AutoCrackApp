@@ -68,3 +68,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 | Stage 21 | `memory.dex.classes` | Parse DEX class_def descriptors, superclass and source file | Implemented | File-backed only |
 | Stage 22 | `memory.dex.fields` | Parse DEX field_id owner/type/name descriptors | Implemented | Host validated; device assertion blocked by tool safety |
 | Stage 22 | `memory.dex.methods` | Parse DEX method_id + proto signatures | Implemented | Host validated; device assertion blocked by tool safety |
+| Stage 23 | `memory.dex.class_data` | Parse file/APK DEX class_data members and code_item metadata | Implemented | Host/install validated; direct device assertion blocked by tool safety |
