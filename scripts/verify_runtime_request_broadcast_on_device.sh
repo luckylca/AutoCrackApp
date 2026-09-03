@@ -11,28 +11,19 @@ TIMEOUT=${TIMEOUT:-8}
 adb_cmd=("$ADB")
 if [ -n "$SERIAL" ]; then adb_cmd+=("-s" "$SERIAL"); fi
 
-b64() { python3 - "$@" <<'PY'
-import base64,json,sys
-print(base64.b64encode(json.dumps(json.loads(sys.argv[1]),separators=(',',':')).encode()).decode())
-PY
+b64() {
+  python3 -c 'import base64,json,sys; raw=sys.argv[1]; json.loads(raw); print(base64.b64encode(raw.encode()).decode())' "$1"
 }
 
 call_provider() {
-  local method="$1" payload="${2:-{}}"
+  local method="$1"
+  local payload
+  if [ $# -ge 2 ]; then payload="$2"; else payload='{}'; fi
   "${adb_cmd[@]}" shell content call --uri content://com.luckylca.autocrack.runtime --method "$method" --extra base64:s:$(b64 "$payload")
 }
 
 json_from_bundle() {
-  python3 - <<'PY'
-import json,sys
-text=sys.stdin.read()
-start=text.find('{"ok"')
-if start < 0:
-    print(text.strip())
-    raise SystemExit(1)
-obj,_=json.JSONDecoder().raw_decode(text[start:])
-print(json.dumps(obj,ensure_ascii=False))
-PY
+  python3 -c "import json,sys; text=sys.stdin.read(); start=text.find('{\"ok\"'); start >= 0 or (print(text.strip()) or sys.exit(1)); obj,_=json.JSONDecoder().raw_decode(text[start:]); print(json.dumps(obj,ensure_ascii=False))"
 }
 
 if [ ! -x "$ADB" ]; then echo "missing adb: $ADB" >&2; exit 2; fi
