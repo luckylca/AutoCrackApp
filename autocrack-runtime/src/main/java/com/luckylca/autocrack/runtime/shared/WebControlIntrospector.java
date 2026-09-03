@@ -18,6 +18,9 @@ import android.widget.VideoView;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -43,7 +46,7 @@ public final class WebControlIntrospector {
 
     public static boolean supports(String kind) {
         return Set.of(
-                "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
+                "webview.list", "webview.info", "webview.debug", "webview.devtools_socket", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
                 "control.secure.status", "control.secure.diagnose", "control.secure.disable", "control.so.inject", "control.so.diagnose", "control.so.dlopen", "control.so.android_dlopen_ext", "control.so.dlsym",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
@@ -53,6 +56,7 @@ public final class WebControlIntrospector {
             case "webview.list" -> webviews();
             case "webview.info" -> webviewInfo(request);
             case "webview.debug" -> webviewDebug(request);
+            case "webview.devtools_socket" -> webviewDevtoolsSocket();
             case "webview.eval" -> webviewEval(request);
             case "webview.eval.result" -> webviewEvalResult(request);
             case "webview.load_url" -> webviewLoadUrl(request);
@@ -117,6 +121,62 @@ public final class WebControlIntrospector {
         WebView.setWebContentsDebuggingEnabled(enabled);
         return ok().put("enabled", enabled).put("strategy", "WebView.setWebContentsDebuggingEnabled")
                 .put("next", "Use android-shell/adb to enumerate and forward chrome_devtools_remote sockets when DOM/Network CDP access is needed.");
+    }
+
+    private static JSONObject webviewDevtoolsSocket() throws Exception {
+        final int maxSockets = 128;
+        int pid = Process.myPid();
+        JSONArray sockets = new JSONArray();
+        JSONArray errors = new JSONArray();
+        Set<String> seen = new java.util.LinkedHashSet<>();
+        int scannedLines = 0;
+        boolean truncated = false;
+        for (String procPath : List.of("/proc/net/unix", "/proc/self/net/unix")) {
+            File file = new File(procPath);
+            if (!file.canRead()) {
+                errors.put(new JSONObject().put("path", procPath).put("reason", "not readable"));
+                continue;
+            }
+            try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                String line;
+                boolean first = true;
+                while ((line = reader.readLine()) != null) {
+                    if (first) { first = false; continue; }
+                    scannedLines++;
+                    if (!line.contains("devtools_remote")) continue;
+                    String[] parts = line.trim().split("\\s+");
+                    if (parts.length < 7) continue;
+                    String rawPath = parts.length >= 8 ? parts[7] : "";
+                    if (!rawPath.contains("devtools_remote")) continue;
+                    String name = rawPath.startsWith("@") ? rawPath.substring(1) : rawPath;
+                    if (!seen.add(name)) continue;
+                    sockets.put(new JSONObject()
+                            .put("name", name)
+                            .put("raw_path", rawPath)
+                            .put("abstract", rawPath.startsWith("@"))
+                            .put("inode", parts[6])
+                            .put("type", parts.length > 4 ? parts[4] : JSONObject.NULL)
+                            .put("state", parts.length > 5 ? parts[5] : JSONObject.NULL)
+                            .put("pid_match", name.contains(Integer.toString(pid)))
+                            .put("forward_target", "localabstract:" + name));
+                    if (sockets.length() >= maxSockets) { truncated = true; break; }
+                }
+            } catch (Throwable error) {
+                errors.put(new JSONObject().put("path", procPath).put("reason", error.toString()));
+            }
+            if (truncated) break;
+        }
+        return ok().put("pid", pid)
+                .put("webview_count", findWebViews().size())
+                .put("socket_count", sockets.length())
+                .put("sockets", sockets)
+                .put("proc_lines_scanned", scannedLines)
+                .put("truncated", truncated)
+                .put("errors", errors)
+                .put("debugging_enabled_state", "no_public_getter")
+                .put("host_bridge_required", true)
+                .put("forward_template", "adb forward tcp:<port> localabstract:<socket-name>")
+                .put("note", "Socket discovery is read-only. This endpoint does not forward ports or connect to Chrome DevTools Protocol.");
     }
 
     private static JSONObject webviewEval(JSONObject request) throws Exception {

@@ -35,7 +35,7 @@ where only a native declaration is observable.
 | Runtime XML | XML path UI | CONFIRMED surface | logical `Resources.getXml`, raw APK entry pull for `res/*.xml`; binary XmlBlock/ResXMLTree decode remains gated |
 | Runtime assets | `C1289p(AssetManager, String)` | CONFIRMED mechanism | recursive `AssetManager.list/open`, preserving runtime-readable bytes |
 | FLAG_SECURE | secure removal UI | CONFIRMED surface | `secure-status`, `secure-diagnose`, `secure-disable`; reports Window flags, post-clear status, and SurfaceView/TextureView/VideoView counts while keeping DRM/vendor secure-surface bypass unclaimed |
-| WebView | JS UI and `C1292s.setTarget(WebView)` | CONFIRMED | list/info/debug/eval/result plus load/reload/back/forward/cache controls; DevTools socket forwarding remains host-gated |
+| WebView | JS UI and `C1292s.setTarget(WebView)` | CONFIRMED | list/info/debug/eval/result plus load/reload/back/forward/cache controls; rootfs DevTools socket discovery implemented, actual host port forwarding remains host-side |
 | SystemUI | Xposed dynamic scope and system-server flag | CONFIRMED scope design | package/process is never hard-coded; `com.android.systemui` supported by contract |
 | Compose | no proven original Compose semantics support | NOT PROVEN | identify `AndroidComposeView`; semantics capability reported separately |
 

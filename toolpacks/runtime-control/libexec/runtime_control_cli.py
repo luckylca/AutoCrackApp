@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import argparse, os, sys
+import argparse, os, subprocess, sys
 sys.path.insert(0, os.path.dirname(__file__))
 from autocrack_runtime_client import *
 
@@ -11,6 +11,7 @@ def parser():
     wvl=sub.add_parser("webview-list"); add_target(wvl)
     wvi=sub.add_parser("webview-info"); add_target(wvi); wvi.add_argument("--handle", default="")
     wvd=sub.add_parser("webview-debug"); add_target(wvd); wvd.add_argument("--disable", action="store_true")
+    wvds=sub.add_parser("webview-devtools-sockets"); add_target(wvds)
     wve=sub.add_parser("webview-eval"); add_target(wve); wve.add_argument("handle"); wve.add_argument("script")
     wvr=sub.add_parser("webview-eval-result"); add_target(wvr); wvr.add_argument("token")
     wvlu=sub.add_parser("webview-load-url"); add_target(wvlu); wvlu.add_argument("handle"); wvlu.add_argument("url")
@@ -32,11 +33,94 @@ def parser():
     mc=sub.add_parser("object-method-call"); add_target(mc); mc.add_argument("handle"); mc.add_argument("method"); mc.add_argument("--declaring-class", default=""); mc.add_argument("--arg-types-json", default="[]"); mc.add_argument("--args-json", default="[]")
     return p
 
+def _android_shell_run(args, timeout=5.0):
+    cmd=android_shell()+list(args)
+    return subprocess.run(cmd, text=True, capture_output=True, timeout=timeout)
+
+def _target_pids(package, process=None):
+    name=(process or package or "").strip()
+    if not name:
+        return []
+    try:
+        completed=_android_shell_run(["pidof", name], timeout=3.0)
+    except Exception:
+        return []
+    if completed.returncode!=0:
+        return []
+    out=[]
+    for token in completed.stdout.split():
+        if token.isdigit(): out.append(token)
+    return out
+
+def _parse_devtools_sockets(text, package, pids, max_sockets=128):
+    sockets=[]
+    seen=set()
+    for raw in text.splitlines()[1:]:
+        if "devtools_remote" not in raw:
+            continue
+        parts=raw.split()
+        if len(parts)<7:
+            continue
+        path=parts[7] if len(parts)>=8 else ""
+        if "devtools_remote" not in path:
+            continue
+        name=path[1:] if path.startswith("@") else path
+        target_match=(package and package in name) or any(pid in name for pid in pids)
+        if not target_match or name in seen:
+            continue
+        seen.add(name)
+        sockets.append({
+            "name":name,
+            "raw_path":path,
+            "abstract":path.startswith("@"),
+            "inode":parts[6],
+            "type":parts[4] if len(parts)>4 else None,
+            "state":parts[5] if len(parts)>5 else None,
+            "matched_pids":[pid for pid in pids if pid in name],
+            "package_match":bool(package and package in name),
+            "forward_target":"localabstract:"+name,
+        })
+        if len(sockets)>=max_sockets:
+            break
+    return sockets
+
+def webview_devtools_sockets(a):
+    package=(a.package or "").strip()
+    pids=_target_pids(package, a.process)
+    try:
+        completed=_android_shell_run(["cat", "/proc/net/unix"], timeout=max(3.0, float(a.timeout)))
+        if completed.returncode==0:
+            sockets=_parse_devtools_sockets(completed.stdout, package, pids)
+            return {
+                "ok":True,
+                "source":"rootfs:/proc/net/unix",
+                "package":package,
+                "process":a.process,
+                "target_pids":pids,
+                "socket_count":len(sockets),
+                "sockets":sockets,
+                "host_bridge_required":True,
+                "forward_template":"adb forward tcp:<port> localabstract:<socket-name>",
+                "note":"Rootfs discovery is read-only and returns only sockets matching the requested package/process. It does not create a forward or connect to CDP.",
+            }
+        shell_error=(completed.stderr or completed.stdout).strip() or f"exit {completed.returncode}"
+    except Exception as exc:
+        shell_error=str(exc)
+    try:
+        runtime=runtime_request(target_payload(a,"webview.devtools_socket"), a.timeout)
+        runtime["source"]="target-runtime-fallback"
+        runtime["rootfs_error"]=shell_error
+        runtime["target_pids"]=pids
+        return runtime
+    except CliError as exc:
+        raise CliError("DEVTOOLS_SOCKET_UNAVAILABLE", f"rootfs scan failed: {shell_error}; runtime fallback failed: {exc}") from exc
+
 def execute(a):
     if a.command=="status": return provider_call("runtime_status")
     if a.command=="webview-list": return runtime_request(target_payload(a,"webview.list"), a.timeout)
     if a.command=="webview-info": return runtime_request(target_payload(a,"webview.info", handle=a.handle), a.timeout)
     if a.command=="webview-debug": return runtime_request(target_payload(a,"webview.debug", enabled=not a.disable), a.timeout)
+    if a.command=="webview-devtools-sockets": return webview_devtools_sockets(a)
     if a.command=="webview-eval": return runtime_request(target_payload(a,"webview.eval", handle=a.handle, script=a.script), a.timeout)
     if a.command=="webview-eval-result": return runtime_request(target_payload(a,"webview.eval.result", token=a.token), a.timeout)
     if a.command=="webview-load-url": return runtime_request(target_payload(a,"webview.load_url", handle=a.handle, url=a.url), a.timeout)

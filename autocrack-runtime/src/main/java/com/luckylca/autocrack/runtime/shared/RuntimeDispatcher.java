@@ -44,6 +44,7 @@ public final class RuntimeDispatcher {
 
     private static boolean requiresMainThread(String kind) {
         if (kind == null || kind.isBlank()) return false;
+        if ("webview.devtools_socket".equals(kind)) return false;
         if (kind.startsWith("ui.")) return true;
         if (kind.startsWith("webview.")) return true;
         return Set.of(
@@ -63,7 +64,7 @@ public final class RuntimeDispatcher {
                 "runtime.process","runtime.doctor","runtime.activities","runtime.declared_activities","runtime.classloaders","runtime.class.search","runtime.class.describe",
                 "object.describe","object.fields","object.dump","object.pin","object.release","object.clear_session",
                 "memory.maps","memory.modules","memory.native.modules","memory.read","memory.native.probe","memory.dladdr","memory.module.dump","memory.module.file_dump","memory.elf.info","memory.elf.symbols","memory.elf.relocations","memory.elf.dynamic","memory.dex.list","memory.dex.art_probe","memory.dex.art_pointer_probe","memory.dex.info","memory.dex.apk_index","memory.dex.strings","memory.dex.classes","memory.dex.fields","memory.dex.methods","memory.dex.class_data","memory.dex.scan","memory.dex.dump","memory.assets.list","memory.assets.pull","memory.xml.pull","memory.xml.block_probe","memory.xml.binary","memory.xml.axml_decode","memory.xml.axml_text","memory.apk.entries","memory.apk.pull","memory.capabilities",
-                "webview.list","webview.info","webview.debug","webview.eval","webview.eval.result","webview.load_url","webview.reload","webview.go_back","webview.go_forward","webview.clear_cache",
+                "webview.list","webview.info","webview.debug","webview.devtools_socket","webview.eval","webview.eval.result","webview.load_url","webview.reload","webview.go_back","webview.go_forward","webview.clear_cache",
                 "control.secure.status","control.secure.diagnose","control.secure.disable","control.so.inject","control.so.diagnose","control.so.dlopen","control.so.android_dlopen_ext","control.so.dlsym","control.activity.start","control.process.kill","control.object.field.set","control.object.method.call",
                 "hook.reload","hook.inspect")) supported.put(capability);
         JSONArray partial = new JSONArray()

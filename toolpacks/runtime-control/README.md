@@ -27,6 +27,7 @@ runtime-control webview-clear-cache --package com.example.app --handle obj_webvi
 runtime-control secure-status --package com.example.app --json
 runtime-control secure-diagnose --package com.example.app --json
 runtime-control secure-disable --package com.example.app --json
+runtime-control webview-devtools-sockets --package com.example.app --json
 runtime-control so-inject --package com.example.app /data/local/tmp/libfoo.so --json
 runtime-control so-dlopen --package com.example.app /data/local/tmp/libfoo.so --flags 2 --json
 runtime-control activity-start --package com.example.app --component com.example.app/.MainActivity --json
@@ -51,3 +52,5 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 `secure-diagnose` extends `secure-status` with root SurfaceView/TextureView/VideoView counts so screenshot failures can be separated into Window.FLAG_SECURE versus surface/DRM/vendor producer limitations. `secure-disable` now returns an `after_status` snapshot after clearing Window flags.
 
 `so-diagnose` is a read-only native/linker health check: it verifies the AutoCrack JNI bridge, lists linker-related modules, probes `dlopen`/`dlsym`/`dlerror`/`android_dlopen_ext` visibility and `dladdr` ownership, and explicitly reports that Android linker namespace bypass is not embedded.
+
+`webview-devtools-sockets` uses the rootfs/`android-shell` path first: it resolves the requested package/process PID(s), reads `/proc/net/unix`, and returns only matching `webview_devtools_remote` abstract sockets with inode metadata and `localabstract:` forwarding targets. If rootfs socket-table access is unavailable it falls back to the target-runtime probe. Discovery is read-only; the Toolpack does not create an adb forward or connect to CDP itself.
