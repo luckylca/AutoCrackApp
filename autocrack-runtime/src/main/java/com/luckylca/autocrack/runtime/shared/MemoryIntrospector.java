@@ -1469,6 +1469,8 @@ public final class MemoryIntrospector {
         int maxAttributes = clamp(request.optInt("max_attributes", 64), 0, 512);
         int maxSourceBytes = clamp(request.optInt("max_source_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
         boolean includeNativeBackendProbe = request.optBoolean("include_native_backend_probe", false);
+        boolean includeNativeReplayProbe = request.optBoolean("include_native_replay_probe", false);
+        String sourceEntry = null;
         if (id == 0) return unsupported("memory.xml.block_probe", "resource_id is required", new JSONArray()
                 .put("Resources.getXml(resourceId) XmlResourceParser reflection")
                 .put("file-backed memory.xml.binary / memory.xml.axml_decode remain available for raw APK AXML"));
@@ -1491,6 +1493,7 @@ public final class MemoryIntrospector {
                     .put("string", value.string == null ? JSONObject.NULL : value.string.toString()));
             if (value.string != null) {
                 String entry = normalizeZipEntry(value.string.toString());
+                sourceEntry = entry;
                 out.put("source_entry", entry);
                 if (entry.endsWith(".xml")) {
                     JSONObject sourceMeta = apkEntryMetadataAnySource(apkCtx, entry, maxSourceBytes);
@@ -1534,6 +1537,34 @@ public final class MemoryIntrospector {
                 out.put("native_backend_probe", new JSONObject().put("ok", true)
                         .put("requested", false).put("omitted", true)
                         .put("reason", "set include_native_backend_probe=true to scan the loaded XmlBlock JNINativeMethod table"));
+            }
+            out.put("native_replay_probe_requested", includeNativeReplayProbe);
+            if (includeNativeReplayProbe) {
+                if (sourceEntry == null || !sourceEntry.endsWith(".xml")) {
+                    out.put("native_replay_probe", new JSONObject().put("ok", false)
+                            .put("supported", false).put("reason", "resource does not resolve to an APK XML entry"));
+                } else {
+                    try {
+                        JSONObject pulled = pullApkEntryAnySource(apkCtx, sourceEntry, maxSourceBytes);
+                        if (!pulled.optBoolean("ok", false)) {
+                            out.put("native_replay_probe", pulled);
+                        } else {
+                            byte[] axml = Base64.decode(pulled.getString("data"), Base64.NO_WRAP);
+                            JSONObject replay = NativeBridge.xmlBlockReplay(context, axml, id, maxEvents)
+                                    .put("source_entry", sourceEntry)
+                                    .put("source_size", axml.length)
+                                    .put("file_backed_input", true);
+                            out.put("native_replay_probe", replay);
+                        }
+                    } catch (Throwable error) {
+                        out.put("native_replay_probe", new JSONObject().put("ok", false)
+                                .put("supported", false).put("reason", error.toString()));
+                    }
+                }
+            } else {
+                out.put("native_replay_probe", new JSONObject().put("ok", true)
+                        .put("requested", false).put("omitted", true)
+                        .put("reason", "set include_native_replay_probe=true to create and destroy an isolated native XmlBlock/ResXMLTree from the APK AXML bytes"));
             }
             JSONArray events = new JSONArray();
             boolean truncated = false;
@@ -1753,9 +1784,10 @@ public final class MemoryIntrospector {
                 .put("dex_art_memory",status(false,"arbitrary ART layouts, candidates above 512 MiB, and non-contiguous unreadable mappings remain unsupported; validated bounded and chunked raw export paths are exposed separately"))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
-                .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field and event probe; no native byte export"))
+                .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field/event/method probe plus opt-in loaded native-backend discovery"))
+                .put("xml_native_replay",status(bridgeLoaded,"isolated APK-backed binary AXML replay through a newly-created platform XmlBlock/ResXMLTree and parse state; device-validated create/next/destroy lifecycle"))
                 .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
-                .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"))
+                .put("xml_binary_memory",status(false,"existing runtime XmlBlock hidden mNative/mParseState peer extraction and direct peer-memory reconstruction remain unavailable on this API; isolated native replay is exposed separately"))
                 .put("xml_axml_decode",status(true,"file-backed Android binary XML chunk/string-pool decode"))
                 .put("xml_axml_text",status(true,"file-backed Android binary XML readable text rendering"))
                 .put("apk_entries",status(true,"base/split APK ZipFile entry enumeration and bounded entry pull"));

@@ -113,75 +113,80 @@ static bool module_cstring_equals(uintptr_t address, const char* expected,
     return memcmp(actual, expected, len) == 0 && actual[len] == '\0';
 }
 
-static std::string xmlblock_backend_probe_json() {
-    static const char* kNames[] = {
-        "nativeCreate", "nativeGetStringBlock", "nativeCreateParseState", "nativeDestroyParseState",
-        "nativeDestroy", "nativeNext", "nativeGetNamespace", "nativeGetName", "nativeGetText",
-        "nativeGetLineNumber", "nativeGetAttributeCount", "nativeGetAttributeNamespace",
-        "nativeGetAttributeName", "nativeGetAttributeResource", "nativeGetAttributeDataType",
-        "nativeGetAttributeData", "nativeGetAttributeStringValue", "nativeGetAttributeIndex",
-        "nativeGetIdAttribute", "nativeGetClassAttribute", "nativeGetStyleAttribute", "nativeGetSourceResId"
-    };
-    static const char* kSigs[] = {
-        "([BII)J", "(J)J", "(JI)J", "(J)V", "(J)V", "(J)I", "(J)I", "(J)I", "(J)I",
-        "(J)I", "(J)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I",
-        "(JLjava/lang/String;Ljava/lang/String;)I", "(J)I", "(J)I", "(J)I", "(J)I"
-    };
-    constexpr size_t kCount = sizeof(kNames) / sizeof(kNames[0]);
+static const char* kXmlBlockNativeNames[] = {
+    "nativeCreate", "nativeGetStringBlock", "nativeCreateParseState", "nativeDestroyParseState",
+    "nativeDestroy", "nativeNext", "nativeGetNamespace", "nativeGetName", "nativeGetText",
+    "nativeGetLineNumber", "nativeGetAttributeCount", "nativeGetAttributeNamespace",
+    "nativeGetAttributeName", "nativeGetAttributeResource", "nativeGetAttributeDataType",
+    "nativeGetAttributeData", "nativeGetAttributeStringValue", "nativeGetAttributeIndex",
+    "nativeGetIdAttribute", "nativeGetClassAttribute", "nativeGetStyleAttribute", "nativeGetSourceResId"
+};
+static const char* kXmlBlockNativeSigs[] = {
+    "([BII)J", "(J)J", "(JI)J", "(J)V", "(J)V", "(J)I", "(J)I", "(J)I", "(J)I",
+    "(J)I", "(J)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I",
+    "(JLjava/lang/String;Ljava/lang/String;)I", "(J)I", "(J)I", "(J)I", "(J)I"
+};
+static constexpr size_t kXmlBlockNativeCount = sizeof(kXmlBlockNativeNames) / sizeof(kXmlBlockNativeNames[0]);
 
+static const uintptr_t* find_xmlblock_native_table(ModuleScanState* output_state, bool* output_all_exec) {
     ModuleScanState state{};
     state.needle = "libandroid_runtime.so";
     dl_iterate_phdr(module_scan_callback, &state);
-    if (state.segments.empty()) {
-        return "{\"ok\":false,\"supported\":false,\"reason\":\"libandroid_runtime.so is not visible in dl_iterate_phdr\"}";
-    }
+    if (output_state) *output_state = state;
+    if (output_all_exec) *output_all_exec = false;
+    if (state.segments.empty()) return nullptr;
 
-    const uintptr_t* table = nullptr;
-    bool all_exec = false;
     for (const auto& seg : state.segments) {
         if (!seg.readable || seg.executable) continue;
         uintptr_t start = (seg.start + alignof(uintptr_t) - 1) & ~(static_cast<uintptr_t>(alignof(uintptr_t) - 1));
-        size_t table_bytes = kCount * 3 * sizeof(uintptr_t);
+        size_t table_bytes = kXmlBlockNativeCount * 3 * sizeof(uintptr_t);
         if (seg.end <= start || seg.end - start < table_bytes) continue;
         for (uintptr_t cursor = start; cursor + table_bytes <= seg.end; cursor += sizeof(uintptr_t)) {
             const auto* entries = reinterpret_cast<const uintptr_t*>(cursor);
-            if (!module_cstring_equals(entries[0], kNames[0], state.segments)
-                    || !module_cstring_equals(entries[1], kSigs[0], state.segments)) continue;
+            if (!module_cstring_equals(entries[0], kXmlBlockNativeNames[0], state.segments)
+                    || !module_cstring_equals(entries[1], kXmlBlockNativeSigs[0], state.segments)) continue;
             bool valid = true;
-            bool exec = true;
-            for (size_t i = 0; i < kCount; ++i) {
+            bool all_exec = true;
+            for (size_t i = 0; i < kXmlBlockNativeCount; ++i) {
                 uintptr_t name = entries[i * 3];
                 uintptr_t sig = entries[i * 3 + 1];
                 uintptr_t fn = entries[i * 3 + 2];
-                if (!module_cstring_equals(name, kNames[i], state.segments)
-                        || !module_cstring_equals(sig, kSigs[i], state.segments)
+                if (!module_cstring_equals(name, kXmlBlockNativeNames[i], state.segments)
+                        || !module_cstring_equals(sig, kXmlBlockNativeSigs[i], state.segments)
                         || fn == 0) {
                     valid = false;
                     break;
                 }
-                if (!address_in_segments(fn, 1, state.segments, true)) exec = false;
+                if (!address_in_segments(fn, 1, state.segments, true)) all_exec = false;
             }
             if (valid) {
-                table = entries;
-                all_exec = exec;
-                break;
+                if (output_all_exec) *output_all_exec = all_exec;
+                return entries;
             }
         }
-        if (table) break;
     }
+    return nullptr;
+}
 
+static std::string xmlblock_backend_probe_json() {
+    ModuleScanState state{};
+    bool all_exec = false;
+    const uintptr_t* table = find_xmlblock_native_table(&state, &all_exec);
+    if (state.segments.empty()) {
+        return "{\"ok\":false,\"supported\":false,\"reason\":\"libandroid_runtime.so is not visible in dl_iterate_phdr\"}";
+    }
     void* reg = dlsym(RTLD_DEFAULT, "_ZN7android33register_android_content_XmlBlockEP7_JNIEnv");
     std::string json = "{\"ok\":true,\"supported\":true,\"module\":\"" + json_escape(state.name)
             + "\",\"register_symbol_resolved\":" + (reg ? std::string("true") : std::string("false"))
             + ",\"table_found\":" + (table ? std::string("true") : std::string("false"))
-            + ",\"expected_method_count\":" + std::to_string(kCount)
-            + ",\"method_count\":" + std::to_string(table ? kCount : 0)
+            + ",\"expected_method_count\":" + std::to_string(kXmlBlockNativeCount)
+            + ",\"method_count\":" + std::to_string(table ? kXmlBlockNativeCount : 0)
             + ",\"all_functions_in_executable_segment\":" + (table && all_exec ? std::string("true") : std::string("false"))
             + ",\"methods\":[";
     if (table) {
-        for (size_t i = 0; i < kCount; ++i) {
+        for (size_t i = 0; i < kXmlBlockNativeCount; ++i) {
             if (i) json += ",";
-            json += "{\"name\":\"" + std::string(kNames[i]) + "\",\"signature\":\"" + json_escape(kSigs[i]) + "\"}";
+            json += "{\"name\":\"" + std::string(kXmlBlockNativeNames[i]) + "\",\"signature\":\"" + json_escape(kXmlBlockNativeSigs[i]) + "\"}";
         }
     }
     json += "]}";
@@ -192,6 +197,97 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockBackendProbe(
         JNIEnv* env, jclass) {
     std::string json = xmlblock_backend_probe_json();
+    return env->NewStringUTF(json.c_str());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockReplay(
+        JNIEnv* env, jclass, jbyteArray axml, jint resource_id, jint max_events) {
+    if (!axml) return env->NewStringUTF("{\"ok\":false,\"error\":\"AXML_BYTES_REQUIRED\"}");
+    jsize length = env->GetArrayLength(axml);
+    if (length <= 0 || length > 4 * 1024 * 1024) {
+        return env->NewStringUTF("{\"ok\":false,\"error\":\"AXML_SIZE_OUT_OF_RANGE\"}");
+    }
+    int bounded_events = max_events < 1 ? 1 : (max_events > 2048 ? 2048 : max_events);
+
+    ModuleScanState state{};
+    bool all_exec = false;
+    const uintptr_t* table = find_xmlblock_native_table(&state, &all_exec);
+    if (!table || !all_exec) {
+        return env->NewStringUTF("{\"ok\":false,\"supported\":false,\"error\":\"XMLBLOCK_NATIVE_TABLE_UNAVAILABLE\"}");
+    }
+
+    using CreateFn = jlong (*)(JNIEnv*, jclass, jbyteArray, jint, jint);
+    using CreateParseFn = jlong (*)(JNIEnv*, jclass, jlong, jint);
+    using DestroyFn = void (*)(JNIEnv*, jclass, jlong);
+    using CriticalInt1Fn = jint (*)(jlong);
+    auto create = reinterpret_cast<CreateFn>(table[0 * 3 + 2]);
+    auto create_parse = reinterpret_cast<CreateParseFn>(table[2 * 3 + 2]);
+    auto destroy_parse = reinterpret_cast<DestroyFn>(table[3 * 3 + 2]);
+    auto destroy_tree = reinterpret_cast<DestroyFn>(table[4 * 3 + 2]);
+    auto next = reinterpret_cast<CriticalInt1Fn>(table[5 * 3 + 2]);
+    auto line_number = reinterpret_cast<CriticalInt1Fn>(table[9 * 3 + 2]);
+    auto attribute_count = reinterpret_cast<CriticalInt1Fn>(table[10 * 3 + 2]);
+
+    jlong tree = 0;
+    jlong parser = 0;
+    bool tree_created = false;
+    bool parser_created = false;
+    std::string events_json;
+    int event_count = 0;
+    bool ended = false;
+    std::string error;
+
+    tree = create(env, nullptr, axml, 0, length);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        error = "nativeCreate raised a Java exception";
+    } else if (tree == 0) {
+        error = "nativeCreate returned null";
+    } else {
+        tree_created = true;
+        parser = create_parse(env, nullptr, tree, resource_id);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            error = "nativeCreateParseState raised a Java exception";
+        } else if (parser == 0) {
+            error = "nativeCreateParseState returned null";
+        } else {
+            parser_created = true;
+            for (int i = 0; i < bounded_events; ++i) {
+                jint event = next(parser);
+                jint line = line_number(parser);
+                jint attrs = event == 2 ? attribute_count(parser) : 0;
+                if (event_count > 0) events_json += ",";
+                events_json += "{\"index\":" + std::to_string(i)
+                        + ",\"event\":" + std::to_string(event)
+                        + ",\"line\":" + std::to_string(line)
+                        + ",\"attribute_count\":" + std::to_string(attrs) + "}";
+                event_count++;
+                if (event == 1 || event < 0) {
+                    ended = event == 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (parser_created) destroy_parse(env, nullptr, parser);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (tree_created) destroy_tree(env, nullptr, tree);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+
+    std::string json = "{\"ok\":" + std::string(error.empty() ? "true" : "false")
+            + ",\"native_backend_replay\":true"
+            + ",\"existing_peer_reconstruction\":false"
+            + ",\"module\":\"" + json_escape(state.name) + "\""
+            + ",\"tree_created\":" + (tree_created ? std::string("true") : std::string("false"))
+            + ",\"parser_created\":" + (parser_created ? std::string("true") : std::string("false"))
+            + ",\"event_count\":" + std::to_string(event_count)
+            + ",\"end_document_reached\":" + (ended ? std::string("true") : std::string("false"))
+            + ",\"events\":[" + events_json + "]";
+    if (!error.empty()) json += ",\"error\":\"" + json_escape(error) + "\"";
+    json += "}";
     return env->NewStringUTF(json.c_str());
 }
 

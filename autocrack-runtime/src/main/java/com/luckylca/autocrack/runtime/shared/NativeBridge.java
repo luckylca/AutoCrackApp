@@ -109,6 +109,12 @@ public final class NativeBridge {
         return new JSONObject(nativeXmlBlockBackendProbe());
     }
 
+    /** Replays APK-backed binary XML through a newly-created platform XmlBlock/ResXMLTree peer. */
+    public static JSONObject xmlBlockReplay(Context context, byte[] axml, int resourceId, int maxEvents) throws Exception {
+        if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("supported", false).put("reason", loadError);
+        return new JSONObject(nativeXmlBlockReplay(axml, resourceId, maxEvents));
+    }
+
     private static native byte[] nativeReadMemory(long address, int size) throws Exception;
     private static native String nativeDlopen(String path, int flags);
     private static native String nativeAndroidDlopenExt(String path, int flags, int extFlags);
@@ -116,6 +122,7 @@ public final class NativeBridge {
     private static native String nativeDlsym(String handle, String symbol);
     private static native String nativeModules(int maxModules, String filter);
     private static native String nativeXmlBlockBackendProbe();
+    private static native String nativeXmlBlockReplay(byte[] axml, int resourceId, int maxEvents);
     private static native String nativeXmlBlockPeerProbe(Object parser, Object block);
     private static native String nativeProbe();
 }
