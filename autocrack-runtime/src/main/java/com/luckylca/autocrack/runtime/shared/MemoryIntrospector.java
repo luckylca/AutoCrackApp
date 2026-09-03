@@ -1785,7 +1785,7 @@ public final class MemoryIntrospector {
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
                 .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field/event/method probe plus opt-in loaded native-backend discovery"))
-                .put("xml_native_replay",status(bridgeLoaded,"isolated APK-backed binary AXML replay through a newly-created platform XmlBlock/ResXMLTree and parse state; device-validated create/next/destroy lifecycle"))
+                .put("xml_native_replay",status(bridgeLoaded,"isolated APK-backed binary AXML replay through a newly-created platform XmlBlock/ResXMLTree and parse state; device-validated lifecycle plus native name/namespace/text indices, sourceResId, and typed attribute metadata"))
                 .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
                 .put("xml_binary_memory",status(false,"existing runtime XmlBlock hidden mNative/mParseState peer extraction and direct peer-memory reconstruction remain unavailable on this API; isolated native replay is exposed separately"))
                 .put("xml_axml_decode",status(true,"file-backed Android binary XML chunk/string-pool decode"))
