@@ -20,6 +20,7 @@ import com.luckylca.simplehook.core.RuleValidationException;
 import com.luckylca.simplehook.core.SimpleHookLimits;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,7 +61,7 @@ public final class SimpleHookProvider extends ContentProvider {
                         .put("rules", rules.rulesForPackage(request.getString("package"), request.optString("process")))
                         .put("generation", rules.generation());
                 case "rule_state" -> updateState(request);
-                case "reload" -> ok().put("generation", rules.reload()).put("requires_restart", false);
+                case "reload" -> reloadRules();
                 case "append_log" -> appendLog(request.getJSONObject("entry"));
                 case "logs" -> ok().put("logs", logs.query(
                         nullable(request, "rule_id"), nullable(request, "package"), request.optInt("limit", 500)));
@@ -148,17 +149,28 @@ public final class SimpleHookProvider extends ContentProvider {
 
     private JSONObject upsert(JSONObject rule, boolean createOnly) throws JSONException {
         boolean updated = rules.upsert(rule, createOnly);
+        broadcastRulesForPackage(rule.optString("package", null));
         return ok().put("rule", rule).put("created", !updated).put("requires_restart", false);
     }
 
     private JSONObject remove(String id) throws JSONException {
-        if (!rules.remove(id)) return error("RULE_NOT_FOUND", "Rule not found: " + id);
+        JSONObject existing = rules.find(id);
+        if (existing == null || !rules.remove(id)) return error("RULE_NOT_FOUND", "Rule not found: " + id);
+        broadcastRulesForPackage(existing.optString("package", null));
         return ok().put("removed", id).put("requires_restart", false);
     }
 
     private JSONObject enable(String id, boolean enabled) throws JSONException {
-        if (!rules.setEnabled(id, enabled)) return error("RULE_NOT_FOUND", "Rule not found: " + id);
+        JSONObject existing = rules.find(id);
+        if (existing == null || !rules.setEnabled(id, enabled)) return error("RULE_NOT_FOUND", "Rule not found: " + id);
+        broadcastRulesForPackage(existing.optString("package", null));
         return ok().put("id", id).put("enabled", enabled).put("requires_restart", false);
+    }
+
+    private JSONObject reloadRules() throws JSONException {
+        long next = rules.reload();
+        broadcastAllRulePackages();
+        return ok().put("generation", next).put("requires_restart", false);
     }
 
     private JSONObject updateState(JSONObject request) throws JSONException {
@@ -184,6 +196,54 @@ public final class SimpleHookProvider extends ContentProvider {
     static void recordHeartbeat(JSONObject request) throws JSONException {
         JSONObject value = new JSONObject(request.toString()).put("last_seen", System.currentTimeMillis());
         HEARTBEATS.put(request.getString("package") + ":" + request.getInt("pid"), value);
+    }
+
+    private void broadcastAllRulePackages() throws JSONException {
+        HashSet<String> packages = new HashSet<>();
+        JSONArray all = rules.rules();
+        for (int i = 0; i < all.length(); i++) {
+            String packageName = all.getJSONObject(i).optString("package", null);
+            if (packageName != null && !packageName.isBlank()) packages.add(packageName);
+        }
+        for (String packageName : packages) broadcastRulesForPackage(packageName);
+    }
+
+    private void broadcastRulesForPackage(String packageName) throws JSONException {
+        if (packageName == null || packageName.isBlank()) return;
+        JSONObject payload = ok()
+                .put("package", packageName)
+                .put("generation", rules.generation())
+                .put(RuntimeChannel.CHANNEL_TOKEN, rules.channelToken())
+                .put("rules", rulesForBroadcast(packageName));
+        try {
+            Intent intent = new Intent(RuntimeChannel.ACTION_RULES)
+                    .setPackage(packageName)
+                    .addFlags(Intent.FLAG_RECEIVER_FOREGROUND | Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                    .putExtra(RuntimeChannel.JSON, payload.toString());
+            if (Build.VERSION.SDK_INT >= 34) {
+                BroadcastOptions options = BroadcastOptions.makeBasic()
+                        .setShareIdentityEnabled(true)
+                        .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_NONE);
+                contextOrThrow().sendOrderedBroadcast(intent, null, options.toBundle(), null,
+                        null, Activity.RESULT_CANCELED, null, null);
+            } else {
+                contextOrThrow().sendBroadcast(intent);
+            }
+        } catch (Throwable error) {
+            Log.w("SimpleHook", "SimpleHook rules broadcast failed", error);
+        }
+    }
+
+    private JSONArray rulesForBroadcast(String packageName) throws JSONException {
+        JSONArray selected = new JSONArray();
+        JSONArray all = rules.rules();
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject rule = all.getJSONObject(i);
+            if (packageName.equals(rule.optString("package")) && rule.optBoolean("enabled", true)) {
+                selected.put(new JSONObject(rule.toString()));
+            }
+        }
+        return selected;
     }
 
     private JSONObject runtimeSubmit(JSONObject request) throws Exception {

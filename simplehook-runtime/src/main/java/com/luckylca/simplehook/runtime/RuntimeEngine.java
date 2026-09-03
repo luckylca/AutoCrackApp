@@ -59,6 +59,7 @@ public final class RuntimeEngine {
         ClassLoaderRegistry registry = ClassLoaderRegistry.get();
         classLoaders.addAll(registry.snapshot());
         registry.addListener(this::onClassLoaded);
+        channel.registerRulesReceiver(packageName, processName, this::applyRules);
         synchronizeRules();
         handler.postDelayed(this::poll, 1000L);
     }
@@ -75,9 +76,17 @@ public final class RuntimeEngine {
     }
 
     private void synchronizeRules() throws Exception {
-        JSONObject response = channel.rulesForPackage(packageName, processName);
+        applyRules(channel.rulesForPackage(packageName, processName));
+    }
+
+    private void applyRules(JSONObject response) throws Exception {
         if (!response.optBoolean("ok")) return;
         long nextGeneration = response.optLong("generation", 0L);
+        if (nextGeneration < generation) {
+            retryWaitingRules();
+            heartbeat();
+            return;
+        }
         if (nextGeneration == generation) {
             retryWaitingRules();
             heartbeat();
@@ -86,7 +95,11 @@ public final class RuntimeEngine {
         Map<String, HookRule> next = new LinkedHashMap<>();
         JSONArray rules = response.getJSONArray("rules");
         for (int i = 0; i < rules.length(); i++) {
-            HookRule rule = HookRule.parse(rules.getJSONObject(i));
+            JSONObject item = rules.getJSONObject(i);
+            if (!packageName.equals(item.optString("package"))) continue;
+            String wantedProcess = item.isNull("process") ? null : item.optString("process", null);
+            if (wantedProcess != null && !wantedProcess.equals(processName)) continue;
+            HookRule rule = HookRule.parse(item);
             next.put(rule.id, rule);
         }
         activeRules.clear();
@@ -106,6 +119,10 @@ public final class RuntimeEngine {
     }
 
     private void install(HookRule rule) {
+        // Dynamic DexClassLoader instances can appear after RuntimeEngine.start().
+        // Refresh the shared registry snapshot before resolving a rule so delayed
+        // class tests and plugin-style class loaders are not missed.
+        classLoaders.addAll(ClassLoaderRegistry.get().snapshot());
         boolean loaded = false;
         Throwable lastError = null;
         for (ClassLoader loader : classLoaders) {
@@ -132,6 +149,7 @@ public final class RuntimeEngine {
     }
 
     private void retryWaitingRules() {
+        classLoaders.addAll(ClassLoaderRegistry.get().snapshot());
         for (String id : waitingForClass.toArray(new String[0])) {
             HookRule rule = activeRules.get(id);
             if (rule == null) waitingForClass.remove(id); else install(rule);
