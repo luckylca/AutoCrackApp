@@ -50,4 +50,4 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 
 `secure-diagnose` extends `secure-status` with root SurfaceView/TextureView/VideoView counts so screenshot failures can be separated into Window.FLAG_SECURE versus surface/DRM/vendor producer limitations. `secure-disable` now returns an `after_status` snapshot after clearing Window flags.
 
-`so-diagnose` is a read-only native/linker health check: it verifies the AutoCrack JNI bridge, lists linker-related modules, probes `dlopen`/`dlsym`/`dlerror`/`android_dlopen_ext` visibility, and explicitly reports that Android linker namespace bypass is not embedded.
+`so-diagnose` is a read-only native/linker health check: it verifies the AutoCrack JNI bridge, lists linker-related modules, probes `dlopen`/`dlsym`/`dlerror`/`android_dlopen_ext` visibility and `dladdr` ownership, and explicitly reports that Android linker namespace bypass is not embedded.

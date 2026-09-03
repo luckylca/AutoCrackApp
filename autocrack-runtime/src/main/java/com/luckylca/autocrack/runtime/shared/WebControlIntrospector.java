@@ -273,7 +273,9 @@ public final class WebControlIntrospector {
 
     private static JSONObject soDiagnose(Context context) throws Exception {
         boolean bridgeLoaded = NativeBridge.ensureLoaded(context);
-        JSONObject out = ok().put("native_bridge_loaded", bridgeLoaded)
+        JSONObject out = ok().put("pid", Process.myPid())
+                .put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("native_bridge_loaded", bridgeLoaded)
                 .put("native_bridge_error", bridgeLoaded ? JSONObject.NULL : NativeBridge.loadError())
                 .put("namespace_bypass_supported", false)
                 .put("namespace_note", "This reports linker/libdl visibility and native bridge health. It does not bypass Android linker namespaces or provide an android_namespace_t pointer.");
@@ -282,7 +284,17 @@ public final class WebControlIntrospector {
         try { out.put("linker_modules", NativeBridge.modules(context, 64, "linker")); } catch (Throwable error) { out.put("linker_modules_error", error.toString()); }
         JSONObject symbols = new JSONObject();
         for (String symbol : List.of("dlopen", "dlsym", "dlerror", "android_dlopen_ext")) {
-            try { symbols.put(symbol, NativeBridge.dlsym(context, "", symbol)); }
+            try {
+                JSONObject info = NativeBridge.dlsym(context, "", symbol);
+                if (info.optBoolean("resolved", false)) {
+                    long address = parseHexAddress(info.optString("address", ""));
+                    if (address != 0L) {
+                        try { info.put("dladdr", NativeBridge.dladdr(context, address)); }
+                        catch (Throwable error) { info.put("dladdr_error", error.toString()); }
+                    }
+                }
+                symbols.put(symbol, info);
+            }
             catch (Throwable error) { symbols.put(symbol, new JSONObject().put("ok", false).put("reason", error.toString())); }
         }
         out.put("libdl_symbols", symbols)
@@ -296,6 +308,14 @@ public final class WebControlIntrospector {
                         .put("private linker namespace bypass")
                         .put("SELinux or linker policy override"));
         return out;
+    }
+
+    private static long parseHexAddress(String text) {
+        if (text == null) return 0L;
+        String raw = text.trim();
+        if (raw.startsWith("0x") || raw.startsWith("0X")) raw = raw.substring(2);
+        if (raw.isEmpty()) return 0L;
+        try { return Long.parseUnsignedLong(raw, 16); } catch (Throwable ignored) { return 0L; }
     }
 
     private static JSONObject injectSo(JSONObject request) throws Exception {

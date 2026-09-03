@@ -760,3 +760,9 @@ Device provider-self validation confirmed:
 - `namespace_bypass_supported=false`
 
 This makes linker failures more diagnosable without falsely claiming private linker namespace bypass, SELinux override, or a valid `android_namespace_t` strategy.
+
+## Stage 33 - Native/linker symbol ownership correlation
+
+Extended `control.so.diagnose` so each resolved libdl symbol is immediately passed through `dladdr`. The diagnostic now correlates `dlopen`, `dlsym`, `dlerror`, and `android_dlopen_ext` addresses back to their owning object and symbol name, in addition to reporting the raw address.
+
+Device provider-self validation confirmed all four symbols resolve through `RTLD_DEFAULT` and map back to `/apex/com.android.runtime/lib64/bionic/libdl.so` with matching `dladdr.symbol` values. This makes native-loader failures easier to separate into symbol-visibility, linker-module, and namespace-policy problems while still keeping private namespace bypass unimplemented.
