@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.art_pointer_probe", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.art_pointer_probe", "memory.dex.art_dump", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.block_probe", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -62,6 +62,7 @@ public final class MemoryIntrospector {
             case "memory.dex.list" -> dexList(request);
             case "memory.dex.art_probe" -> dexArtProbe(context, request);
             case "memory.dex.art_pointer_probe" -> dexArtPointerProbe(context, request);
+            case "memory.dex.art_dump" -> dexArtDump(context, request);
             case "memory.dex.info" -> dexInfo(context, request);
             case "memory.dex.apk_index" -> dexApkIndex(context, request);
             case "memory.dex.strings" -> dexStrings(context, request);
@@ -634,6 +635,96 @@ public final class MemoryIntrospector {
                 .put("warning", "Default mode is a pointer-shape/neighborhood probe. try_layout_dex_header may reconstruct validated DEX header/map metadata; try_layout_dex_tables additionally parses bounded strings/classes/fields/methods/class_data directly from that validated in-memory candidate. Full raw DEX byte export/reconstruction remains unsupported.");
     }
 
+
+    private static JSONObject dexArtDump(Context context, JSONObject request) throws Exception {
+        int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
+        JSONObject probeRequest = new JSONObject()
+                .put("kind", "memory.dex.art_pointer_probe")
+                .put("loader", request.optString("loader", ""))
+                .put("max_dex", clamp(request.optInt("max_dex", 256), 1, MAX_DEX))
+                .put("max_pointers", clamp(request.optInt("max_pointers", 64), 1, 1024))
+                .put("window_bytes", clamp(request.optInt("window_bytes", 4096), 0x70, MAX_INLINE_BYTES))
+                .put("scan_back_bytes", clamp(request.optInt("scan_back_bytes", 512), 0, MAX_INLINE_BYTES))
+                .put("include_context_loader", request.optBoolean("include_context_loader", true))
+                .put("include_class_count", false)
+                .put("include_words", true)
+                .put("word_count", clamp(request.optInt("word_count", 16), 1, 256))
+                .put("try_layout_dex_header", true)
+                .put("try_layout_dex_tables", false);
+        JSONObject probe = dexArtPointerProbe(context, probeRequest);
+        JSONArray flattened = new JSONArray();
+        JSONArray pointers = probe.optJSONArray("pointers");
+        if (pointers != null) {
+            for (int i = 0; i < pointers.length(); i++) {
+                JSONObject pointer = pointers.optJSONObject(i);
+                if (pointer == null) continue;
+                JSONArray candidates = pointer.optJSONArray("layout_dex_candidates");
+                if (candidates == null) continue;
+                for (int j = 0; j < candidates.length(); j++) {
+                    JSONObject candidate = candidates.optJSONObject(j);
+                    if (candidate == null || !"high".equals(candidate.optString("confidence", ""))) continue;
+                    flattened.put(new JSONObject()
+                            .put("pointer_record_index", i)
+                            .put("candidate_index_in_pointer", j)
+                            .put("candidate", candidate));
+                }
+            }
+        }
+        if (flattened.length() == 0) {
+            return unsupported("memory.dex.art_dump", "no high-confidence ART DEX memory candidate was found",
+                    new JSONArray().put("run dex-art-pointer-probe --try-layout-dex-header to inspect candidate layout")
+                            .put("candidate discovery remains Android-version/layout dependent"));
+        }
+        int selected = request.optInt("candidate_index", 0);
+        if (selected < 0 || selected >= flattened.length()) {
+            return error("ART_DEX_CANDIDATE_INDEX", "candidate_index must be between 0 and " + (flattened.length() - 1));
+        }
+        JSONObject selectedRecord = flattened.getJSONObject(selected);
+        JSONObject candidateMeta = selectedRecord.getJSONObject("candidate");
+        long address = parseAddress(candidateMeta.getString("data_address"));
+        long declaredSize = candidateMeta.optLong("size", -1L);
+        if (declaredSize < 0x70L || declaredSize > MAX_INLINE_BYTES) {
+            return error("ART_DEX_INVALID_SIZE", "validated candidate size is outside bounded dump range: " + declaredSize);
+        }
+        if (declaredSize > maxBytes) {
+            return error("ART_DEX_TOO_LARGE", "validated candidate size " + declaredSize + " exceeds max_bytes " + maxBytes);
+        }
+        byte[] bytes = readMappedMemory(context, address, (int) declaredSize);
+        if (bytes.length != declaredSize || !looksLikeDexHeader(bytes, 0)) {
+            return error("ART_DEX_REVALIDATION_FAILED", "candidate changed or could not be read at validated size");
+        }
+        JSONObject dex = parseDexInfo(bytes);
+        boolean invariantOk = dex.optLong("file_size", -1L) == declaredSize
+                && dex.optLong("header_size", -1L) == 0x70L
+                && "0x12345678".equals(dex.optString("endian_tag", ""));
+        if (!invariantOk) return error("ART_DEX_REVALIDATION_FAILED", "DEX header invariants changed before dump");
+        String sha = sha256(bytes);
+        JSONObject fingerprint = candidateMeta.optJSONObject("content_fingerprint");
+        if (fingerprint != null) {
+            String expected = fingerprint.optString("memory_sha256", "");
+            if (!expected.isBlank() && !expected.equals(sha)) {
+                return error("ART_DEX_FINGERPRINT_CHANGED", "memory SHA-256 changed between candidate validation and dump");
+            }
+        }
+        boolean includeData = request.optBoolean("include_data", true);
+        JSONObject out = ok().put("candidate_index", selected)
+                .put("candidate_count", flattened.length())
+                .put("pointer_record_index", selectedRecord.optInt("pointer_record_index"))
+                .put("candidate_index_in_pointer", selectedRecord.optInt("candidate_index_in_pointer"))
+                .put("data_address", hex(address))
+                .put("size", bytes.length)
+                .put("max_bytes", maxBytes)
+                .put("sha256", sha)
+                .put("dex", dex)
+                .put("candidate", candidateMeta)
+                .put("raw_byte_reconstruction", true)
+                .put("bounded", true)
+                .put("data_included", includeData)
+                .put("strategy", "validated ART data_begin + file_size candidate re-read with DEX header/endian/size/SHA-256 revalidation")
+                .put("warning", "Raw export is limited to high-confidence validated ART candidates not exceeding the runtime inline byte cap; unbounded/chunked ART DEX streaming is not implemented.");
+        if (includeData) out.put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+        return out;
+    }
 
     private static JSONArray artPointerWords(byte[] bytes, long probeStart, int pointerOffset, int wordCount) throws Exception {
         JSONArray out = new JSONArray();
@@ -1372,10 +1463,11 @@ public final class MemoryIntrospector {
                 .put("dex_strings",status(true,"bounded file/APK DEX string table parsing"))
                 .put("dex_classes",status(true,"bounded file/APK DEX class_def descriptor parsing"))
                 .put("dex_memory_scan",status(bridgeLoaded,"bounded readable-map DEX magic/header candidate scan; not mCookie reconstruction"))
-                .put("dex_art_memory_header",status(bridgeLoaded || canReadSelfMem(),"opt-in version-gated ART data_begin/file_size heuristic with DEX file_size/header/endian/map validation; metadata only, no byte export"))
-                .put("dex_art_memory_tables",status(bridgeLoaded || canReadSelfMem(),"opt-in bounded strings/classes/fields/methods/class_data parsing from a validated ART memory DEX candidate; raw bytes are not returned"))
-                .put("dex_art_memory_fingerprint",status(bridgeLoaded || canReadSelfMem(),"SHA-256 and DEX-signature fingerprinting of validated ART memory candidates with same-size originating APK classes*.dex correlation; metadata only"))
-                .put("dex_art_memory",status(false,"full ART DexFile raw byte reconstruction/dump remains version-specific and unsupported; validated header/map, bounded table metadata, and content fingerprints are exposed separately"))
+                .put("dex_art_memory_header",status(bridgeLoaded || canReadSelfMem(),"opt-in version-gated ART data_begin/file_size heuristic with DEX file_size/header/endian/map validation"))
+                .put("dex_art_memory_tables",status(bridgeLoaded || canReadSelfMem(),"opt-in bounded strings/classes/fields/methods/class_data parsing from a validated ART memory DEX candidate"))
+                .put("dex_art_memory_fingerprint",status(bridgeLoaded || canReadSelfMem(),"SHA-256 and DEX-signature fingerprinting of validated ART memory candidates with same-size originating APK classes*.dex correlation"))
+                .put("dex_art_memory_dump",status(bridgeLoaded || canReadSelfMem(),"bounded raw byte reconstruction for high-confidence validated ART DEX candidates up to the 4 MiB inline cap with header/endian/size/SHA-256 revalidation"))
+                .put("dex_art_memory",status(false,"unbounded/chunked ART DexFile raw reconstruction remains version-specific and unsupported; bounded validated raw dump plus header/tables/fingerprints are exposed separately"))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
                 .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field and event probe; no native byte export"))
