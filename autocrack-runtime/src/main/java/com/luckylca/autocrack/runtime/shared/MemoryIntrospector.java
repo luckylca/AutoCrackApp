@@ -1554,6 +1554,7 @@ public final class MemoryIntrospector {
                                     .put("source_entry", sourceEntry)
                                     .put("source_size", axml.length)
                                     .put("file_backed_input", true);
+                            enrichNativeReplayStrings(replay, axml);
                             out.put("native_replay_probe", replay);
                         }
                     } catch (Throwable error) {
@@ -1634,6 +1635,50 @@ public final class MemoryIntrospector {
             c = c.getSuperclass();
         }
         return out;
+    }
+
+    private static void enrichNativeReplayStrings(JSONObject replay, byte[] axml) throws Exception {
+        List<String> strings = axmlStringPool(axml);
+        replay.put("string_pool_count", strings.size())
+                .put("string_pool_resolution", strings.isEmpty() ? "unavailable" : "file_backed_axml_string_pool");
+        if (strings.isEmpty()) return;
+        JSONArray events = replay.optJSONArray("events");
+        if (events == null) return;
+        for (int i = 0; i < events.length(); i++) {
+            JSONObject event = events.optJSONObject(i);
+            if (event == null) continue;
+            putAxmlResolvedString(event, "namespace_index", "namespace", strings);
+            putAxmlResolvedString(event, "name_index", "name", strings);
+            putAxmlResolvedString(event, "text_index", "text", strings);
+            JSONArray attrs = event.optJSONArray("attributes");
+            if (attrs == null) continue;
+            for (int a = 0; a < attrs.length(); a++) {
+                JSONObject attr = attrs.optJSONObject(a);
+                if (attr == null) continue;
+                putAxmlResolvedString(attr, "namespace_index", "namespace", strings);
+                putAxmlResolvedString(attr, "name_index", "name", strings);
+                putAxmlResolvedString(attr, "string_value_index", "string_value", strings);
+            }
+        }
+    }
+
+    private static List<String> axmlStringPool(byte[] bytes) {
+        if (bytes == null || bytes.length < 8) return new ArrayList<>();
+        int rootType = u16le(bytes, 0);
+        int pos = rootType == 0x0003 ? 8 : 0;
+        while (pos + 8 <= bytes.length) {
+            int type = u16le(bytes, pos);
+            int size = u32leInt(bytes, pos + 4);
+            if (size < 8 || pos + size > bytes.length) break;
+            if (type == 0x0001) return parseAxmlStringPool(bytes, pos, size);
+            pos += size;
+        }
+        return new ArrayList<>();
+    }
+
+    private static void putAxmlResolvedString(JSONObject object, String indexKey, String valueKey, List<String> strings) throws Exception {
+        int index = object.optInt(indexKey, -1);
+        object.put(valueKey, index >= 0 && index < strings.size() ? strings.get(index) : JSONObject.NULL);
     }
 
     private static JSONArray reflectFieldShape(Object object, int maxFields) throws Exception {
