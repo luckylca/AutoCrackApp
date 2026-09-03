@@ -747,3 +747,16 @@ This improves Layout Inspect-style image debugging because a failed capture can 
 Added `control.secure.diagnose` and `runtime-control secure-diagnose` as a read-only diagnostic companion to `secure-status` and `secure-disable`. The secure path now reports Window flag state, decor handles/classes, decor visibility/attachment, per-window SurfaceView/TextureView/VideoView counts, and a process-wide surface summary. `secure-disable` now also returns an `after_status` snapshot after `Window.clearFlags(FLAG_SECURE)`.
 
 Device provider-self validation confirmed that `control.secure.diagnose` returns `ok=true`, `diagnose=true`, `window_count`, `secure_window_count`, `surface_summary`, and the explicit scope note. This keeps the boundary clear: Java Window FLAG_SECURE handling is implemented; private SurfaceControl, DRM, or vendor secure producer bypass remains unclaimed.
+
+## Stage 32 - Native/linker SO diagnostics
+
+Added `control.so.diagnose` and `runtime-control so-diagnose` as a read-only native/linker health check. It reports AutoCrack JNI bridge availability, native self-probe output, linker-related modules from `dl_iterate_phdr`, and `RTLD_DEFAULT` symbol visibility for `dlopen`, `dlsym`, `dlerror`, and `android_dlopen_ext`.
+
+Device provider-self validation confirmed:
+
+- `native_bridge_loaded=true`
+- linker module discovery includes `/system/bin/linker64`
+- `dlopen`, `dlsym`, `dlerror`, and `android_dlopen_ext` resolved through `RTLD_DEFAULT`
+- `namespace_bypass_supported=false`
+
+This makes linker failures more diagnosable without falsely claiming private linker namespace bypass, SELinux override, or a valid `android_namespace_t` strategy.

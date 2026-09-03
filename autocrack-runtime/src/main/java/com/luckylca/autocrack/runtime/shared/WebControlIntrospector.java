@@ -44,7 +44,7 @@ public final class WebControlIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
-                "control.secure.status", "control.secure.diagnose", "control.secure.disable", "control.so.inject", "control.so.dlopen", "control.so.android_dlopen_ext", "control.so.dlsym",
+                "control.secure.status", "control.secure.diagnose", "control.secure.disable", "control.so.inject", "control.so.diagnose", "control.so.dlopen", "control.so.android_dlopen_ext", "control.so.dlsym",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
 
@@ -64,6 +64,7 @@ public final class WebControlIntrospector {
             case "control.secure.diagnose" -> secureStatus().put("diagnose", true);
             case "control.secure.disable" -> secureDisable();
             case "control.so.inject" -> injectSo(request);
+            case "control.so.diagnose" -> soDiagnose(context);
             case "control.so.dlopen" -> dlopenSo(context, request);
             case "control.so.android_dlopen_ext" -> androidDlopenExtSo(context, request);
             case "control.so.dlsym" -> dlsymSo(context, request);
@@ -268,6 +269,33 @@ public final class WebControlIntrospector {
         if (view instanceof TextureView) counts[2]++;
         if (view instanceof VideoView) counts[3]++;
         if (view instanceof ViewGroup group) for (int i = 0; i < group.getChildCount(); i++) countSecureSurfaces(group.getChildAt(i), seen, counts);
+    }
+
+    private static JSONObject soDiagnose(Context context) throws Exception {
+        boolean bridgeLoaded = NativeBridge.ensureLoaded(context);
+        JSONObject out = ok().put("native_bridge_loaded", bridgeLoaded)
+                .put("native_bridge_error", bridgeLoaded ? JSONObject.NULL : NativeBridge.loadError())
+                .put("namespace_bypass_supported", false)
+                .put("namespace_note", "This reports linker/libdl visibility and native bridge health. It does not bypass Android linker namespaces or provide an android_namespace_t pointer.");
+        if (!bridgeLoaded) return out;
+        try { out.put("native_probe", NativeBridge.probe(context)); } catch (Throwable error) { out.put("native_probe_error", error.toString()); }
+        try { out.put("linker_modules", NativeBridge.modules(context, 64, "linker")); } catch (Throwable error) { out.put("linker_modules_error", error.toString()); }
+        JSONObject symbols = new JSONObject();
+        for (String symbol : List.of("dlopen", "dlsym", "dlerror", "android_dlopen_ext")) {
+            try { symbols.put(symbol, NativeBridge.dlsym(context, "", symbol)); }
+            catch (Throwable error) { symbols.put(symbol, new JSONObject().put("ok", false).put("reason", error.toString())); }
+        }
+        out.put("libdl_symbols", symbols)
+                .put("supported_strategies", new JSONArray()
+                        .put("System.load absolute path")
+                        .put("JNI dlopen flags")
+                        .put("JNI android_dlopen_ext without namespace pointer")
+                        .put("JNI dlsym through RTLD_DEFAULT or returned handles"))
+                .put("unsupported_strategies", new JSONArray()
+                        .put("ANDROID_DLEXT_USE_NAMESPACE without a valid android_namespace_t pointer")
+                        .put("private linker namespace bypass")
+                        .put("SELinux or linker policy override"));
+        return out;
     }
 
     private static JSONObject injectSo(JSONObject request) throws Exception {

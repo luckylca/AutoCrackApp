@@ -49,3 +49,5 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 `runtime-control so-dlsym --package PKG symbolName --json` resolves a native symbol through `dlsym`. Use `--handle 0x...` with a handle returned by `so-dlopen`, or omit it for `RTLD_DEFAULT`. This only returns the address and does not call the function.
 
 `secure-diagnose` extends `secure-status` with root SurfaceView/TextureView/VideoView counts so screenshot failures can be separated into Window.FLAG_SECURE versus surface/DRM/vendor producer limitations. `secure-disable` now returns an `after_status` snapshot after clearing Window flags.
+
+`so-diagnose` is a read-only native/linker health check: it verifies the AutoCrack JNI bridge, lists linker-related modules, probes `dlopen`/`dlsym`/`dlerror`/`android_dlopen_ext` visibility, and explicitly reports that Android linker namespace bypass is not embedded.
