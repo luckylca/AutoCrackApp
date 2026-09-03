@@ -866,3 +866,9 @@ ADB discovery confirmed `/Users/lucky/Library/Android/sdk/platform-tools/adb` an
 Aligned `simplehook` with the four shared-runtime Toolpacks by upgrading its packaged `manifest.json` to `schemaVersion: 2` and adding explicit `requires.runtime`, `requires.capabilities`, `requires.commands`, and optional runtime-inspection capability declarations. This changes only the Toolpack packaging metadata; the SimpleHook rule format intentionally remains `schema_version: 1` and continues to be validated by `schema/simplehook-rule-v1.schema.json`.
 
 Host validation rebuilt `simplehook-toolpack-0.1.1.zip`, asserted the generated manifest schema/requirements fields, verified `simplehook --help`, and re-ran `simplehook rules validate toolpacks/simplehook/examples/replace-return-int.json --json`. The rebuilt Toolpack SHA-256 is `b29b064496b18145a5b48b8da6e899c4d0b2dcc31d89bc71e6158be0ed4bb9a3`.
+
+## Stage 50 - Phase I cross-tool host contract validator
+
+Added `scripts/validate_cross_tool_contract.py` and `CROSS_TOOL_INTEGRATION.md` to make the four Phase I integration flows auditable without requiring a target-device run. The checker runs each maintained CLI with `--help`, reads each generated Toolpack manifest, enforces schema v2 payload/command/self-test/runtime requirements, and verifies the command/capability prerequisites for: `ui-inspect at` to `runtime-inspect object`, listener discovery to SimpleHook rule/log flow, ClassLoader handle to memory DEX inspection/export, and WebView discovery/debug/eval/result.
+
+Host validation passed with all five Toolpacks reporting `schemaVersion=2` and all four flow contracts returning `ok=true`. This is a contract-level PASS only; target-device positive validation still remains separate because it depends on LSPosed loading the current Runtime into the selected target process.
