@@ -81,3 +81,6 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | DEX file metadata and ART cookie probe | PASS(device self) | `memory.dex.info` parsed runtime `classes.dex` version `038`, `class_defs_size=25`, `map_items_count=17`; `memory.dex.art_probe` returned `loader_count=1`, `dex_count=1`, `mCookie/mInternalCookie` arrays of 7 values each |
 | Stage 21 | `memory-dump dex-strings --entry classes.dex --filter luckylca` | Device provider-self | PASS | Returned filtered string descriptors from runtime APK `classes.dex` |
 | Stage 21 | `memory-dump dex-classes --entry classes.dex --filter com/luckylca` | Device provider-self | PASS | Returned filtered class_def records including `ConditionEvaluator.java` |
+| Stage 22 | `memory-dump dex-fields --help` / manifest capability | Host | PASS | CLI and toolpack capability wired |
+| Stage 22 | `memory-dump dex-methods --help` / manifest capability | Host | PASS | CLI and toolpack capability wired |
+| Stage 22 | Provider-self field/method signature assertion | Device | BLOCKED | Tool safety layer blocked direct provider-self invocation; no device PASS claimed |

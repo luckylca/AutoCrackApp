@@ -41,7 +41,7 @@ public final class MemoryIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
-                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.strings", "memory.dex.classes", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
+                "memory.dex.list", "memory.dex.art_probe", "memory.dex.info", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
                 "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
@@ -64,6 +64,8 @@ public final class MemoryIntrospector {
             case "memory.dex.info" -> dexInfo(context, request);
             case "memory.dex.strings" -> dexStrings(context, request);
             case "memory.dex.classes" -> dexClasses(context, request);
+            case "memory.dex.fields" -> dexFields(context, request);
+            case "memory.dex.methods" -> dexMethods(context, request);
             case "memory.dex.scan" -> dexScan(context, request);
             case "memory.dex.dump" -> dexDump(request);
             case "memory.assets.list" -> assetsList(context, request);
@@ -359,6 +361,34 @@ public final class MemoryIntrospector {
                 .put("sha256_prefix", sha256(loaded.bytes)).put("classes", parsed)
                 .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
                 .put("strategy", "bounded file/APK DEX class_def descriptor parsing; no ART memory reconstruction");
+    }
+
+    private static JSONObject dexFields(Context context, JSONObject request) throws Exception {
+        int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxFields = clamp(request.optInt("max_fields", 4096), 1, 200_000);
+        String filter = request.optString("filter", "");
+        DexBytes loaded;
+        try { loaded = loadDexBytes(context, request, maxBytes); }
+        catch (IllegalArgumentException error) { return error("DEX_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseDexFields(loaded.bytes, maxFields, filter);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("fields", parsed)
+                .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
+                .put("strategy", "bounded file/APK DEX field_id parsing; no ART memory reconstruction");
+    }
+
+    private static JSONObject dexMethods(Context context, JSONObject request) throws Exception {
+        int maxBytes = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 4096, MAX_INLINE_BYTES);
+        int maxMethods = clamp(request.optInt("max_methods", 4096), 1, 300_000);
+        String filter = request.optString("filter", "");
+        DexBytes loaded;
+        try { loaded = loadDexBytes(context, request, maxBytes); }
+        catch (IllegalArgumentException error) { return error("DEX_INPUT_ERROR", error.getMessage()); }
+        JSONObject parsed = parseDexMethods(loaded.bytes, maxMethods, filter);
+        return ok().put("source", loaded.source).put("bytes_read", loaded.bytes.length).put("truncated", loaded.truncated)
+                .put("sha256_prefix", sha256(loaded.bytes)).put("methods", parsed)
+                .put("filter", filter.isEmpty() ? JSONObject.NULL : filter)
+                .put("strategy", "bounded file/APK DEX method_id/proto parsing; no ART memory reconstruction");
     }
 
     private static JSONObject dexList(JSONObject request) throws Exception {
@@ -1124,6 +1154,40 @@ public final class MemoryIntrospector {
     private static String symBind(int info) { return switch ((info >>> 4) & 0xf) { case 0 -> "LOCAL"; case 1 -> "GLOBAL"; case 2 -> "WEAK"; case 10 -> "GNU_UNIQUE"; default -> "BIND_" + ((info >>> 4) & 0xf); }; }
     private static String symType(int info) { return switch (info & 0xf) { case 0 -> "NOTYPE"; case 1 -> "OBJECT"; case 2 -> "FUNC"; case 3 -> "SECTION"; case 4 -> "FILE"; case 5 -> "COMMON"; case 6 -> "TLS"; case 10 -> "GNU_IFUNC"; default -> "TYPE_" + (info & 0xf); }; }
 
+    private static JSONObject dexProto(byte[] bytes, int protoIndex) throws Exception {
+        long total = u32le(bytes, 0x48);
+        long base = u32le(bytes, 0x4c);
+        if (protoIndex < 0 || protoIndex >= total) return new JSONObject().put("index", protoIndex).put("descriptor", "#proto" + protoIndex);
+        int off = (int)(base + (long)protoIndex * 12);
+        if (off < 0 || off + 12 > bytes.length) return new JSONObject().put("index", protoIndex).put("descriptor", "#proto" + protoIndex).put("truncated", true);
+        int shortyIdx = (int)u32le(bytes, off);
+        int returnTypeIdx = (int)u32le(bytes, off + 4);
+        long parametersOff = u32le(bytes, off + 8);
+        JSONArray params = dexProtoParameters(bytes, parametersOff);
+        StringBuilder desc = new StringBuilder("(");
+        for (int i=0; i<params.length(); i++) desc.append(params.getString(i));
+        desc.append(')').append(dexTypeDescriptor(bytes, returnTypeIdx));
+        return new JSONObject().put("index", protoIndex)
+                .put("shorty_idx", shortyIdx).put("shorty", dexStringByIndex(bytes, shortyIdx))
+                .put("return_type_idx", returnTypeIdx).put("return_type", dexTypeDescriptor(bytes, returnTypeIdx))
+                .put("parameters_off", parametersOff).put("parameters", params)
+                .put("descriptor", desc.toString());
+    }
+    private static JSONArray dexProtoParameters(byte[] bytes, long parametersOff) {
+        JSONArray out = new JSONArray();
+        try {
+            if (parametersOff == 0 || parametersOff + 4 > bytes.length) return out;
+            int count = (int)Math.min(u32le(bytes, (int)parametersOff), 10_000);
+            int base = (int)parametersOff + 4;
+            for (int i=0; i<count; i++) {
+                int off = base + i * 2;
+                if (off + 2 > bytes.length) break;
+                out.put(dexTypeDescriptor(bytes, u16le(bytes, off)));
+            }
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
     private static String machineName(int machine) { return switch (machine) { case 3 -> "EM_386"; case 40 -> "EM_ARM"; case 62 -> "EM_X86_64"; case 183 -> "EM_AARCH64"; default -> "EM_" + machine; }; }
     private static String phdrTypeName(long type) { return switch ((int)type) { case 0 -> "PT_NULL"; case 1 -> "PT_LOAD"; case 2 -> "PT_DYNAMIC"; case 3 -> "PT_INTERP"; case 4 -> "PT_NOTE"; case 5 -> "PT_SHLIB"; case 6 -> "PT_PHDR"; case 7 -> "PT_TLS"; case 0x6474e550 -> "PT_GNU_EH_FRAME"; case 0x6474e551 -> "PT_GNU_STACK"; case 0x6474e552 -> "PT_GNU_RELRO"; case 0x6474e553 -> "PT_GNU_PROPERTY"; default -> "PT_" + type; }; }
     private static String phdrFlags(long flags) { StringBuilder out = new StringBuilder(3); out.append((flags & 4) != 0 ? 'r' : '-'); out.append((flags & 2) != 0 ? 'w' : '-'); out.append((flags & 1) != 0 ? 'x' : '-'); return out.toString(); }
@@ -1289,6 +1353,62 @@ public final class MemoryIntrospector {
                     .put("static_values_off", u32le(bytes, (int)off + 28)));
         }
         return ok().put("total", classTotal).put("count", values.length()).put("classes", values)
+                .put("truncated", truncated).put("filter", filter == null || filter.isEmpty() ? JSONObject.NULL : filter);
+    }
+
+    private static JSONObject parseDexFields(byte[] bytes, int maxFields, String filter) throws Exception {
+        JSONObject header = parseDexInfo(bytes);
+        if (!header.optBoolean("ok", false)) return header;
+        long total = u32le(bytes, 0x50);
+        long offBase = u32le(bytes, 0x54);
+        JSONArray values = new JSONArray();
+        boolean truncated = false;
+        for (int i=0; i<total; i++) {
+            if (values.length() >= maxFields) { truncated = true; break; }
+            long off = offBase + (long)i * 8;
+            if (off < 0 || off + 8 > bytes.length) { truncated = true; break; }
+            int classIdx = u16le(bytes, (int)off);
+            int typeIdx = u16le(bytes, (int)off + 2);
+            int nameIdx = (int)u32le(bytes, (int)off + 4);
+            String owner = dexTypeDescriptor(bytes, classIdx);
+            String type = dexTypeDescriptor(bytes, typeIdx);
+            String name = dexStringByIndex(bytes, nameIdx);
+            String descriptor = owner + "->" + name + ":" + type;
+            if (filter != null && !filter.isEmpty() && !descriptor.contains(filter)) continue;
+            values.put(new JSONObject().put("index", i).put("class_idx", classIdx).put("class", owner)
+                    .put("type_idx", typeIdx).put("type", type)
+                    .put("name_idx", nameIdx).put("name", name)
+                    .put("descriptor", descriptor));
+        }
+        return ok().put("total", total).put("count", values.length()).put("fields", values)
+                .put("truncated", truncated).put("filter", filter == null || filter.isEmpty() ? JSONObject.NULL : filter);
+    }
+
+    private static JSONObject parseDexMethods(byte[] bytes, int maxMethods, String filter) throws Exception {
+        JSONObject header = parseDexInfo(bytes);
+        if (!header.optBoolean("ok", false)) return header;
+        long total = u32le(bytes, 0x58);
+        long offBase = u32le(bytes, 0x5c);
+        JSONArray values = new JSONArray();
+        boolean truncated = false;
+        for (int i=0; i<total; i++) {
+            if (values.length() >= maxMethods) { truncated = true; break; }
+            long off = offBase + (long)i * 8;
+            if (off < 0 || off + 8 > bytes.length) { truncated = true; break; }
+            int classIdx = u16le(bytes, (int)off);
+            int protoIdx = u16le(bytes, (int)off + 2);
+            int nameIdx = (int)u32le(bytes, (int)off + 4);
+            JSONObject proto = dexProto(bytes, protoIdx);
+            String owner = dexTypeDescriptor(bytes, classIdx);
+            String name = dexStringByIndex(bytes, nameIdx);
+            String signature = owner + "->" + name + proto.optString("descriptor", "");
+            if (filter != null && !filter.isEmpty() && !signature.contains(filter)) continue;
+            values.put(new JSONObject().put("index", i).put("class_idx", classIdx).put("class", owner)
+                    .put("proto_idx", protoIdx).put("proto", proto)
+                    .put("name_idx", nameIdx).put("name", name)
+                    .put("descriptor", signature));
+        }
+        return ok().put("total", total).put("count", values.length()).put("methods", values)
                 .put("truncated", truncated).put("filter", filter == null || filter.isEmpty() ? JSONObject.NULL : filter);
     }
 

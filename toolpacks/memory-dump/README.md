@@ -92,3 +92,7 @@ Dump/pull commands that return inline base64 now accept `--output PATH`. Single-
 `memory-dump dex-strings --package PKG --entry classes.dex --filter luckylca --json` parses bounded DEX string table entries.
 
 `memory-dump dex-classes --package PKG --entry classes.dex --filter com/luckylca --json` parses bounded DEX class definitions and resolves class/superclass/source descriptors from the file-backed DEX.
+
+`memory-dump dex-fields --package PKG --entry classes.dex --filter someName --json` parses bounded DEX field_id records and resolves owner/type/name descriptors from file-backed DEX data.
+
+`memory-dump dex-methods --package PKG --entry classes.dex --filter onCreate --json` parses bounded DEX method_id records, resolves proto return/parameter descriptors, and renders Dalvik-style method signatures from file-backed DEX data.
