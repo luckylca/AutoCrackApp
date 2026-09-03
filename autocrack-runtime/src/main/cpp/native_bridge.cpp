@@ -59,6 +59,142 @@ static std::string hex_ptr(uintptr_t value) {
     return std::string(buf);
 }
 
+struct ModuleLoadSegment {
+    uintptr_t start;
+    uintptr_t end;
+    bool readable;
+    bool executable;
+};
+
+struct ModuleScanState {
+    std::string needle;
+    std::string name;
+    uintptr_t base = 0;
+    std::vector<ModuleLoadSegment> segments;
+};
+
+static int module_scan_callback(struct dl_phdr_info* info, size_t, void* data) {
+    auto* state = reinterpret_cast<ModuleScanState*>(data);
+    std::string name = info->dlpi_name ? info->dlpi_name : "";
+    if (name.find(state->needle) == std::string::npos) return 0;
+    state->name = name;
+    state->base = static_cast<uintptr_t>(info->dlpi_addr);
+    for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i) {
+        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+        if (ph.p_type != PT_LOAD || ph.p_memsz == 0) continue;
+        uintptr_t start = state->base + static_cast<uintptr_t>(ph.p_vaddr);
+        uintptr_t end = start + static_cast<uintptr_t>(ph.p_memsz);
+        if (end <= start) continue;
+        state->segments.push_back({start, end, (ph.p_flags & PF_R) != 0, (ph.p_flags & PF_X) != 0});
+    }
+    return 1;
+}
+
+static bool address_in_segments(uintptr_t address, size_t size,
+                                const std::vector<ModuleLoadSegment>& segments,
+                                bool require_exec = false) {
+    if (size == 0) return false;
+    uintptr_t end = address + size;
+    if (end < address) return false;
+    for (const auto& seg : segments) {
+        if (!seg.readable) continue;
+        if (require_exec && !seg.executable) continue;
+        if (address >= seg.start && end <= seg.end) return true;
+    }
+    return false;
+}
+
+static bool module_cstring_equals(uintptr_t address, const char* expected,
+                                  const std::vector<ModuleLoadSegment>& segments) {
+    if (!expected) return false;
+    size_t len = strlen(expected);
+    if (!address_in_segments(address, len + 1, segments, false)) return false;
+    const char* actual = reinterpret_cast<const char*>(address);
+    return memcmp(actual, expected, len) == 0 && actual[len] == '\0';
+}
+
+static std::string xmlblock_backend_probe_json() {
+    static const char* kNames[] = {
+        "nativeCreate", "nativeGetStringBlock", "nativeCreateParseState", "nativeDestroyParseState",
+        "nativeDestroy", "nativeNext", "nativeGetNamespace", "nativeGetName", "nativeGetText",
+        "nativeGetLineNumber", "nativeGetAttributeCount", "nativeGetAttributeNamespace",
+        "nativeGetAttributeName", "nativeGetAttributeResource", "nativeGetAttributeDataType",
+        "nativeGetAttributeData", "nativeGetAttributeStringValue", "nativeGetAttributeIndex",
+        "nativeGetIdAttribute", "nativeGetClassAttribute", "nativeGetStyleAttribute", "nativeGetSourceResId"
+    };
+    static const char* kSigs[] = {
+        "([BII)J", "(J)J", "(JI)J", "(J)V", "(J)V", "(J)I", "(J)I", "(J)I", "(J)I",
+        "(J)I", "(J)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I", "(JI)I",
+        "(JLjava/lang/String;Ljava/lang/String;)I", "(J)I", "(J)I", "(J)I", "(J)I"
+    };
+    constexpr size_t kCount = sizeof(kNames) / sizeof(kNames[0]);
+
+    ModuleScanState state{};
+    state.needle = "libandroid_runtime.so";
+    dl_iterate_phdr(module_scan_callback, &state);
+    if (state.segments.empty()) {
+        return "{\"ok\":false,\"supported\":false,\"reason\":\"libandroid_runtime.so is not visible in dl_iterate_phdr\"}";
+    }
+
+    const uintptr_t* table = nullptr;
+    bool all_exec = false;
+    for (const auto& seg : state.segments) {
+        if (!seg.readable || seg.executable) continue;
+        uintptr_t start = (seg.start + alignof(uintptr_t) - 1) & ~(static_cast<uintptr_t>(alignof(uintptr_t) - 1));
+        size_t table_bytes = kCount * 3 * sizeof(uintptr_t);
+        if (seg.end <= start || seg.end - start < table_bytes) continue;
+        for (uintptr_t cursor = start; cursor + table_bytes <= seg.end; cursor += sizeof(uintptr_t)) {
+            const auto* entries = reinterpret_cast<const uintptr_t*>(cursor);
+            if (!module_cstring_equals(entries[0], kNames[0], state.segments)
+                    || !module_cstring_equals(entries[1], kSigs[0], state.segments)) continue;
+            bool valid = true;
+            bool exec = true;
+            for (size_t i = 0; i < kCount; ++i) {
+                uintptr_t name = entries[i * 3];
+                uintptr_t sig = entries[i * 3 + 1];
+                uintptr_t fn = entries[i * 3 + 2];
+                if (!module_cstring_equals(name, kNames[i], state.segments)
+                        || !module_cstring_equals(sig, kSigs[i], state.segments)
+                        || fn == 0) {
+                    valid = false;
+                    break;
+                }
+                if (!address_in_segments(fn, 1, state.segments, true)) exec = false;
+            }
+            if (valid) {
+                table = entries;
+                all_exec = exec;
+                break;
+            }
+        }
+        if (table) break;
+    }
+
+    void* reg = dlsym(RTLD_DEFAULT, "_ZN7android33register_android_content_XmlBlockEP7_JNIEnv");
+    std::string json = "{\"ok\":true,\"supported\":true,\"module\":\"" + json_escape(state.name)
+            + "\",\"register_symbol_resolved\":" + (reg ? std::string("true") : std::string("false"))
+            + ",\"table_found\":" + (table ? std::string("true") : std::string("false"))
+            + ",\"expected_method_count\":" + std::to_string(kCount)
+            + ",\"method_count\":" + std::to_string(table ? kCount : 0)
+            + ",\"all_functions_in_executable_segment\":" + (table && all_exec ? std::string("true") : std::string("false"))
+            + ",\"methods\":[";
+    if (table) {
+        for (size_t i = 0; i < kCount; ++i) {
+            if (i) json += ",";
+            json += "{\"name\":\"" + std::string(kNames[i]) + "\",\"signature\":\"" + json_escape(kSigs[i]) + "\"}";
+        }
+    }
+    json += "]}";
+    return json;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockBackendProbe(
+        JNIEnv* env, jclass) {
+    std::string json = xmlblock_backend_probe_json();
+    return env->NewStringUTF(json.c_str());
+}
+
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeReadMemory(
         JNIEnv* env, jclass, jlong address, jint size) {
@@ -264,6 +400,39 @@ Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeModules(
             + ",\"filter\":" + (state.filter.empty() ? std::string("null") : (std::string("\"") + json_escape(state.filter) + "\""))
             + ",\"modules\":[" + state.json + "]}";
     return env->NewStringUTF(out.c_str());
+}
+
+static void clear_pending(JNIEnv* env) {
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+static bool get_long_field(JNIEnv* env, jobject object, const char* field_name, jlong* out) {
+    if (!object || !out) return false;
+    jclass cls = env->GetObjectClass(object);
+    if (!cls) { clear_pending(env); return false; }
+    jfieldID field = env->GetFieldID(cls, field_name, "J");
+    if (!field) { clear_pending(env); env->DeleteLocalRef(cls); return false; }
+    *out = env->GetLongField(object, field);
+    bool ok = !env->ExceptionCheck();
+    clear_pending(env);
+    env->DeleteLocalRef(cls);
+    return ok;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_luckylca_autocrack_runtime_shared_NativeBridge_nativeXmlBlockPeerProbe(
+        JNIEnv* env, jclass, jobject parser, jobject block) {
+    // Deliberately fixed whitelist: android.content.res.XmlBlock$Parser.mParseState and XmlBlock.mNative only.
+    jlong parse_state = 0;
+    jlong block_native = 0;
+    bool parse_field = get_long_field(env, parser, "mParseState", &parse_state);
+    bool native_field = get_long_field(env, block, "mNative", &block_native);
+    char buf[1024];
+    snprintf(buf, sizeof(buf),
+             "{\"ok\":true,\"whitelisted\":true,\"parser_mParseState_lookup_succeeded\":%s,\"parser_mParseState_nonzero\":%s,\"block_mNative_lookup_succeeded\":%s,\"block_mNative_nonzero\":%s,\"field_absence_proven\":false,\"lookup_warning\":\"JNI GetFieldID is subject to Android hidden-API filtering; a failed lookup does not prove the field is absent\"}",
+             parse_field ? "true" : "false", (parse_field && parse_state != 0) ? "true" : "false",
+             native_field ? "true" : "false", (native_field && block_native != 0) ? "true" : "false");
+    return env->NewStringUTF(buf);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

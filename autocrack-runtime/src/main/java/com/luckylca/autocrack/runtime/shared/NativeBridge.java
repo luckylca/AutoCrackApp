@@ -97,11 +97,25 @@ public final class NativeBridge {
         return new JSONObject(nativeModules(boundedMax, filter == null ? "" : filter));
     }
 
+    /** Whitelisted API-36 XmlBlock peer probe; does not accept arbitrary class/field names. */
+    public static JSONObject xmlBlockPeerProbe(Context context, Object parser, Object block) throws Exception {
+        if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("supported", false).put("reason", loadError);
+        return new JSONObject(nativeXmlBlockPeerProbe(parser, block));
+    }
+
+    /** Discovers the platform XmlBlock JNINativeMethod table without hard-coded function offsets. */
+    public static JSONObject xmlBlockBackendProbe(Context context) throws Exception {
+        if (!ensureLoaded(context)) return new JSONObject().put("ok", false).put("supported", false).put("reason", loadError);
+        return new JSONObject(nativeXmlBlockBackendProbe());
+    }
+
     private static native byte[] nativeReadMemory(long address, int size) throws Exception;
     private static native String nativeDlopen(String path, int flags);
     private static native String nativeAndroidDlopenExt(String path, int flags, int extFlags);
     private static native String nativeDladdr(long address);
     private static native String nativeDlsym(String handle, String symbol);
     private static native String nativeModules(int maxModules, String filter);
+    private static native String nativeXmlBlockBackendProbe();
+    private static native String nativeXmlBlockPeerProbe(Object parser, Object block);
     private static native String nativeProbe();
 }

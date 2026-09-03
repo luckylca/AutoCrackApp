@@ -60,7 +60,7 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 `memory-dump maps --package PKG --path-contains TEXT --permissions-contains x --json` can filter mappings before returning them through Binder. Use this for large processes to avoid Binder transaction limits.
 
 
-`memory-dump xml-block-probe --package PKG 0x7f... --json` opens a runtime `XmlResourceParser`, reflects the parser/`XmlBlock` field shape, records native-pointer-like fields, emits a bounded XML event/attribute preview, and correlates the parser resource with its APK-backed AXML entry metadata (`size`, `compressed_size`, `crc`, `sha256`) without including base64 data. This is an object-shape/source-correlation probe, not native `ResXMLTree` byte recovery.
+`memory-dump xml-block-probe --package PKG 0x7f... --json` opens a runtime `XmlResourceParser`, reflects parser/`XmlBlock` field and method shape, emits a bounded XML event/attribute preview, and correlates the parser resource with its APK-backed AXML metadata (`size`, `compressed_size`, `crc`, `sha256`) without base64 data. Hidden-API filtering can hide real framework fields, so failed field lookup is not reported as field absence. Add `--native-backend` only when you explicitly want the loaded `libandroid_runtime.so` XmlBlock `JNINativeMethod` table discovery; that scan is opt-in and does not recover an existing object's `mNative`/`mParseState` peer.
 
 `memory-dump xml-binary --package PKG --resource-id 0x7f... --json` resolves an XML resource to its APK entry and returns the raw file-backed binary AXML bytes. `--entry res/layout/foo.xml` can pull a known XML entry directly. This is explicitly not native XmlBlock memory reconstruction.
 

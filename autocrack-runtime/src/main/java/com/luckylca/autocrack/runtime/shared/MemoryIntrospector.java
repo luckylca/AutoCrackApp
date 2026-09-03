@@ -1468,6 +1468,7 @@ public final class MemoryIntrospector {
         int maxEvents = clamp(request.optInt("max_events", 64), 1, 2048);
         int maxAttributes = clamp(request.optInt("max_attributes", 64), 0, 512);
         int maxSourceBytes = clamp(request.optInt("max_source_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
+        boolean includeNativeBackendProbe = request.optBoolean("include_native_backend_probe", false);
         if (id == 0) return unsupported("memory.xml.block_probe", "resource_id is required", new JSONArray()
                 .put("Resources.getXml(resourceId) XmlResourceParser reflection")
                 .put("file-backed memory.xml.binary / memory.xml.axml_decode remain available for raw APK AXML"));
@@ -1479,7 +1480,7 @@ public final class MemoryIntrospector {
                 .put("memory_reconstruction", false)
                 .put("binary_axml", false)
                 .put("strategy", "Resources.getXml XmlResourceParser/XmlBlock reflection + bounded pull-parser event preview")
-                .put("warning", "This probes XmlBlock/Parser object shape and events. It does not export native ResXMLTree/XmlBlock bytes.");
+                .put("warning", "This probes XmlBlock/Parser object shape, method shape, native-backend registration, and parser events. Android hidden-API filtering can hide real framework fields from reflection/JNI lookup, so lookup failure is not treated as field absence. Existing native ResXMLTree/XmlBlock peer bytes are not exported.");
         TypedValue value = new TypedValue();
         try {
             apkCtx.getResources().getValue(id, value, true);
@@ -1502,14 +1503,37 @@ public final class MemoryIntrospector {
         }
         try (XmlResourceParser parser = apkCtx.getResources().getXml(id)) {
             out.put("parser_class", parser.getClass().getName())
-                    .put("parser_fields", reflectFieldShape(parser, 96));
+                    .put("parser_fields", reflectFieldShape(parser, 96))
+                    .put("parser_methods", reflectMethodShape(parser.getClass(), 128))
+                    .put("parser_hierarchy", classHierarchy(parser.getClass(), 16));
             Object block = firstFieldByNameOrClass(parser, "mBlock", "XmlBlock");
             if (block != null) {
                 out.put("xml_block_class", block.getClass().getName())
-                        .put("xml_block_fields", reflectFieldShape(block, 96));
+                        .put("xml_block_fields", reflectFieldShape(block, 96))
+                        .put("xml_block_methods", reflectMethodShape(block.getClass(), 128))
+                        .put("xml_block_hierarchy", classHierarchy(block.getClass(), 16));
             } else {
                 out.put("xml_block_class", JSONObject.NULL)
                         .put("xml_block_fields", new JSONArray());
+            }
+            try {
+                out.put("native_peer_probe", NativeBridge.xmlBlockPeerProbe(context, parser, block));
+            } catch (Throwable error) {
+                out.put("native_peer_probe", new JSONObject().put("ok", false)
+                        .put("supported", false).put("reason", error.toString()));
+            }
+            out.put("native_backend_probe_requested", includeNativeBackendProbe);
+            if (includeNativeBackendProbe) {
+                try {
+                    out.put("native_backend_probe", NativeBridge.xmlBlockBackendProbe(context));
+                } catch (Throwable error) {
+                    out.put("native_backend_probe", new JSONObject().put("ok", false)
+                            .put("supported", false).put("reason", error.toString()));
+                }
+            } else {
+                out.put("native_backend_probe", new JSONObject().put("ok", true)
+                        .put("requested", false).put("omitted", true)
+                        .put("reason", "set include_native_backend_probe=true to scan the loaded XmlBlock JNINativeMethod table"));
             }
             JSONArray events = new JSONArray();
             boolean truncated = false;
@@ -1543,6 +1567,40 @@ public final class MemoryIntrospector {
                 event = parser.next();
             }
             out.put("event_count", events.length()).put("events", events).put("events_truncated", truncated);
+        }
+        return out;
+    }
+
+    private static JSONArray reflectMethodShape(Class<?> type, int maxMethods) throws Exception {
+        JSONArray out = new JSONArray();
+        if (type == null) return out;
+        Class<?> c = type;
+        while (c != null && out.length() < maxMethods) {
+            for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                if (out.length() >= maxMethods) break;
+                JSONArray params = new JSONArray();
+                for (Class<?> p : m.getParameterTypes()) params.put(p.getName());
+                int modifiers = m.getModifiers();
+                out.put(new JSONObject()
+                        .put("declaring_class", c.getName())
+                        .put("name", m.getName())
+                        .put("return_type", m.getReturnType().getName())
+                        .put("parameter_types", params)
+                        .put("native", java.lang.reflect.Modifier.isNative(modifiers))
+                        .put("static", java.lang.reflect.Modifier.isStatic(modifiers))
+                        .put("private", java.lang.reflect.Modifier.isPrivate(modifiers)));
+            }
+            c = c.getSuperclass();
+        }
+        return out;
+    }
+
+    private static JSONArray classHierarchy(Class<?> type, int max) {
+        JSONArray out = new JSONArray();
+        Class<?> c = type;
+        while (c != null && out.length() < max) {
+            out.put(c.getName());
+            c = c.getSuperclass();
         }
         return out;
     }
