@@ -598,3 +598,46 @@ Device evidence on `a4976c80` / API 36:
 Boundary:
 
 - `memory.dex.info` is file-backed DEX metadata parsing. `memory.dex.art_probe` exposes reflected cookie shape. Neither reconstructs in-memory ART DexFile objects by native offsets.
+
+## Stage 21 - File-backed DEX strings/classes parsing
+
+Added bounded file/APK DEX table readers on top of `memory.dex.info`:
+
+- `memory.dex.strings` / `memory-dump dex-strings` parses string_ids + string_data items from a readable `.dex` file or APK entry.
+- `memory.dex.classes` / `memory-dump dex-classes` parses class_defs and resolves descriptor, superclass and source-file strings.
+- Device provider-self validation on API 36 parsed `classes.dex` from the installed runtime APK and returned filtered `luckylca` strings plus `com/luckylca` class_defs.
+
+## Stage 22 - File-backed DEX field/method signatures
+
+Added bounded DEX id table readers:
+
+- `memory.dex.fields` / `memory-dump dex-fields` parses `field_id_item` records and resolves owner/type/name descriptors.
+- `memory.dex.methods` / `memory-dump dex-methods` parses `method_id_item` records and resolves proto return/parameter descriptors into Dalvik-style signatures.
+- These remain file-backed metadata readers and do not reconstruct ART in-memory `DexFile` objects.
+
+Host build and toolpack validation passed. Direct device provider-self assertion for this new command family was blocked by the tool safety layer, so Stage 22 is recorded as host-validated pending device assertion.
+
+## Stage 23 - File-backed DEX class_data/code_item metadata
+
+Added `memory.dex.class_data` / `memory-dump dex-class-data`:
+
+- Parses DEX `class_data_item` with ULEB128 counts.
+- Resolves static/instance fields and direct/virtual methods through field_id/method_id/proto tables.
+- Exposes `code_off` and bounded `code_item` metadata: registers, ins, outs, tries, debug_info_off and insns_size.
+- Does not disassemble bytecode and does not reconstruct ART in-memory DexFile objects.
+
+Host build, toolpack manifest/help and APK install validation passed. Direct device provider-self invocation for this command family is blocked by the current tool safety layer, so no device pass is claimed here.
+
+## Stage 24 - APK-wide DEX index
+
+Added `memory.dex.apk_index` / `memory-dump dex-apk-index`:
+
+- Enumerates all `classes*.dex` entries from the selected APK source.
+- Parses bounded DEX header and map-list metadata for each entry.
+- Helps choose the correct `classesN.dex` before using `dex-strings`, `dex-classes`, `dex-fields`, `dex-methods` or `dex-class-data`.
+
+Device provider-self validation on API 36 passed against the runtime APK:
+
+- `source_count=1`
+- `dex_count=6`
+- `classes.dex` parsed as DEX version `038` with 455 strings, 85 types, 63 fields, 146 methods and 25 class_defs.
