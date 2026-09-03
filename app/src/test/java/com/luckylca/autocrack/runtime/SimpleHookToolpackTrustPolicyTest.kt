@@ -1,6 +1,7 @@
 package com.luckylca.autocrack.runtime
 
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SimpleHookToolpackTrustPolicyTest {
@@ -18,15 +19,39 @@ class SimpleHookToolpackTrustPolicyTest {
         }
     }
 
+    @Test
+    fun rejectsModifiedSimpleHookRequirements() {
+        assertThrows(IllegalArgumentException::class.java) {
+            BuiltInToolpackTrustPolicy.requireTrusted(
+                trustedManifest().copy(
+                    requires = trustedManifest().requires.copy(
+                        capabilities = listOf("hook.reload"),
+                    ),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun simpleHookManifestV2RequirementsRoundTrip() {
+        val manifest = trustedManifest()
+        val roundTrip = ToolpackPackageManifest.parse(manifest.toJson().toString())
+
+        assertTrue(roundTrip.schemaVersion == 2)
+        assertTrue(roundTrip.requires.capabilities.contains("hook.inspect"))
+        assertTrue(roundTrip.requires.commands.contains("android-shell"))
+        BuiltInToolpackTrustPolicy.requireTrusted(roundTrip)
+    }
+
     private fun trustedManifest() = ToolpackPackageManifest(
-        schemaVersion = 1,
+        schemaVersion = 2,
         id = "simplehook",
         title = "SimpleHook Android Java method debugger",
         version = "simplehook-0.1.1",
         architecture = "all",
         payloadEntry = "payload.zip",
-        payloadSha256 = "f4aaf2f32899e1ba2023dd21e7342cd0c3c5ac5550d80a63d64785f27a348d7d",
-        payloadSizeBytes = 42_763L,
+        payloadSha256 = "52de7ef3f08bc698300d7a4abd9163450d0b50356e01ab29210d5f8d6dffaa7b",
+        payloadSizeBytes = 43_215L,
         requiredPaths = listOf(
             "bin/simplehook",
             "libexec/simplehook_cli.py",
@@ -62,9 +87,19 @@ class SimpleHookToolpackTrustPolicyTest {
                 name = "simplehook-cli",
                 version = "0.1.1",
                 url = "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook",
-                sha256 = "1c7fcc4e36f4500af7a7d7c0ff4bb0add2481433847204b8c7ab47512e8285ae",
+                sha256 = "af22a087912fd465b10d5f5bdef651ce38ced92341f40d47b60d2771cb2ed88e",
             ),
         ),
         description = "Manage precise, persistent LSPosed/Xposed Java method debugging rules and structured logs for authorized Android test applications.",
+        requires = ToolpackRequirements(
+            runtime = ">=1.0.0",
+            capabilities = listOf("hook.reload", "hook.inspect"),
+            commands = listOf("android-shell"),
+            optionalCapabilities = listOf(
+                "runtime.process",
+                "runtime.class.search",
+                "runtime.class.describe",
+            ),
+        ),
     )
 }

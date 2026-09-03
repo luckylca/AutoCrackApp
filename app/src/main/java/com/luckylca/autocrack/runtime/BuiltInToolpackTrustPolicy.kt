@@ -11,6 +11,8 @@ internal object BuiltInToolpackTrustPolicy {
         val commands: Map<String, String>,
         val selfTests: Map<String, TrustedSelfTest>,
         val sources: Map<String, TrustedSource>,
+        val schemaVersion: Int = 1,
+        val requires: ToolpackRequirements = ToolpackRequirements(),
     )
 
     private data class TrustedSelfTest(
@@ -30,6 +32,9 @@ internal object BuiltInToolpackTrustPolicy {
         val trusted = TRUSTED_TOOLPACKS[manifest.id]
             ?: error("工具包不在 AutoCrackApp 内置信任目录中：${manifest.id}")
 
+        require(manifest.schemaVersion == trusted.schemaVersion) {
+            "工具包 manifest schema 与内置信任目录不一致"
+        }
         require(manifest.title == trusted.title) { "工具包标题与内置信任目录不一致" }
         require(manifest.version == trusted.version) { "工具包版本未被信任：${manifest.version}" }
         require(manifest.architecture == trusted.architecture) { "工具包架构与内置信任目录不一致" }
@@ -41,6 +46,9 @@ internal object BuiltInToolpackTrustPolicy {
         }
         require(manifest.requiredPaths.toSet() == trusted.requiredPaths) {
             "工具包必需路径与内置信任目录不一致"
+        }
+        require(manifest.requires == trusted.requires) {
+            "工具包运行时需求与内置信任目录不一致"
         }
         require(
             manifest.commands.associate { command -> command.name to command.relativePath } ==
@@ -497,8 +505,8 @@ internal object BuiltInToolpackTrustPolicy {
             title = "SimpleHook Android Java method debugger",
             version = "simplehook-0.1.1",
             architecture = "all",
-            payloadSha256 = "f4aaf2f32899e1ba2023dd21e7342cd0c3c5ac5550d80a63d64785f27a348d7d",
-            payloadSizeBytes = 42_763L,
+            payloadSha256 = "52de7ef3f08bc698300d7a4abd9163450d0b50356e01ab29210d5f8d6dffaa7b",
+            payloadSizeBytes = 43_215L,
             requiredPaths = setOf(
                 "bin/simplehook",
                 "libexec/simplehook_cli.py",
@@ -527,7 +535,18 @@ internal object BuiltInToolpackTrustPolicy {
                 "simplehook-cli" to TrustedSource(
                     version = "0.1.1",
                     url = "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/simplehook",
-                    sha256 = "1c7fcc4e36f4500af7a7d7c0ff4bb0add2481433847204b8c7ab47512e8285ae",
+                    sha256 = "af22a087912fd465b10d5f5bdef651ce38ced92341f40d47b60d2771cb2ed88e",
+                ),
+            ),
+            schemaVersion = 2,
+            requires = ToolpackRequirements(
+                runtime = ">=1.0.0",
+                capabilities = listOf("hook.reload", "hook.inspect"),
+                commands = listOf("android-shell"),
+                optionalCapabilities = listOf(
+                    "runtime.process",
+                    "runtime.class.search",
+                    "runtime.class.describe",
                 ),
             ),
         ),
