@@ -92,3 +92,5 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | ART Dex cookie pointer probe | PASS(device small) | `memory.dex.art_pointer_probe` resolved TBI-untagged cookie pointers into scudo heap and emitted libdexfile vtable/size layout hints without byte export. |
 | ART cookie APK DEX size correlation | PASS(device small) | `memory.dex.art_pointer_probe` matched ART object word 4 `0x6b08`/27400 to originating APK `classes.dex` entry_size=27400 while keeping byte export disabled. |
 | Compose Semantics tree probe | PASS(host + provider-self), TARGET-PENDING | `ui.compose.tree` compiles, is exposed by `ui-inspect`, and provider-self returns a valid zero-window response; live target request remained pending under existing LSPosed target-chain refresh limitation. |
+
+| Runtime XmlBlock object-shape probe | PASS(device provider-self) | `memory.xml.block_probe` opened `autocrack_runtime_probe.xml` via `Resources.getXml`, reflected parser/block field shape, and emitted a bounded 4-event preview without native byte export. |

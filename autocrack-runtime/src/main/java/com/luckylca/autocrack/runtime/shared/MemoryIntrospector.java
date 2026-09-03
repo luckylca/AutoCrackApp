@@ -42,7 +42,7 @@ public final class MemoryIntrospector {
         return Set.of(
                 "memory.maps", "memory.modules", "memory.native.modules", "memory.read", "memory.native.probe", "memory.dladdr", "memory.module.dump", "memory.module.file_dump", "memory.elf.info", "memory.elf.symbols", "memory.elf.relocations", "memory.elf.dynamic",
                 "memory.dex.list", "memory.dex.art_probe", "memory.dex.art_pointer_probe", "memory.dex.info", "memory.dex.apk_index", "memory.dex.strings", "memory.dex.classes", "memory.dex.fields", "memory.dex.methods", "memory.dex.class_data", "memory.dex.scan", "memory.dex.dump", "memory.assets.list", "memory.assets.pull",
-                "memory.xml.pull", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
+                "memory.xml.pull", "memory.xml.block_probe", "memory.xml.binary", "memory.xml.axml_decode", "memory.xml.axml_text", "memory.apk.entries", "memory.apk.pull", "memory.capabilities").contains(kind);
     }
 
     public static JSONObject execute(Context context, JSONObject request) throws Exception {
@@ -74,6 +74,7 @@ public final class MemoryIntrospector {
             case "memory.assets.list" -> assetsList(context, request);
             case "memory.assets.pull" -> assetsPull(context, request);
             case "memory.xml.pull" -> xmlPull(context, request);
+            case "memory.xml.block_probe" -> xmlBlockProbe(context, request);
             case "memory.xml.binary" -> xmlBinary(context, request);
             case "memory.xml.axml_decode" -> xmlAxmlDecode(context, request);
             case "memory.xml.axml_text" -> xmlAxmlText(context, request);
@@ -1012,6 +1013,170 @@ public final class MemoryIntrospector {
                 .put("binary_axml",false).put("warning","Native XmlBlock/ResXMLTree byte recovery remains capability-gated.");
     }
 
+    private static JSONObject xmlBlockProbe(Context context, JSONObject request) throws Exception {
+        int id = request.optInt("resource_id", 0);
+        int maxEvents = clamp(request.optInt("max_events", 64), 1, 2048);
+        int maxAttributes = clamp(request.optInt("max_attributes", 64), 0, 512);
+        if (id == 0) return unsupported("memory.xml.block_probe", "resource_id is required", new JSONArray()
+                .put("Resources.getXml(resourceId) XmlResourceParser reflection")
+                .put("file-backed memory.xml.binary / memory.xml.axml_decode remain available for raw APK AXML"));
+        Context apkCtx = apkContext(context, request);
+        JSONObject out = ok()
+                .put("resource_id", id)
+                .put("resource_name", safeResourceName(apkCtx, id))
+                .put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("memory_reconstruction", false)
+                .put("binary_axml", false)
+                .put("strategy", "Resources.getXml XmlResourceParser/XmlBlock reflection + bounded pull-parser event preview")
+                .put("warning", "This probes XmlBlock/Parser object shape and events. It does not export native ResXMLTree/XmlBlock bytes.");
+        TypedValue value = new TypedValue();
+        try {
+            apkCtx.getResources().getValue(id, value, true);
+            out.put("typed_value", new JSONObject()
+                    .put("asset_cookie", value.assetCookie)
+                    .put("type", value.type)
+                    .put("data", value.data)
+                    .put("string", value.string == null ? JSONObject.NULL : value.string.toString()));
+        } catch (Throwable error) {
+            out.put("typed_value_error", error.getClass().getName() + ": " + String.valueOf(error.getMessage()));
+        }
+        try (XmlResourceParser parser = apkCtx.getResources().getXml(id)) {
+            out.put("parser_class", parser.getClass().getName())
+                    .put("parser_fields", reflectFieldShape(parser, 96));
+            Object block = firstFieldByNameOrClass(parser, "mBlock", "XmlBlock");
+            if (block != null) {
+                out.put("xml_block_class", block.getClass().getName())
+                        .put("xml_block_fields", reflectFieldShape(block, 96));
+            } else {
+                out.put("xml_block_class", JSONObject.NULL)
+                        .put("xml_block_fields", new JSONArray());
+            }
+            JSONArray events = new JSONArray();
+            boolean truncated = false;
+            int event = parser.getEventType();
+            while (event != XmlPullParser.END_DOCUMENT) {
+                if (events.length() >= maxEvents) { truncated = true; break; }
+                JSONObject item = new JSONObject()
+                        .put("event", event)
+                        .put("event_name", xmlEventName(event))
+                        .put("depth", parser.getDepth())
+                        .put("name", parser.getName() == null ? JSONObject.NULL : parser.getName());
+                if (event == XmlPullParser.TEXT) item.put("text", preview(parser.getText(), 256));
+                if (event == XmlPullParser.START_TAG) {
+                    JSONArray attrs = new JSONArray();
+                    int attrCount = parser.getAttributeCount();
+                    for (int i = 0; i < attrCount && i < maxAttributes; i++) {
+                        attrs.put(new JSONObject()
+                                .put("index", i)
+                                .put("namespace", parser.getAttributeNamespace(i) == null ? JSONObject.NULL : parser.getAttributeNamespace(i))
+                                .put("name", parser.getAttributeName(i))
+                                .put("value", preview(parser.getAttributeValue(i), 256))
+                                .put("resource_value", parser.getAttributeResourceValue(i, 0))
+                                .put("type", reflectIntMethod(parser, "getAttributeValueType", i))
+                                .put("data", reflectIntMethod(parser, "getAttributeValueData", i)));
+                    }
+                    item.put("attribute_count", attrCount)
+                            .put("attributes_truncated", attrCount > maxAttributes)
+                            .put("attributes", attrs);
+                }
+                events.put(item);
+                event = parser.next();
+            }
+            out.put("event_count", events.length()).put("events", events).put("events_truncated", truncated);
+        }
+        return out;
+    }
+
+    private static JSONArray reflectFieldShape(Object object, int maxFields) throws Exception {
+        JSONArray out = new JSONArray();
+        if (object == null) return out;
+        Class<?> c = object.getClass();
+        while (c != null && out.length() < maxFields) {
+            for (Field f : c.getDeclaredFields()) {
+                if (out.length() >= maxFields) break;
+                try {
+                    f.setAccessible(true);
+                    Object value = f.get(object);
+                    JSONObject item = new JSONObject()
+                            .put("declaring_class", c.getName())
+                            .put("name", f.getName())
+                            .put("type", f.getType().getName())
+                            .put("value_kind", value == null ? "null" : value.getClass().getName())
+                            .put("value", summarizeReflectValue(value));
+                    if (value instanceof Number && (f.getName().toLowerCase().contains("native") || f.getName().toLowerCase().contains("state") || f.getName().toLowerCase().contains("ptr"))) {
+                        long n = ((Number)value).longValue();
+                        item.put("hex", hex(n)).put("native_pointer_like", n != 0L);
+                    }
+                    out.put(item);
+                } catch (Throwable error) {
+                    out.put(new JSONObject().put("declaring_class", c.getName()).put("name", f.getName())
+                            .put("type", f.getType().getName()).put("error", error.getClass().getSimpleName()));
+                }
+            }
+            c = c.getSuperclass();
+        }
+        return out;
+    }
+
+    private static Object firstFieldByNameOrClass(Object object, String name, String classNamePart) {
+        if (object == null) return null;
+        Class<?> c = object.getClass();
+        while (c != null) {
+            for (Field f : c.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object value = f.get(object);
+                    if (value == null) continue;
+                    if (f.getName().equals(name) || value.getClass().getName().contains(classNamePart)) return value;
+                } catch (Throwable ignored) {}
+            }
+            c = c.getSuperclass();
+        }
+        return null;
+    }
+
+    private static Object reflectIntMethod(Object object, String method, int arg) {
+        if (object == null) return JSONObject.NULL;
+        Class<?> c = object.getClass();
+        while (c != null) {
+            try {
+                java.lang.reflect.Method m = c.getDeclaredMethod(method, int.class);
+                m.setAccessible(true);
+                Object value = m.invoke(object, arg);
+                return value == null ? JSONObject.NULL : value;
+            } catch (NoSuchMethodException error) {
+                c = c.getSuperclass();
+            } catch (Throwable error) {
+                return JSONObject.NULL;
+            }
+        }
+        return JSONObject.NULL;
+    }
+
+    private static Object summarizeReflectValue(Object value) {
+        if (value == null) return JSONObject.NULL;
+        Class<?> c = value.getClass();
+        if (value instanceof Number || value instanceof Boolean || value instanceof String) return String.valueOf(value);
+        if (c.isArray()) return "array(len=" + java.lang.reflect.Array.getLength(value) + ", type=" + c.getComponentType().getName() + ")";
+        return value.getClass().getName() + "@" + Integer.toHexString(System.identityHashCode(value));
+    }
+
+    private static String preview(String value, int max) {
+        if (value == null) return null;
+        return value.length() <= max ? value : value.substring(0, max) + "…";
+    }
+
+    private static String xmlEventName(int event) {
+        return switch (event) {
+            case XmlPullParser.START_DOCUMENT -> "START_DOCUMENT";
+            case XmlPullParser.END_DOCUMENT -> "END_DOCUMENT";
+            case XmlPullParser.START_TAG -> "START_TAG";
+            case XmlPullParser.END_TAG -> "END_TAG";
+            case XmlPullParser.TEXT -> "TEXT";
+            default -> "XML_EVENT_" + event;
+        };
+    }
+
     private static JSONObject xmlBinary(Context context, JSONObject request) throws Exception {
         int max = clamp(request.optInt("max_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
         Context apkContext = apkContext(context, request);
@@ -1065,6 +1230,7 @@ public final class MemoryIntrospector {
                 .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
+                .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field and event probe; no native byte export"))
                 .put("xml_binary_apk",status(true,"file-backed APK binary XML via Resources.getValue or entry path"))
                 .put("xml_binary_memory",status(false,"native XmlBlock/ResXMLTree recovery not implemented for this API"))
                 .put("xml_axml_decode",status(true,"file-backed Android binary XML chunk/string-pool decode"))

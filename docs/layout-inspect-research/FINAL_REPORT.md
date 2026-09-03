@@ -707,3 +707,16 @@ Validation:
 - Manifest contains `ui.compose.tree`.
 - Device provider-self validation passed for `ui.compose.status` and `ui.compose.tree` with zero windows.
 - Target app runtime request remained pending because the existing LSPosed target-process request path did not consume the request after APK reinstall; this is the same target-chain refresh limitation recorded earlier, not a compile failure.
+
+## Stage 28 - Runtime XmlBlock object-shape probe
+
+Implemented `memory.xml.block_probe` and `memory-dump xml-block-probe` as the next safe step toward Layout Inspect-style runtime XML inspection. The endpoint opens `Resources.getXml(resourceId)`, reflects the visible `XmlResourceParser` / `XmlBlock$Parser` / `XmlBlock` object field shape, records long/int fields that look like native state handles when accessible, and emits a bounded pull-parser event/attribute preview.
+
+Validation performed on device provider-self against `com.luckylca.autocrack.runtime:xml/autocrack_runtime_probe` (`0x7f010000`):
+
+- `ok=true`
+- `resource_name=com.luckylca.autocrack.runtime:xml/autocrack_runtime_probe`
+- `event_count=4`
+- strategy: `Resources.getXml XmlResourceParser/XmlBlock reflection + bounded pull-parser event preview`
+
+This deliberately remains an object-shape/runtime parser probe, not full native `ResXMLTree` byte recovery. The existing file-backed `memory.xml.binary`, `memory.xml.axml_decode`, and `memory.xml.axml_text` paths remain the stable raw/readable AXML path.
