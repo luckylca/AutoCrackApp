@@ -585,11 +585,16 @@ public final class MemoryIntrospector {
         JSONArray pointerRecords = new JSONArray();
         int readablePointers = 0;
         int dexCandidateCount = 0;
+        int layoutDexCandidateCount = 0;
+        int headerReconstructionPointers = 0;
         for (Map.Entry<Long, JSONArray> e : pointers.entrySet()) {
             if (pointerRecords.length() >= maxPointers) { pointerTruncated = true; break; }
             JSONObject record = probeArtCookiePointer(context, e.getKey(), e.getValue(), windowBytes, scanBackBytes, includeWords, wordCount, tryLayoutDexHeader);
             if (record.optBoolean("readable", false)) readablePointers++;
             dexCandidateCount += record.optJSONArray("dex_candidates") == null ? 0 : record.optJSONArray("dex_candidates").length();
+            JSONArray layoutCandidates = record.optJSONArray("layout_dex_candidates");
+            layoutDexCandidateCount += layoutCandidates == null ? 0 : layoutCandidates.length();
+            if (record.optBoolean("art_memory_header_reconstruction", false)) headerReconstructionPointers++;
             pointerRecords.put(record);
         }
         return ok().put("api_level", android.os.Build.VERSION.SDK_INT)
@@ -600,6 +605,9 @@ public final class MemoryIntrospector {
                 .put("pointer_count", pointerRecords.length())
                 .put("readable_pointer_count", readablePointers)
                 .put("dex_candidate_count", dexCandidateCount)
+                .put("layout_dex_candidate_count", layoutDexCandidateCount)
+                .put("header_reconstruction_pointer_count", headerReconstructionPointers)
+                .put("art_memory_header_reconstruction", headerReconstructionPointers > 0)
                 .put("pointers", pointerRecords)
                 .put("window_bytes", windowBytes)
                 .put("scan_back_bytes", scanBackBytes)
@@ -610,7 +618,7 @@ public final class MemoryIntrospector {
                 .put("include_context_loader", includeContextLoader)
                 .put("strategy", "ART DexFile cookie pointer collection + /proc/self/maps resolution + bounded DEX magic/header neighborhood scan")
                 .put("art_memory_reconstruction", false)
-                .put("warning", "This is a pointer-shape and neighborhood probe. It deliberately avoids Android-version-specific ART DexFile offset assumptions and does not claim full in-memory DEX reconstruction.");
+                .put("warning", "Default mode is a pointer-shape/neighborhood probe. try_layout_dex_header is an explicit version-gated heuristic that may reconstruct validated DEX header/map metadata from ART data_begin/file_size words, but full in-memory DEX byte reconstruction remains unsupported.");
     }
 
 
@@ -644,7 +652,7 @@ public final class MemoryIntrospector {
 
 
     private static JSONArray artPointerLayoutDexCandidates(Context context, JSONArray words) throws Exception {
-        JSONArray out = new JSONArray();
+        LinkedHashMap<String, JSONObject> unique = new LinkedHashMap<>();
         ArrayList<JSONObject> pointerWords = new ArrayList<>();
         ArrayList<JSONObject> sizeWords = new ArrayList<>();
         for (int i = 0; i < words.length(); i++) {
@@ -655,7 +663,7 @@ public final class MemoryIntrospector {
             if (numeric != null && numeric >= 0x70L && numeric <= MAX_INLINE_BYTES) sizeWords.add(word);
         }
         for (JSONObject ptrWord : pointerWords) {
-            if (out.length() >= 8) break;
+            if (unique.size() >= 8) break;
             Long rawAddress = cookiePointerValue(ptrWord.optString("value", ""));
             if (rawAddress == null || rawAddress == 0L) continue;
             long address = rawAddress;
@@ -675,17 +683,32 @@ public final class MemoryIntrospector {
                 catch (Throwable ignored) { continue; }
                 if (candidate.length < 0x70 || !looksLikeDexHeader(candidate, 0)) continue;
                 JSONObject dex = parseDexInfo(candidate);
-                out.put(new JSONObject()
-                        .put("data_word_index", ptrWord.optInt("index"))
+                boolean sizeConsistent = dex.optLong("file_size", -1L) == sizeValue;
+                boolean headerConsistent = dex.optLong("header_size", -1L) == 0x70L
+                        && "0x12345678".equals(dex.optString("endian_tag", ""));
+                if (!sizeConsistent || !headerConsistent) continue;
+                String key = hex(address) + ":" + sizeValue;
+                JSONObject existing = unique.get(key);
+                if (existing != null) {
+                    existing.getJSONArray("data_word_indices").put(ptrWord.optInt("index"));
+                    continue;
+                }
+                unique.put(key, new JSONObject()
+                        .put("data_word_indices", new JSONArray().put(ptrWord.optInt("index")))
                         .put("size_word_index", sizeWord.optInt("index"))
                         .put("data_address", hex(address))
                         .put("size", sizeValue)
+                        .put("size_consistent", true)
+                        .put("header_consistent", true)
+                        .put("confidence", "high")
                         .put("map", map.json())
                         .put("dex", dex)
-                        .put("strategy", "heuristic ART DexFile data_begin pointer + file_size word; header parsed from memory without exporting bytes"));
+                        .put("strategy", "heuristic ART DexFile data_begin pointer + file_size word; validated DEX header/map metadata parsed from memory without exporting bytes"));
                 break;
             }
         }
+        JSONArray out = new JSONArray();
+        for (JSONObject value : unique.values()) out.put(value);
         return out;
     }
 
@@ -825,6 +848,7 @@ public final class MemoryIntrospector {
                 .put("pointer_signed", Long.toString(pointer))
                 .put("origins", origins)
                 .put("readable", false)
+                .put("art_memory_header_reconstruction", false)
                 .put("dex_candidates", new JSONArray());
         long resolvedPointer = pointer;
         String pointer_transform = "raw";
@@ -861,7 +885,12 @@ public final class MemoryIntrospector {
             JSONObject hints = artPointerLayoutHints(words);
             out.put("words", words).put("layout_hints", hints)
                     .put("apk_dex_size_matches", artPointerApkDexSizeMatches(origins, hints));
-            if (tryLayoutDexHeader) out.put("layout_dex_candidates", artPointerLayoutDexCandidates(context, words));
+            if (tryLayoutDexHeader) {
+                JSONArray layoutCandidates = artPointerLayoutDexCandidates(context, words);
+                out.put("layout_dex_candidates", layoutCandidates)
+                        .put("art_memory_header_reconstruction", layoutCandidates.length() > 0)
+                        .put("layout_dex_candidate_count", layoutCandidates.length());
+            }
         } else if (tryLayoutDexHeader) {
             out.put("layout_dex_candidates", new JSONArray()).put("layout_dex_note", "try_layout_dex_header requires include_words=true");
         }
@@ -1232,12 +1261,13 @@ public final class MemoryIntrospector {
                 .put("memory_read",status(bridgeLoaded || canReadSelfMem(),"native process_vm_readv/pread with java /proc/self/mem fallback"))
                 .put("elf_info",status(true,"bounded ELF header/program header/GNU build-id parsing from file or APK entry"))
                 .put("dex_file_backed",status(true,"runtime DexFile enumeration + readable backing file copy"))
-                .put("dex_art_probe",status(true,"DexPathList/DexFile reflected ART cookie shape probe; no memory reconstruction"))
+                .put("dex_art_probe",status(true,"DexPathList/DexFile reflected ART cookie shape probe with optional validated header reconstruction"))
                 .put("dex_file_info",status(true,"bounded file/APK DEX header and map-list parsing"))
                 .put("dex_strings",status(true,"bounded file/APK DEX string table parsing"))
                 .put("dex_classes",status(true,"bounded file/APK DEX class_def descriptor parsing"))
                 .put("dex_memory_scan",status(bridgeLoaded,"bounded readable-map DEX magic/header candidate scan; not mCookie reconstruction"))
-                .put("dex_art_memory",status(false,"ART DexFile native pointer/cookie reconstruction is version-specific and not implemented for API "+android.os.Build.VERSION.SDK_INT))
+                .put("dex_art_memory_header",status(bridgeLoaded || canReadSelfMem(),"opt-in version-gated ART data_begin/file_size heuristic with DEX file_size/header/endian/map validation; metadata only, no byte export"))
+                .put("dex_art_memory",status(false,"full ART DexFile byte reconstruction/dump remains version-specific and unsupported; validated header/map metadata reconstruction is exposed separately"))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
                 .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field and event probe; no native byte export"))
