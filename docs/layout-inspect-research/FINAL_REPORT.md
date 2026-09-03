@@ -720,3 +720,18 @@ Validation performed on device provider-self against `com.luckylca.autocrack.run
 - strategy: `Resources.getXml XmlResourceParser/XmlBlock reflection + bounded pull-parser event preview`
 
 This deliberately remains an object-shape/runtime parser probe, not full native `ResXMLTree` byte recovery. The existing file-backed `memory.xml.binary`, `memory.xml.axml_decode`, and `memory.xml.axml_text` paths remain the stable raw/readable AXML path.
+
+## Stage 29 - XmlBlock source AXML metadata correlation
+
+Extended `memory.xml.block_probe` so the runtime parser probe now correlates a `Resources.getXml(resourceId)` parser back to the APK-backed XML entry exposed by `TypedValue.string`. The endpoint reports source metadata only: APK source label/path, entry name, uncompressed size, compressed size, CRC, SHA-256, and `data_included=false`. It intentionally does not duplicate `memory.xml.binary` by returning base64 XML bytes.
+
+Device provider-self validation against `0x7f010000` confirmed:
+
+- `source_entry=res/xml/autocrack_runtime_probe.xml`
+- `file_backed_axml.ok=true`
+- `size=340`
+- `compressed_size=198`
+- `sha256=62c63b30f0e773b1511f223cbe6ff5c7e11e7fc983afa33839147530059c1400`
+- `data_included=false`
+
+This further links runtime XmlBlock/parser state to file-backed AXML evidence, while native in-memory `ResXMLTree` byte reconstruction remains explicitly unclaimed.

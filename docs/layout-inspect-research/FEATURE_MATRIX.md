@@ -76,4 +76,4 @@ in-memory Dex/XML/assets dump. Unsupported ART/linker/resource strategies return
 - `ui.compose.tree`: reflective `SemanticsOwner` tree probing from `AndroidComposeView`, bounded SemanticsNode/config traversal, and merged/unmerged selection. Version-dependent; target-process availability still depends on LSPosed refresh.
 - `memory.dex.art_pointer_probe`: ART `mCookie`/`mInternalCookie` pointer collection, AArch64 TBI untagging, maps resolution, bounded word-level layout hints, APK `classes*.dex` entry-size correlation, and explicit opt-in header-only heuristic probing. Not full ART memory DEX reconstruction.
 
-- `memory.xml.block_probe`: runtime `Resources.getXml(resourceId)` object-shape probe with bounded event/attribute preview; not native `ResXMLTree` byte recovery.
+- `memory.xml.block_probe`: runtime `Resources.getXml(resourceId)` object-shape probe with bounded event/attribute preview and APK-backed AXML entry metadata correlation (`size`, `compressed_size`, `crc`, `sha256`) without byte export; not native `ResXMLTree` byte recovery.

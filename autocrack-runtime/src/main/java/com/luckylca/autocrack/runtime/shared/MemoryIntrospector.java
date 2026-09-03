@@ -1017,6 +1017,7 @@ public final class MemoryIntrospector {
         int id = request.optInt("resource_id", 0);
         int maxEvents = clamp(request.optInt("max_events", 64), 1, 2048);
         int maxAttributes = clamp(request.optInt("max_attributes", 64), 0, 512);
+        int maxSourceBytes = clamp(request.optInt("max_source_bytes", MAX_INLINE_BYTES), 1, MAX_INLINE_BYTES);
         if (id == 0) return unsupported("memory.xml.block_probe", "resource_id is required", new JSONArray()
                 .put("Resources.getXml(resourceId) XmlResourceParser reflection")
                 .put("file-backed memory.xml.binary / memory.xml.axml_decode remain available for raw APK AXML"));
@@ -1037,6 +1038,15 @@ public final class MemoryIntrospector {
                     .put("type", value.type)
                     .put("data", value.data)
                     .put("string", value.string == null ? JSONObject.NULL : value.string.toString()));
+            if (value.string != null) {
+                String entry = normalizeZipEntry(value.string.toString());
+                out.put("source_entry", entry);
+                if (entry.endsWith(".xml")) {
+                    JSONObject sourceMeta = apkEntryMetadataAnySource(apkCtx, entry, maxSourceBytes);
+                    if (sourceMeta.optBoolean("ok", false)) out.put("file_backed_axml", sourceMeta);
+                    else out.put("file_backed_axml_error", sourceMeta);
+                }
+            }
         } catch (Throwable error) {
             out.put("typed_value_error", error.getClass().getName() + ": " + String.valueOf(error.getMessage()));
         }
@@ -1349,6 +1359,26 @@ public final class MemoryIntrospector {
                     return ok().put("source", source.label).put("apk_path", source.path).put("entry", name)
                             .put("size", bytes.length).put("sha256", sha256(bytes))
                             .put("encoding", "base64").put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                }
+            }
+        }
+        return error("ENTRY_NOT_FOUND", name);
+    }
+
+    private static JSONObject apkEntryMetadataAnySource(Context context, String name, int max) throws Exception {
+        for (ApkSource source : apkSources(context, null)) {
+            try (ZipFile zip = new ZipFile(source.path)) {
+                ZipEntry entry = zip.getEntry(name);
+                if (entry == null || entry.isDirectory()) continue;
+                if (entry.getSize() > max) return error("ENTRY_TOO_LARGE", "entry exceeds metadata max_source_bytes: " + entry.getSize());
+                try (InputStream in = zip.getInputStream(entry)) {
+                    byte[] bytes = readLimited(in, max + 1);
+                    if (bytes.length > max) return error("ENTRY_TOO_LARGE", "entry exceeds metadata max_source_bytes");
+                    return ok().put("source", source.label).put("apk_path", source.path).put("entry", name)
+                            .put("size", bytes.length).put("compressed_size", entry.getCompressedSize())
+                            .put("crc", entry.getCrc()).put("sha256", sha256(bytes))
+                            .put("encoding", "none").put("data_included", false)
+                            .put("binary_axml_header", bytes.length >= 4 && (bytes[0] & 0xff) == 0x03 && (bytes[1] & 0xff) == 0x00 && (bytes[2] & 0xff) == 0x08 && (bytes[3] & 0xff) == 0x00);
                 }
             }
         }

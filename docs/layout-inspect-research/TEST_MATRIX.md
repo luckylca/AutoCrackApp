@@ -94,3 +94,4 @@ Failures caused by an unsupported API-specific strategy are recorded as
 | Compose Semantics tree probe | PASS(host + provider-self), TARGET-PENDING | `ui.compose.tree` compiles, is exposed by `ui-inspect`, and provider-self returns a valid zero-window response; live target request remained pending under existing LSPosed target-chain refresh limitation. |
 
 | Runtime XmlBlock object-shape probe | PASS(device provider-self) | `memory.xml.block_probe` opened `autocrack_runtime_probe.xml` via `Resources.getXml`, reflected parser/block field shape, and emitted a bounded 4-event preview without native byte export. |
+| XmlBlock source AXML metadata correlation | PASS(device provider-self) | `memory.xml.block_probe` correlated runtime parser resource `0x7f010000` to `res/xml/autocrack_runtime_probe.xml`, reporting base APK source, size=340, compressed_size=198, crc, sha256, and `data_included=false`. |
