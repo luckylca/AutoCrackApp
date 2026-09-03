@@ -920,3 +920,9 @@ Extended the main AutoCrackApp built-in Toolpack trust catalog beyond `simplehoo
 Added `SharedRuntimeToolpackTrustPolicyTest` to parse the exact generated v2 manifests for the four Toolpacks and run them through `BuiltInToolpackTrustPolicy.requireTrusted`. The test also mutates a pinned `requires.capabilities` list to ensure the trust policy rejects capability drift instead of only checking payload hashes.
 
 Host validation passed with isolated Gradle state: `:app:testDebugUnitTest --tests com.luckylca.autocrack.runtime.SharedRuntimeToolpackTrustPolicyTest`. This closes the gap where Stage 50/51 generated schema-v2 manifests, but the main App installer trust policy did not yet recognize the four shared-runtime Toolpacks as pinned built-ins.
+
+## Stage 57 - Rebuilt APKs and refreshed verification bundle after Toolpack trust closure
+
+After the Stage 54 SimpleHook broadcast fix and Stage 55-56 Toolpack v2 trust-policy closure, rebuilt the two primary debug APKs with isolated Gradle state. `:app:assembleDebug` and `:autocrack-runtime:assembleDebug` passed. The resulting `AutoCrackApp-debug.apk` SHA-256 was `c396083424b30e3d4f4081e0ee93fcf8176fa367b0d0e23ce20dd0beb6865abf`; the resulting `AutoCrackRuntime-debug.apk` SHA-256 was `a2fc3ba7bea40b84208f8145a1134debe604725f64582ab295aa5bc86767cda9`.
+
+Regenerated a temporary device verification bundle at `/tmp/autocrack-stage57-bundle.RWw2fw/device-verification-20260903-215457` and asserted the presence of all expected APKs, scripts, docs, `logs/cross-tool-contract.json`, and the five maintained runtime Toolpack manifests. The bundle manifests for `ui-inspect`, `runtime-inspect`, `memory-dump`, `runtime-control`, and `simplehook` were all schema v2, required `runtime >=1.0.0`, and declared the `android-shell` command dependency. The embedded cross-tool host contract JSON still reported `ok=true`.
