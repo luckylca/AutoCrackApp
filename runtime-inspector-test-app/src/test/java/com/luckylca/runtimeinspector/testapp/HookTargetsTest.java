@@ -1,4 +1,4 @@
-package com.luckylca.simplehook.testapp;
+package com.luckylca.runtimeinspector.testapp;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
@@ -13,7 +13,7 @@ public final class HookTargetsTest {
         HookTargets target = new HookTargets("test");
         assertEquals(42, target.getInt());
         assertTrue(target.getBoolean());
-        assertEquals("simplehook", target.getString());
+        assertEquals("runtime-test", target.getString());
         assertEquals(5, target.add(2, 3));
         assertEquals("int:3", target.overload(3));
         assertEquals("string:x", target.overload("x"));

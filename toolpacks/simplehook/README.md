@@ -9,9 +9,9 @@ SimpleHook is an Android Java/Kotlin runtime debugging tool for applications and
 - `simplehook` is the CLI installed through AutoCrackApp's existing verified toolpack mechanism.
 - `autocrack-runtime` is the shared companion and Xposed-compatible module. Its provider owns persistent SimpleHook rules, runtime state, inspection requests, and rotated JSONL logs.
 - Injected runtime code performs exact reflection matching and installs hooks through `XposedBridge.hookMethod`.
-- Target processes read rules through LSPosed/Xposed `XSharedPreferences`. Heartbeats, states, logs, and inspect results return through an explicit, token-authenticated ordered broadcast channel. Delivery uses a bounded retry queue with event IDs; Android 14 and newer also verify the shared sender identity.
+- The shared runtime pushes scoped rule snapshots to target processes through an explicit verified broadcast channel, with `XSharedPreferences` retained only as a compatibility fallback. Heartbeats, states, logs, and inspect results return through the token-authenticated runtime event channel. Android 14 and newer also verify shared sender identity.
 - `simplehook-core` contains schema, type coercion, condition, state, and safety-limit logic shared by the runtime tests.
-- `SimpleHookTestApp.apk` provides stable, owned targets for device validation.
+- `RuntimeInspectorTestApp.apk` is the single owned runtime fixture app used by Runtime/UI/Memory/SimpleHook device validation.
 
 The CLI talks to the Android provider through the existing `android-shell` bridge. No new toolpack manager or Agent prompt is introduced.
 
@@ -67,10 +67,10 @@ Rules conform to `schema/simplehook-rule-v1.schema.json`. Overloads are always s
   "schema_version": 1,
   "id": "test_get_int",
   "enabled": true,
-  "package": "com.luckylca.simplehook.testapp",
+  "package": "com.luckylca.runtimeinspector.testapp",
   "process": null,
   "target": {
-    "class": "com.luckylca.simplehook.testapp.HookTargets",
+    "class": "com.luckylca.runtimeinspector.testapp.HookTargets",
     "method": "getInt",
     "constructor": false,
     "parameters": [],
@@ -113,11 +113,11 @@ The runtime starts with the package `PathClassLoader`, observes both `ClassLoade
 - `WAITING_FOR_CLASS`: trigger the feature that loads the class, then query status again.
 - `CLASS_NOT_FOUND`: the class did not load before the inspect timeout; verify package and class spelling.
 - `FAILED`: inspect the rule's `runtime.detail` and JSONL logs.
-- Missing heartbeats or logs on a restricted ROM: query `simplehook status --json`, then check whether the ROM blocks explicit foreground broadcasts. SimpleHook retries unacknowledged events with a bounded queue; it never changes AutoStart or other system settings automatically. Rule loading and hook execution use XSharedPreferences and do not depend on the companion process being awake.
+- Missing heartbeats or logs on a restricted ROM: query `simplehook status --json`, then check whether the ROM blocks explicit broadcasts. The unified runtime uses verified provider-to-target rule broadcasts plus token-authenticated result events; it never changes AutoStart or other system settings automatically.
 
 ## Test App
 
-`SimpleHookTestApp.apk` exposes integer, boolean, String, argument, overload, constructor, static field, instance field, exception, and delayed-class fixtures. The delayed fixture is built into a separate dex asset and loaded with `DexClassLoader` so `WAITING_FOR_CLASS` behavior is tested deterministically.
+`RuntimeInspectorTestApp.apk` is the single device fixture APK. In addition to its UI/WebView/runtime-inspection fixtures, it exposes integer, boolean, String, argument, overload, constructor, static field, instance field, exception, and delayed-class SimpleHook fixtures. The delayed fixture is built into a separate dex asset and loaded with `DexClassLoader` so `WAITING_FOR_CLASS` behavior is tested deterministically.
 
 After installing both APKs, enabling the LSPosed scope, refreshing the module, and unlocking the test device, run the repeatable runtime matrix from the repository:
 

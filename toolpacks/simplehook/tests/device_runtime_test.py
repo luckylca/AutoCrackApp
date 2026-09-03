@@ -9,9 +9,9 @@ import sys
 import time
 
 RUNTIME_AUTHORITY = "com.luckylca.autocrack.runtime"
-TEST_AUTHORITY = "com.luckylca.simplehook.testapp.control"
-TEST_PACKAGE = "com.luckylca.simplehook.testapp"
-TARGET_CLASS = "com.luckylca.simplehook.testapp.HookTargets"
+TEST_AUTHORITY = "com.luckylca.runtimeinspector.testapp.control"
+TEST_PACKAGE = "com.luckylca.runtimeinspector.testapp"
+TARGET_CLASS = "com.luckylca.runtimeinspector.testapp.HookTargets"
 PREFIX = "device_simplehook_"
 
 
@@ -245,7 +245,7 @@ class DeviceTest:
     def run_delayed(self):
         delayed = self.rule("delayed", "loaded", {"type": "replace_return", "value": "loaded-hook"},
                             return_type="java.lang.String")
-        delayed["target"]["class"] = "com.luckylca.simplehook.delayed.DelayedTarget"
+        delayed["target"]["class"] = "com.luckylca.runtimeinspector.testapp.delayed.DelayedTarget"
         self.stop_target(); self.ensure_target(); self.add(delayed)
         waiting = bool(self.wait(lambda: self._state(delayed["id"]) == "WAITING_FOR_CLASS", timeout=10))
         class_loaded = self.target("load_delayed_class").get("value") == delayed["target"]["class"]

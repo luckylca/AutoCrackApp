@@ -18,6 +18,5 @@ rootProject.name = "AutoCrackApp"
 include(":app")
 include(":simplehook-core")
 include(":autocrack-runtime")
-include(":simplehook-test-app")
 include(":runtime-inspector-test-app")
 include(":xposed-api-stubs")

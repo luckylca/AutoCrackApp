@@ -9,7 +9,8 @@ on:
       - gradle/libs.versions.toml
       - simplehook-core/**
       - simplehook-runtime/**
-      - simplehook-test-app/**
+      - autocrack-runtime/**
+      - runtime-inspector-test-app/**
       - xposed-api-stubs/**
       - toolpacks/simplehook/**
       - app/src/main/java/com/luckylca/autocrack/runtime/BuiltInToolpackTrustPolicy.kt
@@ -24,7 +25,8 @@ on:
       - gradle/libs.versions.toml
       - simplehook-core/**
       - simplehook-runtime/**
-      - simplehook-test-app/**
+      - autocrack-runtime/**
+      - runtime-inspector-test-app/**
       - xposed-api-stubs/**
       - toolpacks/simplehook/**
       - app/src/main/java/com/luckylca/autocrack/runtime/BuiltInToolpackTrustPolicy.kt
@@ -78,12 +80,10 @@ jobs:
           ./gradlew --no-daemon --max-workers=1 --stacktrace \
             :simplehook-core:testDebugUnitTest \
             :simplehook-core:lintDebug \
-            :simplehook-runtime:testDebugUnitTest \
-            :simplehook-runtime:lintDebug \
-            :simplehook-runtime:assembleDebug \
-            :simplehook-test-app:testDebugUnitTest \
-            :simplehook-test-app:lintDebug \
-            :simplehook-test-app:assembleDebug
+            :autocrack-runtime:assembleDebug \
+            :runtime-inspector-test-app:testDebugUnitTest \
+            :runtime-inspector-test-app:lintDebug \
+            :runtime-inspector-test-app:assembleDebug
           ./gradlew --no-daemon --max-workers=1 --stacktrace \
             :app:testDebugUnitTest --tests com.luckylca.autocrack.runtime.SimpleHookToolpackTrustPolicyTest
 
@@ -93,22 +93,26 @@ jobs:
           cp /tmp/simplehook-build-summary.txt toolpacks/simplehook/dist/build-summary.txt
           unzip -t toolpacks/simplehook/dist/simplehook-toolpack-0.1.1.zip
           jq -e '
-            .schemaVersion == 1 and
+            .schemaVersion == 2 and
             .id == "simplehook" and
             .version == "simplehook-0.1.1" and
-            .payloadSha256 == "f4aaf2f32899e1ba2023dd21e7342cd0c3c5ac5550d80a63d64785f27a348d7d" and
-            .payloadSizeBytes == 42763 and
-            .sources[0].sha256 == "1c7fcc4e36f4500af7a7d7c0ff4bb0add2481433847204b8c7ab47512e8285ae" and
+            .payloadSha256 == "1a8bb6b16b979cac8eec95abd343126501bba6148c744f5dfea5c466fe376996" and
+            .payloadSizeBytes == 43367 and
+            .sources[0].sha256 == "af22a087912fd465b10d5f5bdef651ce38ced92341f40d47b60d2771cb2ed88e" and
+            .requires.runtime == ">=1.0.0" and
+            (.requires.capabilities | index("hook.reload")) != null and
+            (.requires.capabilities | index("hook.inspect")) != null and
+            (.requires.commands | index("android-shell")) != null and
             ([.commands[].name] | index("simplehook")) != null
           ' toolpacks/simplehook/dist/manifest.json >/dev/null
 
       - name: Verify Android module contents
         run: |
-          RUNTIME_APK=simplehook-runtime/build/outputs/apk/debug/simplehook-runtime-debug.apk
-          TEST_APK=simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk
+          RUNTIME_APK=autocrack-runtime/build/outputs/apk/debug/autocrack-runtime-debug.apk
+          TEST_APK=runtime-inspector-test-app/build/outputs/apk/debug/runtime-inspector-test-app-debug.apk
           test -s "$RUNTIME_APK"
           test -s "$TEST_APK"
-          unzip -p "$RUNTIME_APK" assets/xposed_init | grep -Fx 'com.luckylca.simplehook.runtime.SimpleHookXposedEntry'
+          unzip -p "$RUNTIME_APK" assets/xposed_init | grep -Fx 'com.luckylca.autocrack.runtime.AutoCrackXposedEntry'
           ! unzip -l "$RUNTIME_APK" | grep -F 'de/robv/android/xposed/'
 
       - name: Assemble release artifacts and checksums
@@ -116,13 +120,13 @@ jobs:
           mkdir -p dist/simplehook-0.1.1
           cp toolpacks/simplehook/dist/simplehook-toolpack-0.1.1.zip dist/simplehook-0.1.1/
           cp toolpacks/simplehook/dist/manifest.json dist/simplehook-0.1.1/manifest.json
-          cp simplehook-runtime/build/outputs/apk/debug/simplehook-runtime-debug.apk \
-            dist/simplehook-0.1.1/simplehook-runtime-0.1.1.apk
-          cp simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk \
-            dist/simplehook-0.1.1/SimpleHookTestApp.apk
+          cp autocrack-runtime/build/outputs/apk/debug/autocrack-runtime-debug.apk \
+            dist/simplehook-0.1.1/AutoCrackRuntime.apk
+          cp runtime-inspector-test-app/build/outputs/apk/debug/runtime-inspector-test-app-debug.apk \
+            dist/simplehook-0.1.1/RuntimeInspectorTestApp.apk
           cd dist/simplehook-0.1.1
-          sha256sum simplehook-toolpack-0.1.1.zip simplehook-runtime-0.1.1.apk \
-            SimpleHookTestApp.apk manifest.json > SHA256SUMS
+          sha256sum simplehook-toolpack-0.1.1.zip AutoCrackRuntime.apk \
+            RuntimeInspectorTestApp.apk manifest.json > SHA256SUMS
 
       - name: Upload SimpleHook package
         uses: actions/upload-artifact@v4
@@ -139,8 +143,8 @@ jobs:
           name: simplehook-0.1.1-reports
           path: |
             simplehook-core/build/reports/
-            simplehook-runtime/build/reports/
-            simplehook-test-app/build/reports/
+            autocrack-runtime/build/reports/
+            runtime-inspector-test-app/build/reports/
             app/build/reports/tests/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 14

@@ -2,10 +2,10 @@
   "schema_version": 1,
   "id": "test_get_int",
   "enabled": true,
-  "package": "com.luckylca.simplehook.testapp",
+  "package": "com.luckylca.runtimeinspector.testapp",
   "process": null,
   "target": {
-    "class": "com.luckylca.simplehook.testapp.HookTargets",
+    "class": "com.luckylca.runtimeinspector.testapp.HookTargets",
     "method": "getInt",
     "constructor": false,
     "parameters": [],

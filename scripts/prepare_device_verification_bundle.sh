@@ -25,14 +25,12 @@ require_file() {
 require_file app/build/outputs/apk/debug/app-debug.apk "AutoCrackApp debug APK"
 require_file autocrack-runtime/build/outputs/apk/debug/autocrack-runtime-debug.apk "AutoCrack Runtime debug APK"
 require_file runtime-inspector-test-app/build/outputs/apk/debug/runtime-inspector-test-app-debug.apk "Runtime Inspector test APK"
-require_file simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk "SimpleHook test APK"
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="$OUT_ROOT/device-verification-$STAMP"
 mkdir -p "$OUT/apk" "$OUT/rootfs" "$OUT/toolpacks" "$OUT/manifests" "$OUT/logs" "$OUT/docs" "$OUT/scripts"
 cp app/build/outputs/apk/debug/app-debug.apk "$OUT/apk/AutoCrackApp-debug.apk"
 cp autocrack-runtime/build/outputs/apk/debug/autocrack-runtime-debug.apk "$OUT/apk/AutoCrackRuntime-debug.apk"
 cp runtime-inspector-test-app/build/outputs/apk/debug/runtime-inspector-test-app-debug.apk "$OUT/apk/RuntimeInspectorTest-debug.apk"
-cp simplehook-test-app/build/outputs/apk/debug/simplehook-test-app-debug.apk "$OUT/apk/SimpleHookTestApp-debug.apk"
 
 if [ -n "$ROOTFS_ZIP" ]; then
   require_file "$ROOTFS_ZIP" "rootfs package"

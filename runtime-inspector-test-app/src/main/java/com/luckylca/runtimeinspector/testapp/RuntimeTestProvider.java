@@ -1,4 +1,4 @@
-package com.luckylca.simplehook.testapp;
+package com.luckylca.runtimeinspector.testapp;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -14,7 +14,8 @@ import java.io.InputStream;
 import java.lang.reflect.Method;
 import org.json.JSONObject;
 
-public final class SimpleHookTestProvider extends ContentProvider {
+/** Shell-only fixture provider for all owned runtime and SimpleHook device tests. */
+public final class RuntimeTestProvider extends ContentProvider {
     private static volatile Class<?> delayedType;
 
     @Override
@@ -79,7 +80,7 @@ public final class SimpleHookTestProvider extends ContentProvider {
 
     private Class<?> loadDelayedClass() throws Exception {
         if (delayedType != null) return delayedType;
-        File directory = new File(getContext().getCodeCacheDir(), "simplehook-delayed");
+        File directory = new File(getContext().getCodeCacheDir(), "runtime-test-delayed");
         if (!directory.isDirectory() && !directory.mkdirs()) {
             throw new IllegalStateException("Cannot create delayed dex directory");
         }
@@ -92,9 +93,10 @@ public final class SimpleHookTestProvider extends ContentProvider {
             while ((read = input.read(buffer)) >= 0) output.write(buffer, 0, read);
         }
         if (!dex.setReadOnly()) throw new IllegalStateException("Cannot protect delayed dex");
-        ClassLoader loader = new DexClassLoader(dex.getAbsolutePath(), directory.getAbsolutePath(),
-                null, getClass().getClassLoader());
-        delayedType = Class.forName("com.luckylca.simplehook.delayed.DelayedTarget", true, loader);
+        ClassLoader loader = new DexClassLoader(
+                dex.getAbsolutePath(), directory.getAbsolutePath(), null, getClass().getClassLoader());
+        delayedType = Class.forName(
+                "com.luckylca.runtimeinspector.testapp.delayed.DelayedTarget", true, loader);
         return delayedType;
     }
 

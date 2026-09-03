@@ -50,8 +50,8 @@ class SimpleHookToolpackTrustPolicyTest {
         version = "simplehook-0.1.1",
         architecture = "all",
         payloadEntry = "payload.zip",
-        payloadSha256 = "52de7ef3f08bc698300d7a4abd9163450d0b50356e01ab29210d5f8d6dffaa7b",
-        payloadSizeBytes = 43_215L,
+        payloadSha256 = "1a8bb6b16b979cac8eec95abd343126501bba6148c744f5dfea5c466fe376996",
+        payloadSizeBytes = 43_367L,
         requiredPaths = listOf(
             "bin/simplehook",
             "libexec/simplehook_cli.py",

@@ -1,5 +1,6 @@
-package com.luckylca.simplehook.testapp;
+package com.luckylca.runtimeinspector.testapp;
 
+/** Stable owned Java fixtures shared by RuntimeInspector and SimpleHook device tests. */
 public final class HookTargets {
     public static int staticField = 7;
     public int instanceField = 11;
@@ -22,7 +23,7 @@ public final class HookTargets {
     }
 
     public String getString() {
-        return "simplehook";
+        return "runtime-test";
     }
 
     public int add(int a, int b) {
@@ -42,6 +43,6 @@ public final class HookTargets {
     }
 
     public void exceptionMethod() {
-        throw new IllegalStateException("SimpleHook test exception");
+        throw new IllegalStateException("AutoCrack runtime test exception");
     }
 }
