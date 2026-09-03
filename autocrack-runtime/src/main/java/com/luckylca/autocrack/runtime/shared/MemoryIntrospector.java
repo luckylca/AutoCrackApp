@@ -664,7 +664,7 @@ public final class MemoryIntrospector {
 
 
 
-    private static JSONArray artPointerLayoutDexCandidates(Context context, JSONArray words, boolean includeTables,
+    private static JSONArray artPointerLayoutDexCandidates(Context context, JSONArray words, JSONArray origins, boolean includeTables,
             int tableLimit, int memberLimit, String filter) throws Exception {
         LinkedHashMap<String, JSONObject> unique = new LinkedHashMap<>();
         ArrayList<JSONObject> pointerWords = new ArrayList<>();
@@ -717,6 +717,7 @@ public final class MemoryIntrospector {
                         .put("confidence", "high")
                         .put("map", map.json())
                         .put("dex", dex)
+                        .put("content_fingerprint", artMemoryDexContentFingerprint(origins, candidate, dex))
                         .put("art_memory_table_reconstruction", false)
                         .put("strategy", "heuristic ART DexFile data_begin pointer + file_size word; validated DEX metadata parsed from memory without exporting raw bytes");
                 if (includeTables) {
@@ -745,6 +746,63 @@ public final class MemoryIntrospector {
                 .put("fields", parseDexFields(bytes, tableLimit, filter))
                 .put("methods", parseDexMethods(bytes, tableLimit, filter))
                 .put("class_data", parseDexClassData(bytes, tableLimit, memberLimit, filter));
+    }
+
+    private static JSONObject artMemoryDexContentFingerprint(JSONArray origins, byte[] bytes, JSONObject dex) throws Exception {
+        String memorySha256 = sha256(bytes);
+        String memorySignature = dex.optString("signature", "");
+        JSONArray matches = new JSONArray();
+        boolean exactContentMatch = false;
+        LinkedHashSet<String> apkPaths = new LinkedHashSet<>();
+        if (origins != null) {
+            for (int i = 0; i < origins.length(); i++) {
+                JSONObject origin = origins.optJSONObject(i);
+                if (origin == null) continue;
+                String dexName = jsonString(origin, "dex_name");
+                String apkPath = dexName;
+                int bang = apkPath.indexOf("!/");
+                if (bang >= 0) apkPath = apkPath.substring(0, bang);
+                if (apkPath.endsWith(".apk")) apkPaths.add(apkPath);
+            }
+        }
+        for (String apkPath : apkPaths) {
+            File apk = new File(apkPath);
+            if (!apk.isFile() || !apk.canRead()) continue;
+            try (ZipFile zip = new ZipFile(apk)) {
+                java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    if (entry.isDirectory() || !entry.getName().matches("classes(\\d*)?\\.dex") || entry.getSize() != bytes.length) continue;
+                    byte[] apkBytes;
+                    try (InputStream in = zip.getInputStream(entry)) { apkBytes = readLimited(in, bytes.length); }
+                    if (apkBytes.length != bytes.length) continue;
+                    String apkSha256 = sha256(apkBytes);
+                    JSONObject apkDex = parseDexInfo(apkBytes);
+                    boolean sha256Match = memorySha256.equals(apkSha256);
+                    boolean signatureMatch = memorySignature.equals(apkDex.optString("signature", ""));
+                    exactContentMatch |= sha256Match;
+                    matches.put(new JSONObject()
+                            .put("apk_path", apkPath)
+                            .put("entry", entry.getName())
+                            .put("entry_size", entry.getSize())
+                            .put("compressed_size", entry.getCompressedSize())
+                            .put("apk_sha256", apkSha256)
+                            .put("sha256_match", sha256Match)
+                            .put("dex_signature_match", signatureMatch)
+                            .put("apk_dex_version", apkDex.optString("version", "")));
+                }
+            } catch (Throwable error) {
+                matches.put(new JSONObject().put("apk_path", apkPath).put("error", error.toString()));
+            }
+        }
+        return ok().put("source", "validated_art_memory_candidate")
+                .put("memory_size", bytes.length)
+                .put("memory_sha256", memorySha256)
+                .put("memory_dex_signature", memorySignature)
+                .put("apk_candidate_count", matches.length())
+                .put("exact_apk_content_match", exactContentMatch)
+                .put("apk_candidates", matches)
+                .put("raw_bytes_included", false);
     }
 
 
@@ -924,7 +982,7 @@ public final class MemoryIntrospector {
             out.put("words", words).put("layout_hints", hints)
                     .put("apk_dex_size_matches", artPointerApkDexSizeMatches(origins, hints));
             if (tryLayoutDexHeader) {
-                JSONArray layoutCandidates = artPointerLayoutDexCandidates(context, words, tryLayoutDexTables,
+                JSONArray layoutCandidates = artPointerLayoutDexCandidates(context, words, origins, tryLayoutDexTables,
                         layoutTableLimit, layoutMemberLimit, layoutFilter);
                 boolean tableReconstruction = false;
                 for (int i = 0; i < layoutCandidates.length(); i++) {
@@ -1316,7 +1374,8 @@ public final class MemoryIntrospector {
                 .put("dex_memory_scan",status(bridgeLoaded,"bounded readable-map DEX magic/header candidate scan; not mCookie reconstruction"))
                 .put("dex_art_memory_header",status(bridgeLoaded || canReadSelfMem(),"opt-in version-gated ART data_begin/file_size heuristic with DEX file_size/header/endian/map validation; metadata only, no byte export"))
                 .put("dex_art_memory_tables",status(bridgeLoaded || canReadSelfMem(),"opt-in bounded strings/classes/fields/methods/class_data parsing from a validated ART memory DEX candidate; raw bytes are not returned"))
-                .put("dex_art_memory",status(false,"full ART DexFile raw byte reconstruction/dump remains version-specific and unsupported; validated header/map and bounded table metadata reconstruction are exposed separately"))
+                .put("dex_art_memory_fingerprint",status(bridgeLoaded || canReadSelfMem(),"SHA-256 and DEX-signature fingerprinting of validated ART memory candidates with same-size originating APK classes*.dex correlation; metadata only"))
+                .put("dex_art_memory",status(false,"full ART DexFile raw byte reconstruction/dump remains version-specific and unsupported; validated header/map, bounded table metadata, and content fingerprints are exposed separately"))
                 .put("assets",status(true,"runtime AssetManager list/open"))
                 .put("xml_logical",status(true,"Resources.getXml"))
                 .put("xml_block_probe",status(true,"XmlResourceParser/XmlBlock reflective field and event probe; no native byte export"))
