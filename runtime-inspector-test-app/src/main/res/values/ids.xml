@@ -5,4 +5,5 @@
     <item name="inspect_nested_label" type="id" />
     <item name="inspect_dialog_button" type="id" />
     <item name="inspect_dialog_text" type="id" />
+    <item name="inspect_webview" type="id" />
 </resources>

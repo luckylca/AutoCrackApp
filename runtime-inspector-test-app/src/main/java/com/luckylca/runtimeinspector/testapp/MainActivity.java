@@ -10,6 +10,7 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.webkit.WebView;
 
 public final class MainActivity extends Activity {
     private TextView target;
@@ -60,6 +61,18 @@ public final class MainActivity extends Activity {
         dialog.setText("Open Inspector Dialog");
         dialog.setOnClickListener(v -> showInspectorDialog());
         root.addView(dialog, matchWrap());
+
+        WebView.setWebContentsDebuggingEnabled(true);
+        WebView webView = new WebView(this);
+        webView.setId(R.id.inspect_webview);
+        webView.getSettings().setJavaScriptEnabled(true);
+        webView.loadDataWithBaseURL(
+                "https://autocrack.test/",
+                "<html><body><h3>AutoCrack WebView Fixture</h3><script>document.body.dataset.ready='1';</script></body></html>",
+                "text/html",
+                "UTF-8",
+                null);
+        root.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 360));
 
         setContentView(root);
     }
