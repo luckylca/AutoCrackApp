@@ -21,7 +21,7 @@ where only a native declaration is observable.
 | View properties | `object/visualization/C1151t` overloads and typed editors | CONFIRMED typed object surface | public getters first, bounded reflection second |
 | Listeners | menu/member browser plus listener-related classes | CONFIRMED surface | `View.mListenerInfo`, AdapterView and TextWatcher strategies |
 | Creation stack | `C1103g.m2479a(Throwable, View)` | CONFIRMED association | optional constructor/inflate/add tracker with weak keys and bounded stacks |
-| View image | two UI actions, modern and legacy | CONFIRMED surface | Canvas draw; PixelCopy fallback for attached windows/surface content |
+| View image | two UI actions, modern and legacy | CONFIRMED surface | Canvas draw, TextureView bitmap and PixelCopy fallback; image results now include bounds/window/FLAG_SECURE/strategy diagnostics |
 | Runtime-only mutation | typed View/WebView editors | CONFIRMED surface | main-looper action dispatcher, no APK rewrite |
 | Running activities | Activity visualization and bootstrap `Activity` callback | CONFIRMED surface | lifecycle callbacks plus `ActivityThread.mActivities` snapshot |
 | Declared/start activity | Activity manager UI | CONFIRMED surface | PackageManager describe; host `am start` |

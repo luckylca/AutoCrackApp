@@ -735,3 +735,9 @@ Device provider-self validation against `0x7f010000` confirmed:
 - `data_included=false`
 
 This further links runtime XmlBlock/parser state to file-backed AXML evidence, while native in-memory `ResXMLTree` byte reconstruction remains explicitly unclaimed.
+
+## Stage 30 - UI image capture diagnostics
+
+Extended `ui.image` and `ui.image.result` so screenshots are no longer opaque success/failure blobs. Every capture path now reports a `target` diagnostics object containing View class, dimensions, pixel/image limits, window and screen bounds, owning-window presence, Window flags, `flag_secure`, SurfaceView/TextureView/VideoView classification, and the selected capture strategy. Asynchronous `PixelCopy(Window)` captures keep the same target metadata through `image-result` and include the PixelCopy result code.
+
+This improves Layout Inspect-style image debugging because a failed capture can now distinguish empty views, oversized views, missing owning Window, Window-level FLAG_SECURE, SurfaceView PixelCopy limitations, and vendor/DRM secure-producer limitations. It does not claim DRM or private SurfaceControl bypass.

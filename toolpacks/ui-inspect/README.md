@@ -46,3 +46,6 @@ This Toolpack owns Window roots, View tree traversal, hit testing, View properti
 ## Compose Semantics
 
 `compose-tree` now requests `ui.compose.tree`, which reflectively probes `AndroidComposeView -> SemanticsOwner -> SemanticsNode` and returns best-effort node/config text, bounds, ids, and children. It does not fake Compose nodes as Android View children, and exact config fields remain Compose-version dependent.
+
+
+`ui-inspect image HANDLE --json` now includes a `target` diagnostics object with class, size, pixel budget, window/screen bounds, window flag state, `flag_secure`, surface/texture/video classification, and the selected capture strategy. `ui-inspect image-result TOKEN --json` preserves the same diagnostics for asynchronous PixelCopy results.
