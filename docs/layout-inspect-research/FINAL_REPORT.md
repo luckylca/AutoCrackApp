@@ -741,3 +741,9 @@ This further links runtime XmlBlock/parser state to file-backed AXML evidence, w
 Extended `ui.image` and `ui.image.result` so screenshots are no longer opaque success/failure blobs. Every capture path now reports a `target` diagnostics object containing View class, dimensions, pixel/image limits, window and screen bounds, owning-window presence, Window flags, `flag_secure`, SurfaceView/TextureView/VideoView classification, and the selected capture strategy. Asynchronous `PixelCopy(Window)` captures keep the same target metadata through `image-result` and include the PixelCopy result code.
 
 This improves Layout Inspect-style image debugging because a failed capture can now distinguish empty views, oversized views, missing owning Window, Window-level FLAG_SECURE, SurfaceView PixelCopy limitations, and vendor/DRM secure-producer limitations. It does not claim DRM or private SurfaceControl bypass.
+
+## Stage 31 - Secure window diagnostics and post-clear status
+
+Added `control.secure.diagnose` and `runtime-control secure-diagnose` as a read-only diagnostic companion to `secure-status` and `secure-disable`. The secure path now reports Window flag state, decor handles/classes, decor visibility/attachment, per-window SurfaceView/TextureView/VideoView counts, and a process-wide surface summary. `secure-disable` now also returns an `after_status` snapshot after `Window.clearFlags(FLAG_SECURE)`.
+
+Device provider-self validation confirmed that `control.secure.diagnose` returns `ok=true`, `diagnose=true`, `window_count`, `secure_window_count`, `surface_summary`, and the explicit scope note. This keeps the boundary clear: Java Window FLAG_SECURE handling is implemented; private SurfaceControl, DRM, or vendor secure producer bypass remains unclaimed.

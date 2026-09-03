@@ -8,10 +8,13 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
+import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.VideoView;
 import android.webkit.CookieManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -41,7 +44,7 @@ public final class WebControlIntrospector {
     public static boolean supports(String kind) {
         return Set.of(
                 "webview.list", "webview.info", "webview.debug", "webview.eval", "webview.eval.result", "webview.load_url", "webview.reload", "webview.go_back", "webview.go_forward", "webview.clear_cache",
-                "control.secure.status", "control.secure.disable", "control.so.inject", "control.so.dlopen", "control.so.android_dlopen_ext", "control.so.dlsym",
+                "control.secure.status", "control.secure.diagnose", "control.secure.disable", "control.so.inject", "control.so.dlopen", "control.so.android_dlopen_ext", "control.so.dlsym",
                 "control.activity.start", "control.process.kill", "control.object.field.set", "control.object.method.call").contains(kind);
     }
 
@@ -58,6 +61,7 @@ public final class WebControlIntrospector {
             case "webview.go_forward" -> webviewGo(request, false);
             case "webview.clear_cache" -> webviewClearCache(request);
             case "control.secure.status" -> secureStatus();
+            case "control.secure.diagnose" -> secureStatus().put("diagnose", true);
             case "control.secure.disable" -> secureDisable();
             case "control.so.inject" -> injectSo(request);
             case "control.so.dlopen" -> dlopenSo(context, request);
@@ -184,16 +188,14 @@ public final class WebControlIntrospector {
         JSONArray windows = new JSONArray(); int secure = 0;
         for (ActivityRegistry.ActivitySnapshot snapshot : ActivityRegistry.get().snapshot()) {
             Activity activity = snapshot.activity(); Window window = activity.getWindow(); if (window == null) continue;
-            int flags = window.getAttributes().flags; boolean value = (flags & WindowManager.LayoutParams.FLAG_SECURE) != 0;
-            if (value) secure++;
-            windows.put(new JSONObject().put("activity", activity.getClass().getName())
-                    .put("activity_handle", ObjectRegistry.get().put(activity, false, "activity"))
-                    .put("window_handle", ObjectRegistry.get().put(window, false, "window"))
-                    .put("flags", flags).put("flag_secure", value));
+            JSONObject item = secureWindow(activity, window);
+            if (item.optBoolean("flag_secure", false)) secure++;
+            windows.put(item);
         }
-        return ok().put("secure_window_count", secure).put("windows", windows)
+        return ok().put("secure_window_count", secure).put("window_count", windows.length()).put("windows", windows)
+                .put("surface_summary", secureSurfaceSummary())
                 .put("view_surface_cause_supported", false)
-                .put("scope_note", "Stable strategy identifies Window.FLAG_SECURE. Vendor/private secure SurfaceControl or DRM surfaces are reported as outside this capability.");
+                .put("scope_note", "Stable strategy identifies and clears Window.FLAG_SECURE. Vendor/private secure SurfaceControl or DRM producer surfaces are diagnosed as possible causes but remain outside this Java capability.");
     }
 
     private static JSONObject secureDisable() throws Exception {
@@ -203,13 +205,69 @@ public final class WebControlIntrospector {
             int before = window.getAttributes().flags;
             if ((before & WindowManager.LayoutParams.FLAG_SECURE) != 0) {
                 window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+                int after = window.getAttributes().flags;
                 changed.put(new JSONObject().put("activity", activity.getClass().getName())
+                        .put("activity_handle", ObjectRegistry.get().put(activity, false, "activity"))
                         .put("window_handle", ObjectRegistry.get().put(window, false, "window"))
-                        .put("flags_before", before).put("flags_after", window.getAttributes().flags));
+                        .put("flags_before", before).put("flags_after", after)
+                        .put("flag_secure_before", true)
+                        .put("flag_secure_after", (after & WindowManager.LayoutParams.FLAG_SECURE) != 0));
             }
         }
         return ok().put("changed", changed.length()).put("windows", changed)
-                .put("persistent", false).put("strategy", "Window.clearFlags(FLAG_SECURE)");
+                .put("after_status", secureStatus())
+                .put("persistent", false).put("strategy", "Window.clearFlags(FLAG_SECURE)")
+                .put("scope_note", "This clears Window.FLAG_SECURE only; private SurfaceControl, DRM, or vendor-secure producers may still block screenshots.");
+    }
+
+    private static JSONObject secureWindow(Activity activity, Window window) throws Exception {
+        int flags = window.getAttributes().flags;
+        View decor = window.getDecorView();
+        return new JSONObject().put("activity", activity.getClass().getName())
+                .put("activity_handle", ObjectRegistry.get().put(activity, false, "activity"))
+                .put("window_handle", ObjectRegistry.get().put(window, false, "window"))
+                .put("decor_handle", decor == null ? JSONObject.NULL : ObjectRegistry.get().put(decor, false, "ui"))
+                .put("decor_class", decor == null ? JSONObject.NULL : decor.getClass().getName())
+                .put("decor_attached", decor != null && decor.isAttachedToWindow())
+                .put("decor_shown", decor != null && decor.isShown())
+                .put("flags", flags)
+                .put("flag_secure", (flags & WindowManager.LayoutParams.FLAG_SECURE) != 0)
+                .put("window_type", window.getAttributes().type)
+                .put("soft_input_mode", window.getAttributes().softInputMode)
+                .put("surface_counts", decor == null ? new JSONObject() : secureSurfaceCounts(decor));
+    }
+
+    private static JSONObject secureSurfaceSummary() throws Exception {
+        JSONArray roots = new JSONArray();
+        JSONObject total = new JSONObject().put("surface_view_count", 0).put("texture_view_count", 0).put("video_view_count", 0).put("root_count", 0);
+        for (View root : WindowRegistry.get().snapshot(64)) {
+            JSONObject counts = secureSurfaceCounts(root);
+            roots.put(new JSONObject().put("root_handle", ObjectRegistry.get().put(root, false, "ui"))
+                    .put("root_class", root.getClass().getName()).put("counts", counts));
+            total.put("root_count", total.getInt("root_count") + 1);
+            total.put("surface_view_count", total.getInt("surface_view_count") + counts.optInt("surface_view_count", 0));
+            total.put("texture_view_count", total.getInt("texture_view_count") + counts.optInt("texture_view_count", 0));
+            total.put("video_view_count", total.getInt("video_view_count") + counts.optInt("video_view_count", 0));
+        }
+        return new JSONObject().put("total", total).put("roots", roots)
+                .put("interpretation", "SurfaceView/TextureView/VideoView presence can explain screenshots that remain blank after Window.FLAG_SECURE is cleared.");
+    }
+
+    private static JSONObject secureSurfaceCounts(View root) throws Exception {
+        int[] counts = new int[4];
+        Set<View> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        countSecureSurfaces(root, seen, counts);
+        return new JSONObject().put("visited", counts[0]).put("surface_view_count", counts[1])
+                .put("texture_view_count", counts[2]).put("video_view_count", counts[3]);
+    }
+
+    private static void countSecureSurfaces(View view, Set<View> seen, int[] counts) {
+        if (view == null || !seen.add(view) || counts[0] >= MAX_VIEWS) return;
+        counts[0]++;
+        if (view instanceof SurfaceView) counts[1]++;
+        if (view instanceof TextureView) counts[2]++;
+        if (view instanceof VideoView) counts[3]++;
+        if (view instanceof ViewGroup group) for (int i = 0; i < group.getChildCount(); i++) countSecureSurfaces(group.getChildAt(i), seen, counts);
     }
 
     private static JSONObject injectSo(JSONObject request) throws Exception {

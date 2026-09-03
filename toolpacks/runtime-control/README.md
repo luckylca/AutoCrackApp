@@ -25,6 +25,7 @@ runtime-control webview-go-back --package com.example.app obj_webview --json
 runtime-control webview-go-forward --package com.example.app obj_webview --json
 runtime-control webview-clear-cache --package com.example.app --handle obj_webview --include-disk --json
 runtime-control secure-status --package com.example.app --json
+runtime-control secure-diagnose --package com.example.app --json
 runtime-control secure-disable --package com.example.app --json
 runtime-control so-inject --package com.example.app /data/local/tmp/libfoo.so --json
 runtime-control so-dlopen --package com.example.app /data/local/tmp/libfoo.so --flags 2 --json
@@ -46,3 +47,5 @@ runtime-control process-kill --package com.example.app --delay-ms 350 --json
 `runtime-control so-android-dlopen-ext --package PKG /system/lib64/liblog.so --ext-flags 0 --json` uses Android bionic `android_dlopen_ext`. It returns the handle or linker error and explicitly reports that namespace bypass is not claimed.
 
 `runtime-control so-dlsym --package PKG symbolName --json` resolves a native symbol through `dlsym`. Use `--handle 0x...` with a handle returned by `so-dlopen`, or omit it for `RTLD_DEFAULT`. This only returns the address and does not call the function.
+
+`secure-diagnose` extends `secure-status` with root SurfaceView/TextureView/VideoView counts so screenshot failures can be separated into Window.FLAG_SECURE versus surface/DRM/vendor producer limitations. `secure-disable` now returns an `after_status` snapshot after clearing Window flags.
