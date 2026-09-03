@@ -667,3 +667,22 @@ Device evidence from API 36 runtime provider-self:
 - Word 4 was `0x6b08` / `27400`, matching the `classes.dex` file size seen in `memory.dex.info`.
 
 This is meaningful progress toward ART memory DEX reconstruction, but the stage still reports `art_memory_reconstruction=false` because it does not hard-code API-specific `art::DexFile` layout offsets or emit full in-memory DEX bytes.
+
+## Stage 26 - ART cookie object APK DEX size correlation
+
+Extended `memory.dex.art_pointer_probe` so ART cookie pointer records now emit `apk_dex_size_matches` when a candidate size word inside the ART `DexFile` object matches an APK `classes*.dex` Zip entry size from the originating `base.apk` or split APK.
+
+Device evidence on `a4976c80` / Android API 36:
+
+- `pid=16859`
+- `pointer_count=1`
+- `readable_pointer_count=1`
+- raw cookie pointer was TBI-untagged from `0xb400...` into `0x76...`
+- resolved cookie object map: `[anon:scudo:primary]`
+- `layout_hints.likely_libdexfile_vtable=true`
+- word 0 pointed into `/apex/com.android.art/lib64/libdexfile.so`
+- word 4 was `0x6b08` / `27400`
+- `apk_dex_size_matches[0].entry=classes.dex`
+- `apk_dex_size_matches[0].entry_size=27400`
+
+This is a meaningful ART-layout correlation step beyond file-backed parsing, but it is still intentionally reported as `art_memory_reconstruction=false`: it does not assume stable ART private C++ offsets across Android versions and does not export in-memory DEX bytes.

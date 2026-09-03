@@ -69,7 +69,7 @@ memory-dump xml-pull --package com.example.app 2131427356 --json
 
 `memory-dump dex-art-probe --package PKG --class-count --json` summarizes each runtime DexFile, its backing path, class-count lower bound, and reflected ART `mCookie`/`mInternalCookie` shape. It is a probe for future native ART reconstruction, not a Dex memory reconstruction.
 
-`memory-dump dex-art-pointer-probe --package PKG --max-pointers 32 --include-words --json` maps ART `mCookie`/`mInternalCookie` pointer values into `/proc/self/maps` and performs a bounded DEX magic/header neighborhood scan; `--include-words` adds a bounded 64-bit word table with map back-references for ART layout research. It is a version-gated probe and still reports `art_memory_reconstruction=false`; `--try-layout-dex-header` is an explicit advanced opt-in for header-only heuristic probing and does not export bytes.
+`memory-dump dex-art-pointer-probe --package PKG --max-pointers 32 --include-words --json` maps ART `mCookie`/`mInternalCookie` pointer values into `/proc/self/maps` and performs a bounded DEX magic/header neighborhood scan; `--include-words` adds a bounded 64-bit word table with map back-references and APK `classes*.dex` size correlation hints for ART layout research. It is a version-gated probe and still reports `art_memory_reconstruction=false`; `--try-layout-dex-header` is an explicit advanced opt-in for header-only heuristic probing and does not export bytes.
 
 `dex-art-probe` includes the current `Context.getClassLoader()` by default so provider-side self diagnostics work even before the Xposed target-process registry is populated. Use `--no-context-loader` to restrict results to registered target classloaders only.
 

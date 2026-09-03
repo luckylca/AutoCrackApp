@@ -592,6 +592,7 @@ public final class MemoryIntrospector {
             pointerRecords.put(record);
         }
         return ok().put("api_level", android.os.Build.VERSION.SDK_INT)
+                .put("pid", android.os.Process.myPid())
                 .put("loader_count", loaderCount)
                 .put("dex_count", dexCount)
                 .put("dex_records", dexRecords)
@@ -687,6 +688,53 @@ public final class MemoryIntrospector {
         return out;
     }
 
+
+    private static JSONArray artPointerApkDexSizeMatches(JSONArray origins, JSONObject hints) throws Exception {
+        JSONArray matches = new JSONArray();
+        JSONArray sizes = hints.optJSONArray("candidate_size_words");
+        if (sizes == null || sizes.length() == 0 || origins == null) return matches;
+        LinkedHashSet<String> apkPaths = new LinkedHashSet<>();
+        for (int i = 0; i < origins.length(); i++) {
+            JSONObject origin = origins.optJSONObject(i);
+            if (origin == null) continue;
+            String dexName = jsonString(origin, "dex_name");
+            String apkPath = dexName;
+            int bang = apkPath.indexOf("!/");
+            if (bang >= 0) apkPath = apkPath.substring(0, bang);
+            if (apkPath.endsWith(".apk")) apkPaths.add(apkPath);
+        }
+        for (String apkPath : apkPaths) {
+            File apk = new File(apkPath);
+            if (!apk.isFile() || !apk.canRead()) continue;
+            try (ZipFile zip = new ZipFile(apk)) {
+                java.util.Enumeration<? extends ZipEntry> entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    ZipEntry entry = entries.nextElement();
+                    if (entry.isDirectory()) continue;
+                    String name = entry.getName();
+                    if (!name.matches("classes(\\d*)?\\.dex")) continue;
+                    long entrySize = entry.getSize();
+                    for (int i = 0; i < sizes.length(); i++) {
+                        JSONObject sizeWord = sizes.optJSONObject(i);
+                        if (sizeWord == null) continue;
+                        long candidateSize = sizeWord.optLong("decimal", -1L);
+                        if (candidateSize == entrySize) {
+                            matches.put(new JSONObject()
+                                    .put("apk_path", apkPath)
+                                    .put("entry", name)
+                                    .put("entry_size", entrySize)
+                                    .put("compressed_size", entry.getCompressedSize())
+                                    .put("size_word_index", sizeWord.optInt("word_index"))
+                                    .put("size_word_value", sizeWord.optString("value"))
+                                    .put("match", "entry_size"));
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        return matches;
+    }
+
     private static JSONObject artPointerLayoutHints(JSONArray words) throws Exception {
         JSONArray likelyPointers = new JSONArray();
         JSONArray likelySizes = new JSONArray();
@@ -695,7 +743,7 @@ public final class MemoryIntrospector {
             JSONObject word = words.getJSONObject(i);
             JSONObject pointsTo = word.optJSONObject("points_to");
             if (pointsTo != null) {
-                String path = pointsTo.optString("pathname", "");
+                String path = jsonString(pointsTo, "pathname");
                 likelyPointers.put(new JSONObject().put("word_index", word.optInt("index"))
                         .put("value", word.optString("value"))
                         .put("pathname", path.isBlank() ? JSONObject.NULL : path)
@@ -746,6 +794,15 @@ public final class MemoryIntrospector {
                 .put("field", fieldName)
                 .put("element_index", elementIndex < 0 ? JSONObject.NULL : elementIndex)
                 .put("raw", String.valueOf(raw)));
+    }
+
+
+    private static String jsonString(JSONObject object, String key) {
+        if (object == null || !object.has(key) || object.isNull(key)) return "";
+        Object value = object.opt(key);
+        if (value == null || value == JSONObject.NULL) return "";
+        String text = String.valueOf(value);
+        return "null".equals(text) ? "" : text;
     }
 
     private static Long cookiePointerValue(Object raw) {
@@ -800,7 +857,9 @@ public final class MemoryIntrospector {
         out.put("readable", true).put("probe_start", hex(start)).put("bytes_read", bytes.length).put("pointer_offset", resolvedPointer - start);
         if (includeWords) {
             JSONArray words = artPointerWords(bytes, start, (int)Math.max(0, resolvedPointer - start), wordCount);
-            out.put("words", words).put("layout_hints", artPointerLayoutHints(words));
+            JSONObject hints = artPointerLayoutHints(words);
+            out.put("words", words).put("layout_hints", hints)
+                    .put("apk_dex_size_matches", artPointerApkDexSizeMatches(origins, hints));
             if (tryLayoutDexHeader) out.put("layout_dex_candidates", artPointerLayoutDexCandidates(context, words));
         } else if (tryLayoutDexHeader) {
             out.put("layout_dex_candidates", new JSONArray()).put("layout_dex_note", "try_layout_dex_header requires include_words=true");
