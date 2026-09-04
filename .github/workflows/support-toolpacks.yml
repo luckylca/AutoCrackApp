@@ -255,7 +255,7 @@ jobs:
           FRIDA_WHEEL="$(find dist/jnitrace-inputs -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
           unzip -q "$FRIDA_WHEEL" -d dist/frida-python
           docker run --rm --platform linux/arm64             -v "$PWD/dist/jnitrace-unpack:/jnitrace:ro"             -v "$PWD/dist/frida-python:/frida-python:ro"             debian:bookworm-slim /bin/bash -euxc '
-              trap 'rc=$?; echo "::error title=jnitrace-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              trap "rc=\$?; echo \"::error title=jnitrace-arm64-smoke::\${current:-unknown} failed (rc=\$rc)\"; exit \$rc" ERR
               current=apt-update
               apt-get update
               current=apt-install
@@ -326,7 +326,7 @@ jobs:
           mkdir -p dist/uiautomator2-unpack
           unzip -q dist/uiautomator2/*toolpack.zip -d dist/uiautomator2-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/uiautomator2-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
-              trap 'rc=$?; echo "::error title=uiautomator2-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              trap "rc=\$?; echo \"::error title=uiautomator2-arm64-smoke::\${current:-unknown} failed (rc=\$rc)\"; exit \$rc" ERR
               current=apt-update
               apt-get update
               current=apt-install
@@ -455,7 +455,7 @@ jobs:
           mkdir -p dist/capa-unpack
           unzip -q dist/capa/*toolpack.zip -d dist/capa-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/capa-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
-              trap 'rc=$?; echo "::error title=capa-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              trap "rc=\$?; echo \"::error title=capa-arm64-smoke::\${current:-unknown} failed (rc=\$rc)\"; exit \$rc" ERR
               current=apt-update
               apt-get update
               current=apt-install
@@ -520,7 +520,7 @@ jobs:
           mkdir -p dist/blutter-unpack
           unzip -q dist/blutter/*toolpack.zip -d dist/blutter-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/blutter-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
-              trap 'rc=$?; echo "::error title=blutter-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              trap "rc=\$?; echo \"::error title=blutter-arm64-smoke::\${current:-unknown} failed (rc=\$rc)\"; exit \$rc" ERR
               export DEBIAN_FRONTEND=noninteractive
               current=apt-update
               apt-get update
@@ -622,7 +622,7 @@ jobs:
           mkdir -p dist/il2cpp-unpack
           unzip -q dist/frida-il2cpp-bridge/*toolpack.zip -d dist/il2cpp-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/il2cpp-unpack:/input:ro"             -v "$PWD/dist/il2cpp-frida/python:/frida-python:ro"             debian:bookworm-slim /bin/bash -euxc '
-              trap 'rc=$?; echo "::error title=il2cpp-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              trap "rc=\$?; echo \"::error title=il2cpp-arm64-smoke::\${current:-unknown} failed (rc=\$rc)\"; exit \$rc" ERR
               current=apt-update
               apt-get update
               current=apt-install
