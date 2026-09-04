@@ -9,6 +9,7 @@ enum class DangerousOperationCategory(val label: String) {
     MOUNT_CONTROL("挂载控制"),
     DEVICE_CONTROL("设备级控制"),
     PACKAGE_DATA_CHANGE("应用安装卸载或数据/权限状态变更"),
+    TARGET_RUNTIME_MUTATION("目标应用运行时修改"),
 }
 
 data class DangerousOperationRequest(
@@ -50,12 +51,21 @@ object MobileAgentDangerousCommandClassifier {
     private val systemPathRedirect = Regex(
         "(?im)(?:>|>>)\\s*['\"]?/(?:system|vendor|product|odm|apex|proc|sys)(?:/|['\"]?(?:\\s|$))",
     )
+    private val targetRuntimeMutation = Regex(
+        "(?im)(^|[;&|]\\s*)(?:env\\s+\\S+\\s+)*(?:\\S*/)?(?:" +
+            "runtime-control\\s+(?:webview-debug|webview-eval|webview-load-url|webview-reload|webview-go-back|webview-go-forward|webview-clear-cache|secure-disable|so-inject|so-dlopen|so-android-dlopen-ext|activity-start|process-kill|object-field-set|object-method-call)\\b" +
+            "|ui-inspect\\s+action\\b" +
+            "|simplehook\\s+(?:apply|reload)\\b" +
+            "|simplehook\\s+rules\\s+(?:add|update|enable|disable|remove)\\b" +
+            ")",
+    )
 
     fun classify(script: String): DangerousOperationCategory? = when {
         isDestructiveDelete(script) -> DangerousOperationCategory.DESTRUCTIVE_DELETE
         blockWrite.containsMatchIn(script) -> DangerousOperationCategory.BLOCK_DEVICE_WRITE
         deviceControl.containsMatchIn(script) -> DangerousOperationCategory.DEVICE_CONTROL
         packageDataChange.containsMatchIn(script) -> DangerousOperationCategory.PACKAGE_DATA_CHANGE
+        targetRuntimeMutation.containsMatchIn(script) -> DangerousOperationCategory.TARGET_RUNTIME_MUTATION
         mountControl.containsMatchIn(script) -> DangerousOperationCategory.MOUNT_CONTROL
         systemSettingChange.containsMatchIn(script) || systemPathMutation.containsMatchIn(script) ||
             systemPathRedirect.containsMatchIn(script) ->

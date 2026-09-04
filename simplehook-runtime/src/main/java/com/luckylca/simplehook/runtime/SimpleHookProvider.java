@@ -4,12 +4,17 @@ import android.app.Activity;
 import android.app.BroadcastOptions;
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.IBinder;
+import android.os.Parcel;
 import android.os.Process;
 import android.util.Log;
 import android.util.Base64;
@@ -31,6 +36,14 @@ import org.json.JSONObject;
 public final class SimpleHookProvider extends ContentProvider {
     private static final long HEARTBEAT_MAX_AGE_MS = 5_000L;
     private static final Map<String, JSONObject> HEARTBEATS = new ConcurrentHashMap<>();
+    private static final long[] RUNTIME_REQUEST_RETRY_DELAYS_MS = {0L, 250L, 1_000L, 3_000L, 7_000L};
+    private static final String RUNTIME_REQUEST_BINDER = "runtime_request_binder";
+    private static final String RUNTIME_REQUEST_BINDER_PROCESS = "runtime_request_binder_process";
+    private static final String RUNTIME_REQUEST_BINDER_DESCRIPTOR = "com.luckylca.autocrack.runtime.REQUEST_ENDPOINT";
+    private static final int RUNTIME_REQUEST_BINDER_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION;
+    private static final Map<String, IBinder> RUNTIME_TARGET_BINDERS = new ConcurrentHashMap<>();
+    private final Set<String> runtimeDeliveryAcknowledged = ConcurrentHashMap.newKeySet();
+    private Handler runtimeDeliveryHandler;
     private RuleStore rules;
     private JsonLogStore logs;
     private RuntimeRequestStore runtimeRequests;
@@ -40,6 +53,7 @@ public final class SimpleHookProvider extends ContentProvider {
         rules = new RuleStore(contextOrThrow());
         logs = new JsonLogStore(contextOrThrow());
         runtimeRequests = new RuntimeRequestStore(contextOrThrow());
+        runtimeDeliveryHandler = new Handler(Looper.getMainLooper());
         return true;
     }
 
@@ -249,28 +263,130 @@ public final class SimpleHookProvider extends ContentProvider {
     private JSONObject runtimeSubmit(JSONObject request) throws Exception {
         JSONObject result = runtimeRequests.submit(request);
         JSONObject stored = result.optJSONObject("request");
-        if (result.optBoolean("ok") && stored != null) broadcastRuntimeRequest(stored);
+        if (result.optBoolean("ok") && stored != null && !deliverRuntimeRequestViaBinder(stored)) {
+            scheduleRuntimeRequest(stored);
+        }
         result.remove("request");
         return result;
     }
 
-    private void broadcastRuntimeRequest(JSONObject stored) {
+    private static String runtimeTargetKey(JSONObject request) {
+        String packageName = request.optString("package", "");
+        String processName = request.isNull("process") ? "" : request.optString("process", "");
+        return packageName + "\n" + processName;
+    }
+
+    private boolean deliverRuntimeRequestViaBinder(JSONObject stored) {
+        String key = runtimeTargetKey(stored);
+        IBinder endpoint = RUNTIME_TARGET_BINDERS.get(key);
+        if (endpoint == null) return false;
+        if (!endpoint.isBinderAlive()) {
+            RUNTIME_TARGET_BINDERS.remove(key, endpoint);
+            return false;
+        }
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
         try {
+            data.writeInterfaceToken(RUNTIME_REQUEST_BINDER_DESCRIPTOR);
+            data.writeString(stored.toString());
+            if (!endpoint.transact(RUNTIME_REQUEST_BINDER_TRANSACTION, data, reply, 0)) {
+                RUNTIME_TARGET_BINDERS.remove(key, endpoint);
+                return false;
+            }
+            reply.readException();
+            boolean accepted = reply.readInt() == 1;
+            String message = reply.readString();
+            if (!accepted) {
+                RUNTIME_TARGET_BINDERS.remove(key, endpoint);
+                Log.w("SimpleHook", "Runtime request Binder declined: id="
+                        + stored.optString("request_id", "") + " reason=" + message);
+                return false;
+            }
+            runtimeDeliveryAcknowledged.add(stored.optString("request_id", ""));
+            Log.i("SimpleHook", "Runtime request delivered via Binder: id="
+                    + stored.optString("request_id", "") + " target=" + key.replace('\n', ':'));
+            return true;
+        } catch (Throwable error) {
+            RUNTIME_TARGET_BINDERS.remove(key, endpoint);
+            Log.w("SimpleHook", "Runtime request Binder delivery failed; falling back to broadcast", error);
+            return false;
+        } finally {
+            reply.recycle();
+            data.recycle();
+        }
+    }
+
+    private void cacheRuntimeTargetBinder(JSONObject stored, Bundle resultExtras) {
+        if (resultExtras == null) return;
+        IBinder endpoint = resultExtras.getBinder(RUNTIME_REQUEST_BINDER);
+        if (endpoint == null) return;
+        String key = runtimeTargetKey(stored);
+        try {
+            endpoint.linkToDeath(() -> {
+                if (RUNTIME_TARGET_BINDERS.remove(key, endpoint)) {
+                    Log.i("SimpleHook", "Runtime request Binder died; cache cleared: target="
+                            + key.replace('\n', ':'));
+                }
+            }, 0);
+        } catch (Throwable error) {
+            RUNTIME_TARGET_BINDERS.remove(key, endpoint);
+            Log.w("SimpleHook", "Runtime request Binder was already dead during cache", error);
+            return;
+        }
+        RUNTIME_TARGET_BINDERS.put(key, endpoint);
+        Log.i("SimpleHook", "Runtime request Binder cached: target=" + key.replace('\n', ':')
+                + " actual_process=" + resultExtras.getString(RUNTIME_REQUEST_BINDER_PROCESS, ""));
+    }
+
+    private void scheduleRuntimeRequest(JSONObject stored) {
+        final String requestId = stored.optString("request_id", "");
+        if (requestId.isEmpty()) return;
+        runtimeDeliveryAcknowledged.remove(requestId);
+        for (int attempt = 0; attempt < RUNTIME_REQUEST_RETRY_DELAYS_MS.length; attempt++) {
+            final int deliveryAttempt = attempt + 1;
+            runtimeDeliveryHandler.postDelayed(
+                    () -> broadcastRuntimeRequest(stored, requestId, deliveryAttempt),
+                    RUNTIME_REQUEST_RETRY_DELAYS_MS[attempt]);
+        }
+        runtimeDeliveryHandler.postDelayed(
+                () -> runtimeDeliveryAcknowledged.remove(requestId),
+                RUNTIME_REQUEST_RETRY_DELAYS_MS[RUNTIME_REQUEST_RETRY_DELAYS_MS.length - 1] + 5_000L);
+    }
+
+    private void broadcastRuntimeRequest(JSONObject stored, String requestId, int attempt) {
+        if (runtimeDeliveryAcknowledged.contains(requestId)) return;
+        try {
+            if (!runtimeRequests.isPending(requestId)) return;
             Intent intent = new Intent("com.luckylca.autocrack.runtime.REQUEST")
                     .setPackage(stored.getString("package"))
                     .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
                     .putExtra("json", stored.toString());
+            BroadcastReceiver acknowledgement = new BroadcastReceiver() {
+                @Override public void onReceive(android.content.Context ignored, Intent ignoredIntent) {
+                    if (getResultCode() == Activity.RESULT_OK) {
+                        runtimeDeliveryAcknowledged.add(requestId);
+                        cacheRuntimeTargetBinder(stored, getResultExtras(false));
+                        Log.i("SimpleHook", "Runtime request delivery acknowledged: id=" + requestId
+                                + " attempt=" + attempt);
+                    } else {
+                        Log.w("SimpleHook", "Runtime request delivery not acknowledged: id=" + requestId
+                                + " attempt=" + attempt + " result=" + getResultCode());
+                    }
+                }
+            };
             if (Build.VERSION.SDK_INT >= 34) {
                 BroadcastOptions options = BroadcastOptions.makeBasic()
                         .setShareIdentityEnabled(true)
                         .setDeferralPolicy(BroadcastOptions.DEFERRAL_POLICY_NONE);
-                contextOrThrow().sendOrderedBroadcast(intent, null, options.toBundle(), null,
-                        null, Activity.RESULT_CANCELED, null, null);
+                contextOrThrow().sendOrderedBroadcast(intent, null, options.toBundle(), acknowledgement,
+                        runtimeDeliveryHandler, Activity.RESULT_CANCELED, null, null);
             } else {
-                contextOrThrow().sendBroadcast(intent);
+                contextOrThrow().sendOrderedBroadcast(intent, null, acknowledgement, runtimeDeliveryHandler,
+                        Activity.RESULT_CANCELED, null, null);
             }
         } catch (Throwable error) {
-            Log.w("SimpleHook", "Runtime request broadcast failed", error);
+            Log.w("SimpleHook", "Runtime request broadcast failed: id=" + requestId
+                    + " attempt=" + attempt, error);
         }
     }
 

@@ -18,11 +18,13 @@ public final class InspectorEngine {
     private final String processName;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, Long> handledAt = new ConcurrentHashMap<>();
     private final ExecutorService workers = Executors.newFixedThreadPool(2, runnable -> {
         Thread thread = new Thread(runnable, "AutoCrack-RuntimeWorker");
         thread.setDaemon(true);
         return thread;
     });
+    private static final long HANDLED_REQUEST_TTL_MS = 120_000L;
 
     public InspectorEngine(Context context, String packageName, String processName) {
         this.context = context;
@@ -39,6 +41,7 @@ public final class InspectorEngine {
 
     private void poll() {
         try {
+            pruneHandledRequests();
             org.json.JSONArray requests = channel.pending(packageName, processName);
             for (int i = 0; i < requests.length(); i++) enqueue(requests.getJSONObject(i));
         } catch (Throwable error) {
@@ -50,11 +53,28 @@ public final class InspectorEngine {
 
     private void enqueue(JSONObject request) throws Exception {
         String id = request.getString("request_id");
-        if (!inFlight.add(id)) return;
+        if (handledAt.containsKey(id)) {
+            XposedBridge.log("RuntimeInspector request duplicate already handled: id=" + id);
+            return;
+        }
+        if (!inFlight.add(id)) {
+            XposedBridge.log("RuntimeInspector request duplicate in flight: id=" + id);
+            return;
+        }
+        XposedBridge.log("RuntimeInspector request accepted: id=" + id
+                + " kind=" + request.optString("kind", ""));
         workers.execute(() -> {
             try { handle(request); }
-            finally { main.postDelayed(() -> inFlight.remove(id), 1_000L); }
+            finally {
+                handledAt.put(id, System.currentTimeMillis());
+                inFlight.remove(id);
+            }
         });
+    }
+
+    private void pruneHandledRequests() {
+        long oldest = System.currentTimeMillis() - HANDLED_REQUEST_TTL_MS;
+        handledAt.entrySet().removeIf(entry -> entry.getValue() < oldest);
     }
 
     private void handle(JSONObject request) {

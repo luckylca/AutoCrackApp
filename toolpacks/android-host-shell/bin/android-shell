@@ -4,6 +4,7 @@ import os
 import re
 import socket
 import sys
+import time
 
 HOST_ENV = "AUTOC_ANDROID_HOST_ADDR"
 PORT_ENV = "AUTOC_ANDROID_HOST_PORT"
@@ -98,6 +99,19 @@ def read_response(sock):
     return json.loads(line.decode("utf-8"))
 
 
+def connect_bridge(host: str, port: int, attempts: int = 3, timeout: float = 2.0):
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            return socket.create_connection((host, port), timeout=timeout)
+        except OSError as error:
+            last_error = error
+            if attempt + 1 >= attempts:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+    raise last_error
+
+
 def main() -> int:
     timeout_ms, reason, command = parse(sys.argv[1:])
     host = os.environ.get(HOST_ENV, "")
@@ -129,7 +143,7 @@ def main() -> int:
         if stdin:
             request["stdin"] = stdin
 
-    with socket.create_connection((host, int(port_text)), timeout=5.0) as sock:
+    with connect_bridge(host, int(port_text)) as sock:
         # create_connection() leaves the 5 s connect timeout on the socket. Host commands such as
         # dumpsys can legitimately take longer, so response reads must follow the requested command
         # timeout instead of the short connection-establishment timeout.

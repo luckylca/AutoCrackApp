@@ -10,6 +10,9 @@ import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Binder;
+import android.os.IBinder;
+import android.os.Parcel;
 import com.luckylca.autocrack.runtime.shared.RuntimeRequestStore;
 import de.robv.android.xposed.XSharedPreferences;
 import java.util.UUID;
@@ -30,11 +33,17 @@ final class InspectorChannel {
     private static final String EVENT_PREFS = "simplehook_rules";
     private static final String CHANNEL_TOKEN = "channel_token";
     private static final String EVENT_RECEIVER = "com.luckylca.simplehook.runtime.RuntimeEventReceiver";
+    private static final String REQUEST_BINDER = "runtime_request_binder";
+    private static final String REQUEST_BINDER_PROCESS = "runtime_request_binder_process";
+    private static final String REQUEST_BINDER_DESCRIPTOR = "com.luckylca.autocrack.runtime.REQUEST_ENDPOINT";
+    private static final int REQUEST_BINDER_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION;
 
     private final Context context;
     private final XSharedPreferences preferences;
     private final XSharedPreferences eventPreferences;
     private volatile boolean requestReceiverRegistered;
+    private volatile int moduleUid = -1;
+    private volatile IBinder requestEndpoint;
 
     InspectorChannel(Context context) {
         this.context = context;
@@ -48,17 +57,78 @@ final class InspectorChannel {
             de.robv.android.xposed.XposedBridge.log("RuntimeInspector request broadcast receiver disabled before API 34; using provider/XSharedPreferences polling");
             return;
         }
+        requestEndpoint = new Binder() {
+            @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws android.os.RemoteException {
+                if (code == INTERFACE_TRANSACTION) {
+                    if (reply != null) reply.writeString(REQUEST_BINDER_DESCRIPTOR);
+                    return true;
+                }
+                if (code != REQUEST_BINDER_TRANSACTION) return super.onTransact(code, data, reply, flags);
+                try {
+                    data.enforceInterface(REQUEST_BINDER_DESCRIPTOR);
+                    int expectedUid = moduleUid;
+                    if (expectedUid < 0 || Binder.getCallingUid() != expectedUid) {
+                        if (reply != null) {
+                            reply.writeNoException();
+                            reply.writeInt(0);
+                            reply.writeString("Runtime request Binder caller UID is not the verified module UID");
+                        }
+                        return true;
+                    }
+                    String raw = data.readString();
+                    JSONObject request = new JSONObject(raw == null ? "{}" : raw);
+                    if (!packageName.equals(request.optString("package"))) {
+                        if (reply != null) {
+                            reply.writeNoException();
+                            reply.writeInt(0);
+                            reply.writeString("Runtime request Binder package does not match target");
+                        }
+                        return true;
+                    }
+                    String wantedProcess = request.isNull("process") ? null : request.optString("process", null);
+                    if (wantedProcess != null && !wantedProcess.equals(processName)) {
+                        if (reply != null) {
+                            reply.writeNoException();
+                            reply.writeInt(0);
+                            reply.writeString("Runtime request Binder process does not match target");
+                        }
+                        return true;
+                    }
+                    handler.handle(request);
+                    if (reply != null) {
+                        reply.writeNoException();
+                        reply.writeInt(1);
+                        reply.writeString("");
+                    }
+                    return true;
+                } catch (Throwable error) {
+                    de.robv.android.xposed.XposedBridge.log("RuntimeInspector request Binder rejected: " + error);
+                    if (reply != null) {
+                        reply.writeNoException();
+                        reply.writeInt(0);
+                        reply.writeString(error.toString());
+                    }
+                    return true;
+                }
+            }
+        };
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context ignored, Intent intent) {
                 if (!ACTION_REQUEST.equals(intent.getAction())) return;
                 try {
-                    verifyModuleSender(this);
+                    moduleUid = verifyModuleSender(this);
                     JSONObject request = new JSONObject(intent.getStringExtra(JSON));
                     if (!packageName.equals(request.optString("package"))) return;
                     String wantedProcess = request.isNull("process") ? null : request.optString("process", null);
                     if (wantedProcess != null && !wantedProcess.equals(processName)) return;
                     handler.handle(request);
-                    if (isOrderedBroadcast()) setResultCode(Activity.RESULT_OK);
+                    if (isOrderedBroadcast()) {
+                        Bundle resultExtras = getResultExtras(true);
+                        resultExtras.putBinder(REQUEST_BINDER, requestEndpoint);
+                        resultExtras.putString(REQUEST_BINDER_PROCESS, processName);
+                        setResultExtras(resultExtras);
+                        setResultCode(Activity.RESULT_OK);
+                    }
                 } catch (Throwable error) {
                     if (isOrderedBroadcast()) setResultCode(Activity.RESULT_CANCELED);
                     de.robv.android.xposed.XposedBridge.log("RuntimeInspector request broadcast rejected: " + error);
@@ -143,11 +213,11 @@ final class InspectorChannel {
         }
     }
 
-    private void verifyModuleSender(BroadcastReceiver receiver) {
+    private int verifyModuleSender(BroadcastReceiver receiver) {
         int uid = receiver.getSentFromUid();
         String[] packages = uid < 0 ? null : context.getPackageManager().getPackagesForUid(uid);
         if (packages == null) throw new SecurityException("Runtime request sender package unavailable");
-        for (String item : packages) if (MODULE_PACKAGE.equals(item)) return;
+        for (String item : packages) if (MODULE_PACKAGE.equals(item)) return uid;
         throw new SecurityException("Runtime request sender is not AutoCrack Runtime");
     }
 

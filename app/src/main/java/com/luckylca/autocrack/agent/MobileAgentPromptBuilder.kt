@@ -18,6 +18,12 @@ object MobileAgentPromptBuilder {
                         command.description.takeIf(String::isNotBlank)?.let { append(" — ").append(it) }
                         appendLine()
                     }
+                    if ("SKILL.md" in pack.manifest.requiredPaths) {
+                        append("  - skill: /opt/autocrack/toolpacks/active/")
+                            .append(pack.manifest.id)
+                            .append("/SKILL.md")
+                        appendLine()
+                    }
                 }.trimEnd()
             }
         }
@@ -34,11 +40,15 @@ object MobileAgentPromptBuilder {
             $toolpacks
 
             Guidelines:
-            - Use exec_bash for shell commands and file operations such as ls, rg, grep, and find.
-            - Use read_file and write_file for file contents under /workspace.
+            - Keep the harness simple: exec_bash is the main capability. Installed toolpacks are ordinary shell commands on PATH, not separate model tools.
+            - Use read_file and write_file for file contents under /workspace; use exec_bash for shell discovery, pipelines, scripts, rg/grep/find, and CLI composition.
+            - Before first using a non-trivial installed CLI for a task, inspect its --help. If its entry above exposes a skill path, read that SKILL.md when the task matches the toolpack.
             - Use android-shell from Bash when a command must run on the Android host rather than inside Debian.
-            - Installed toolpacks share the same runtime environment; prefer their standard upstream CLI and language APIs.
-            - If a command fails, use its output to adjust your approach.
+            - Prefer machine-readable --json output when a CLI supports it. Check ok, supported, error/reason, handles, and tokens instead of assuming empty output means success.
+            - For the shared AutoCrack Runtime CLI family, use runtime-inspect doctor --package <target> --json when runtime readiness is unknown or after a bridge/runtime failure. Do not change LSPosed configuration merely because a heartbeat is absent.
+            - Treat returned obj_* handles and asynchronous tokens as opaque values. Reuse the exact value and follow the CLI's corresponding result/release command when required.
+            - Installed toolpacks share the same runtime environment; prefer their standard CLI and language APIs and compose them through Bash.
+            - If a command fails, read the structured error, inspect --help/SKILL.md, diagnose the dependency, and choose a supported fallback rather than fabricating success.
             - Clean up background processes you start when they are no longer needed.
             - Be concise in your responses and show file paths clearly when working with files.
 

@@ -35,6 +35,28 @@ class AndroidHostShellBridgeTest {
     }
 
     @Test
+    fun runtimeToolpackMutationsAreGatedButInspectionRemainsReadOnly() {
+        assertNull(MobileAgentDangerousCommandClassifier.classify("runtime-inspect process --package com.example --json"))
+        assertNull(MobileAgentDangerousCommandClassifier.classify("ui-inspect tree --package com.example --json"))
+        assertNull(MobileAgentDangerousCommandClassifier.classify("runtime-control secure-status --package com.example --json"))
+        assertNull(MobileAgentDangerousCommandClassifier.classify("simplehook rules list --json"))
+
+        listOf(
+            "runtime-control process-kill --package com.example --json",
+            "runtime-control webview-eval --package com.example obj_1 'window.x=1' --json",
+            "runtime-control so-inject --package com.example /data/local/tmp/libx.so --json",
+            "ui-inspect action --package com.example obj_1 --action-json '{\"type\":\"perform_click\"}' --json",
+            "simplehook reload --json",
+            "simplehook rules add /workspace/rule.json --json",
+        ).forEach { command ->
+            assertEquals(
+                DangerousOperationCategory.TARGET_RUNTIME_MUTATION,
+                MobileAgentDangerousCommandClassifier.classify(command),
+            )
+        }
+    }
+
+    @Test
     fun onlyDeviceDestructiveShellOperationsRemainGated() {
         assertEquals(
             DangerousOperationCategory.DESTRUCTIVE_DELETE,

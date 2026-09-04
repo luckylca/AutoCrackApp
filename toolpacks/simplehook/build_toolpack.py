@@ -34,7 +34,7 @@ def main():
     if dist.exists():
         shutil.rmtree(dist)
     for relative in ("bin/simplehook", "libexec/simplehook_cli.py", "schema/simplehook-rule-v1.schema.json",
-                     "examples/replace-return-int.json", "README.md", "VERSION"):
+                     "examples/replace-return-int.json", "SKILL.md", "README.md", "VERSION"):
         source = root / relative
         destination = payload / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ def main():
         "payloadEntry": "payload.zip",
         "payloadSha256": payload_hash,
         "payloadSizeBytes": payload_size,
-        "requiredPaths": ["bin/simplehook", "libexec/simplehook_cli.py", "schema/simplehook-rule-v1.schema.json", "README.md", "VERSION"],
+        "requiredPaths": ["bin/simplehook", "libexec/simplehook_cli.py", "schema/simplehook-rule-v1.schema.json", "SKILL.md", "README.md", "VERSION"],
         "commands": [{"name": "simplehook", "relativePath": "bin/simplehook", "description": "Manage Android Java method debug rules, inspect loaded classes, and query JSONL runtime logs."}],
         "selfTests": [
             {"id": "simplehook-help", "title": "SimpleHook CLI command surface", "command": f"{pack_root}/bin/simplehook --help", "expectedExitCodes": [0], "outputContains": ["rules", "inspect", "environment"]},

@@ -26,7 +26,7 @@ def main():
     dist = root / "dist"
     payload = dist / "payload"
     if dist.exists(): shutil.rmtree(dist)
-    for rel in ("bin/runtime-control", "libexec/runtime_control_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"):
+    for rel in ("bin/runtime-control", "libexec/runtime_control_cli.py", "libexec/autocrack_runtime_client.py", "SKILL.md", "README.md", "VERSION"):
         dst = payload / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / rel, dst)
@@ -43,7 +43,7 @@ def main():
         "payloadEntry": "payload.zip",
         "payloadSha256": sha(payload_zip),
         "payloadSizeBytes": payload_zip.stat().st_size,
-        "requiredPaths": ["bin/runtime-control", "libexec/runtime_control_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"],
+        "requiredPaths": ["bin/runtime-control", "libexec/runtime_control_cli.py", "libexec/autocrack_runtime_client.py", "SKILL.md", "README.md", "VERSION"],
         "commands": [{"name": "runtime-control", "relativePath": "bin/runtime-control", "description": "Start activities, kill processes, inject SOs, disable FLAG_SECURE and control WebView debugging/eval."}],
         "selfTests": [{"id": "runtime-control-help", "title": "AutoCrack Runtime Control CLI surface", "command": f"{pack_root}/bin/runtime-control --help", "expectedExitCodes": [0], "outputContains": ["webview-debug", "webview-devtools-sockets", "secure-diagnose", "secure-disable", "so-diagnose", "activity-start"]}],
         "sources": [{"name": "runtime-control-cli", "version": "1.0.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/runtime-control", "sha256": sha(root / "libexec" / "runtime_control_cli.py")}],

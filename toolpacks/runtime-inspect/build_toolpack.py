@@ -26,7 +26,7 @@ def main():
     dist = root / "dist"
     payload = dist / "payload"
     if dist.exists(): shutil.rmtree(dist)
-    for rel in ("bin/runtime-inspect", "libexec/runtime_inspect_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"):
+    for rel in ("bin/runtime-inspect", "libexec/runtime_inspect_cli.py", "libexec/autocrack_runtime_client.py", "SKILL.md", "README.md", "VERSION"):
         dst = payload / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / rel, dst)
@@ -43,7 +43,7 @@ def main():
         "payloadEntry": "payload.zip",
         "payloadSha256": sha(payload_zip),
         "payloadSizeBytes": payload_zip.stat().st_size,
-        "requiredPaths": ["bin/runtime-inspect", "libexec/runtime_inspect_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"],
+        "requiredPaths": ["bin/runtime-inspect", "libexec/runtime_inspect_cli.py", "libexec/autocrack_runtime_client.py", "SKILL.md", "README.md", "VERSION"],
         "commands": [{"name": "runtime-inspect", "relativePath": "bin/runtime-inspect", "description": "Inspect target process, Activity, ClassLoader, class metadata and object handles."}],
         "selfTests": [{"id": "runtime-inspect-help", "title": "AutoCrack Runtime Inspect CLI surface", "command": f"{pack_root}/bin/runtime-inspect --help", "expectedExitCodes": [0], "outputContains": ["doctor", "class-search", "object-dump", "activities"]}],
         "sources": [{"name": "runtime-inspect-cli", "version": "1.0.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/runtime-inspect", "sha256": sha(root / "libexec" / "runtime_inspect_cli.py")}],

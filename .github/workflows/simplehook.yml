@@ -96,13 +96,14 @@ jobs:
             .schemaVersion == 2 and
             .id == "simplehook" and
             .version == "simplehook-0.1.1" and
-            .payloadSha256 == "1a8bb6b16b979cac8eec95abd343126501bba6148c744f5dfea5c466fe376996" and
-            .payloadSizeBytes == 43367 and
+            .payloadSha256 == "28adb59057472533286bd091f7a53abf68915015dd471cd289bc887febfd384c" and
+            .payloadSizeBytes == 44254 and
             .sources[0].sha256 == "af22a087912fd465b10d5f5bdef651ce38ced92341f40d47b60d2771cb2ed88e" and
             .requires.runtime == ">=1.0.0" and
             (.requires.capabilities | index("hook.reload")) != null and
             (.requires.capabilities | index("hook.inspect")) != null and
             (.requires.commands | index("android-shell")) != null and
+            (.requiredPaths | index("SKILL.md")) != null and
             ([.commands[].name] | index("simplehook")) != null
           ' toolpacks/simplehook/dist/manifest.json >/dev/null
 

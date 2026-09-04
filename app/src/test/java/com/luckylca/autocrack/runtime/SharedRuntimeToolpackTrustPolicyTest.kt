@@ -50,12 +50,13 @@ class SharedRuntimeToolpackTrustPolicyTest {
   "description": "Inspect live Android windows, View trees, listeners, images and runtime-only View mutations.",
   "architecture": "all",
   "payloadEntry": "payload.zip",
-  "payloadSha256": "00f14a9e48546435d7cf1794fb25b5cd11645488d6d8f348b6037c5b61017bbd",
-  "payloadSizeBytes": 12892,
+  "payloadSha256": "b0d2b390a049537b84532bca827832816fc0d3a779b2e6ddb4c28b76ba584183",
+  "payloadSizeBytes": 19712,
   "requiredPaths": [
     "bin/ui-inspect",
     "libexec/ui_inspect_cli.py",
     "libexec/autocrack_runtime_client.py",
+    "SKILL.md",
     "README.md",
     "VERSION"
   ],
@@ -127,12 +128,13 @@ class SharedRuntimeToolpackTrustPolicyTest {
   "description": "Inspect target process, Activity, ClassLoader, class metadata and object handles.",
   "architecture": "all",
   "payloadEntry": "payload.zip",
-  "payloadSha256": "6ddcf859c1d30749ad1ff1d65d850b1c16bf6b5a485e320d85a343b16884789f",
-  "payloadSizeBytes": 10926,
+  "payloadSha256": "a3d409c6a762bc72261c6438c622e598707f0b6a2aacfa3a58358eafe6b80e3b",
+  "payloadSizeBytes": 17926,
   "requiredPaths": [
     "bin/runtime-inspect",
     "libexec/runtime_inspect_cli.py",
     "libexec/autocrack_runtime_client.py",
+    "SKILL.md",
     "README.md",
     "VERSION"
   ],
@@ -202,12 +204,13 @@ class SharedRuntimeToolpackTrustPolicyTest {
   "description": "Dump bounded maps, memory ranges, modules, SO segments, Dex, runtime assets and XML.",
   "architecture": "all",
   "payloadEntry": "payload.zip",
-  "payloadSha256": "c646d89896b977de617926f541ad8df88f5c552799c6bab5cd441d590954658b",
-  "payloadSizeBytes": 44993,
+  "payloadSha256": "85bef17c35ffd209b9b49243baad449f477730cd379f41072b57636056bf73e6",
+  "payloadSizeBytes": 51936,
   "requiredPaths": [
     "bin/memory-dump",
     "libexec/memory_dump_cli.py",
     "libexec/autocrack_runtime_client.py",
+    "SKILL.md",
     "README.md",
     "VERSION"
   ],
@@ -289,8 +292,7 @@ class SharedRuntimeToolpackTrustPolicyTest {
     ],
     "optionalCapabilities": [
       "memory.xml.block_probe",
-      "memory.xml.binary",
-      "memory.dex.art_pointer"
+      "memory.xml.binary"
     ]
   }
 }
@@ -305,12 +307,13 @@ class SharedRuntimeToolpackTrustPolicyTest {
   "description": "Start activities, kill processes, inject SOs, disable FLAG_SECURE and control WebView debugging/eval.",
   "architecture": "all",
   "payloadEntry": "payload.zip",
-  "payloadSha256": "8ee12531fbe11a668df6ef343741b78fe4aeb6f0ce6e58a6ff659834dd2b11aa",
-  "payloadSizeBytes": 19285,
+  "payloadSha256": "0d988732a70c560f4b6a055991f7f8b3baedc2a85c71cf1eab798c8477bfbdac",
+  "payloadSizeBytes": 26039,
   "requiredPaths": [
     "bin/runtime-control",
     "libexec/runtime_control_cli.py",
     "libexec/autocrack_runtime_client.py",
+    "SKILL.md",
     "README.md",
     "VERSION"
   ],

@@ -65,8 +65,9 @@ echo "== status =="
 call_provider runtime_status '{}' | json_from_bundle
 SIMPLEHOOK_ANDROID_SHELL="${adb_cmd[*]} shell" python3 toolpacks/simplehook/libexec/simplehook_cli.py status --json || true
 
-echo "== runtime request =="
-AUTOCRACK_ANDROID_SHELL="${adb_cmd[*]} shell" python3 toolpacks/runtime-inspect/libexec/runtime_inspect_cli.py capabilities --package "$TARGET" --timeout "$TIMEOUT" --json
+echo "== current Mobile Agent Runtime transport replay =="
+ADB="$ADB" SERIAL="$SERIAL" TARGET="$TARGET" ACTIVITY="$ACTIVITY" \
+  scripts/verify_mobile_agent_runtime_e2e_on_device.sh
 
 echo "== logcat evidence =="
-"${adb_cmd[@]}" logcat -d -v time | grep -Ei 'RuntimeInspector request broadcast|provider pending unavailable|provider complete unavailable|result event|runtime_complete|Runtime event rejected|AppsFilter|Unknown authority|AutoCrack Runtime attached' | tail -120 || true
+"${adb_cmd[@]}" logcat -d -v time | grep -Ei 'RuntimeInspector request accepted|Runtime request Binder cached|Runtime request delivered via Binder|Runtime request Binder died|Runtime request delivery acknowledged|Greezer Denial|Transaction failed because process frozen|provider pending unavailable|provider complete unavailable|AppsFilter|Unknown authority|AutoCrack Runtime attached' | tail -160 || true

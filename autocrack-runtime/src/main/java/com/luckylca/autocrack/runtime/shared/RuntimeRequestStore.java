@@ -58,6 +58,11 @@ public final class RuntimeRequestStore {
         return ok().put("requests", selected);
     }
 
+    public synchronized boolean isPending(String id) throws Exception {
+        prune();
+        return object(REQUESTS).has(id);
+    }
+
     public synchronized JSONObject result(String id) throws Exception {
         prune();
         JSONObject results = object(RESULTS);

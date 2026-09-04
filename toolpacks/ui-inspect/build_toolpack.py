@@ -26,7 +26,7 @@ def main():
     dist = root / "dist"
     payload = dist / "payload"
     if dist.exists(): shutil.rmtree(dist)
-    for rel in ("bin/ui-inspect", "libexec/ui_inspect_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"):
+    for rel in ("bin/ui-inspect", "libexec/ui_inspect_cli.py", "libexec/autocrack_runtime_client.py", "SKILL.md", "README.md", "VERSION"):
         dst = payload / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / rel, dst)
@@ -43,7 +43,7 @@ def main():
         "payloadEntry": "payload.zip",
         "payloadSha256": sha(payload_zip),
         "payloadSizeBytes": payload_zip.stat().st_size,
-        "requiredPaths": ["bin/ui-inspect", "libexec/ui_inspect_cli.py", "libexec/autocrack_runtime_client.py", "README.md", "VERSION"],
+        "requiredPaths": ["bin/ui-inspect", "libexec/ui_inspect_cli.py", "libexec/autocrack_runtime_client.py", "SKILL.md", "README.md", "VERSION"],
         "commands": [{"name": "ui-inspect", "relativePath": "bin/ui-inspect", "description": "Inspect live Android windows, View trees, listeners, images and runtime-only View mutations."}],
         "selfTests": [{"id": "ui-inspect-help", "title": "AutoCrack UI Inspect CLI surface", "command": f"{pack_root}/bin/ui-inspect --help", "expectedExitCodes": [0], "outputContains": ["windows", "listeners", "compose-tree"]}],
         "sources": [{"name": "ui-inspect-cli", "version": "1.0.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/ui-inspect", "sha256": sha(root / "libexec" / "ui_inspect_cli.py")}],
