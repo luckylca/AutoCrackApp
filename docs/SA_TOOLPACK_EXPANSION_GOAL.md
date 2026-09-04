@@ -1,6 +1,6 @@
 # AutoCrackApp S+A Toolpack Expansion Goal
 
-Status: ACTIVE
+Status: COMPLETE (2026-09-04)
 
 This document is the release contract for the next AutoCrackApp Toolpack phase.
 
@@ -120,3 +120,31 @@ Every Toolpack must include:
 - Preserve generated disassembly/symbol/object-pool/script artifacts supplied by upstream.
 - Keep upstream build/runtime scripts available; AutoCrack helpers may only add discovery and stable workspace paths.
 - Where a particular Flutter/Dart version or binary shape is unsupported upstream, report that exact upstream limitation instead of silently downgrading the analysis.
+
+## 5. Release closure evidence
+
+The S+A expansion is complete as of commit `e25499c` on `main`.
+
+All eight required production Toolpacks are present and trusted:
+
+1. `apkid`
+2. `androguard`
+3. `jnitrace`
+4. `uiautomator2`
+5. `mitmproxy`
+6. `frida-il2cpp-bridge`
+7. `capa`
+8. `blutter`
+
+Validation closure:
+
+- GitHub Actions run `33886909364` (`Build support and S+A toolpacks`) completed successfully for commit `e25499c`.
+- All 11 jobs in that workflow completed successfully, including all eight S+A Toolpacks plus the shared support-toolpack jobs.
+- GitHub Actions run `33886909467` (`Android CI`) completed successfully for commit `e25499c`.
+- GitHub Actions run `33880615285` (`Build Debian arm64 rootfs`) completed successfully for the rootfs dependency update at commit `64a191ac`; later S+A closure commits did not change the rootfs package definition.
+- The Android/rootfs-only policy gate reports `ANDROID_ROOTFS_ONLY_RUNTIME_CHECK_OK`.
+- Local workflow YAML parsing, shell syntax checks for all ARM64 smoke blocks, `git diff --check`, App unit tests, lint, and debug APK assembly were run successfully before the final remote closure.
+
+The ARM64 workflow verifies the packaged CLI/API/runtime surface in Debian Bookworm ARM64. Operations that inherently require a live authorized Android target, network peer, IL2CPP process, or Flutter application remain target-dependent runtime workflows rather than synthetic CI simulations; their upstream command/library surfaces and required runtime assets are preserved by the Toolpacks.
+
+Upstream platform limitations remain upstream limitations rather than AutoCrack capability removal. In particular, Blutter continues to follow the upstream Android ARM64 / supported Dart-version boundaries documented in its Toolpack skill.
