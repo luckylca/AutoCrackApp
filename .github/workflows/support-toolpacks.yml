@@ -273,7 +273,7 @@ jobs:
               current=engine-js
               test -s /opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js
               current=python-import
-              PYTHONPATH=/opt/autocrack/toolpacks/active/jnitrace/python:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import frida, jnitrace.jnitrace; print(frida.__version__); print('AUTOCRACK_JNITRACE_IMPORT_OK')"                 | grep -F AUTOCRACK_JNITRACE_IMPORT_OK
+              PYTHONPATH=/opt/autocrack/toolpacks/active/jnitrace/python:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import frida, jnitrace.jnitrace; print(frida.__version__); print(\"AUTOCRACK_JNITRACE_IMPORT_OK\")"                 | grep -F AUTOCRACK_JNITRACE_IMPORT_OK
             '
       - uses: actions/upload-artifact@v4
         with:
@@ -346,7 +346,7 @@ jobs:
               current=u2cli-help
               u2cli --help | grep -F "Usage:"
               current=python-api
-              PYTHONPATH=/opt/autocrack/toolpacks/active/uiautomator2/python                 python3 -B -c "import importlib.metadata,pathlib,shutil,uiautomator2,adbutils; p=pathlib.Path(uiautomator2.__file__).parent/'assets'; assert (p/'app-uiautomator.apk').is_file(); assert (p/'u2.jar').is_file(); assert shutil.which('adb'); print(importlib.metadata.version('uiautomator2')); print(importlib.metadata.version('adbutils')); print('AUTOCRACK_UIAUTOMATOR2_API_OK')"                 | grep -F AUTOCRACK_UIAUTOMATOR2_API_OK
+              PYTHONPATH=/opt/autocrack/toolpacks/active/uiautomator2/python                 python3 -B -c "import importlib.metadata,pathlib,shutil,uiautomator2,adbutils; p=pathlib.Path(uiautomator2.__file__).parent/\"assets\"; assert (p/\"app-uiautomator.apk\").is_file(); assert (p/\"u2.jar\").is_file(); assert shutil.which(\"adb\"); print(importlib.metadata.version(\"uiautomator2\")); print(importlib.metadata.version(\"adbutils\")); print(\"AUTOCRACK_UIAUTOMATOR2_API_OK\")"                 | grep -F AUTOCRACK_UIAUTOMATOR2_API_OK
             '
       - uses: actions/upload-artifact@v4
         with:
@@ -474,7 +474,7 @@ jobs:
               current=help-signatures
               capa --help | grep -F -- "--signatures"
               current=python-api-rules
-              PYTHONPATH=/opt/autocrack/toolpacks/active/capa/python                 python3 -B -c "import pathlib,capa,capa.main,capa.loader,capa.rules,capa.engine,capa.render.json; root=pathlib.Path(capa.__file__).resolve().parent.parent; assert len(list((root/'rules').rglob('*.yml')))==1042; assert len(list((root/'sigs').glob('*.sig')))==3; capa.rules.get_rules([root/'rules']); assert len(capa.main.get_default_signatures())==3; print('AUTOCRACK_CAPA_API_RULES_OK')"                 | grep -F AUTOCRACK_CAPA_API_RULES_OK
+              PYTHONPATH=/opt/autocrack/toolpacks/active/capa/python                 python3 -B -c "import pathlib,capa,capa.main,capa.loader,capa.rules,capa.engine,capa.render.json; root=pathlib.Path(capa.__file__).resolve().parent.parent; assert len(list((root/\"rules\").rglob(\"*.yml\")))==1042; assert len(list((root/\"sigs\").glob(\"*.sig\")))==3; capa.rules.get_rules([root/\"rules\"]); assert len(capa.main.get_default_signatures())==3; print(\"AUTOCRACK_CAPA_API_RULES_OK\")"                 | grep -F AUTOCRACK_CAPA_API_RULES_OK
             '
       - uses: actions/upload-artifact@v4
         with:
@@ -544,7 +544,7 @@ jobs:
               current=capstone
               pkg-config --exists capstone
               current=python-imports
-              PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import elftools,requests;print('AUTOCRACK_BLUTTER_TOOLCHAIN_OK')"                 | grep -F AUTOCRACK_BLUTTER_TOOLCHAIN_OK
+              PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import elftools,requests;print(\"AUTOCRACK_BLUTTER_TOOLCHAIN_OK\")"                 | grep -F AUTOCRACK_BLUTTER_TOOLCHAIN_OK
               current=cmake-patch-marker
               grep -F "AutoCrack Debian ARM64 compatibility"                 /opt/autocrack/toolpacks/active/blutter/upstream/blutter/CMakeLists.txt
               current=cmake-dead-strip-removed
@@ -647,7 +647,7 @@ jobs:
               current=version-number
               frida-il2cpp-bridge --version | grep -F "0.13.2"
               current=python-import
-              PYTHONPATH=/opt/autocrack/toolpacks/active/frida-il2cpp-bridge/cli:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import src.app,src.dump.command; print('AUTOCRACK_IL2CPP_PY311_OK')"                 | grep -F AUTOCRACK_IL2CPP_PY311_OK
+              PYTHONPATH=/opt/autocrack/toolpacks/active/frida-il2cpp-bridge/cli:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import src.app,src.dump.command; print(\"AUTOCRACK_IL2CPP_PY311_OK\")"                 | grep -F AUTOCRACK_IL2CPP_PY311_OK
               current=js-global
               grep -F "globalThis.Il2Cpp = Il2Cpp"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.js
               current=types-perform

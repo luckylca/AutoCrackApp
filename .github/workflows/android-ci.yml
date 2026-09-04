@@ -102,10 +102,17 @@ jobs:
                 .safetyBoundary.registerWriteAllowed == false and
                 .safetyBoundary.memoryReadAllowed == true and
                 .safetyBoundary.memoryWriteAllowed == false and
-                .safetyBoundary.breakpointAllowed == false and
+                .safetyBoundary.breakpointAllowed == true and
+                ([.safetyBoundary.breakpointKinds[]] | index("hardware_execution") != null) and
+                .safetyBoundary.breakpointRequiresStoppedTarget == true and
                 .safetyBoundary.rawDebuggerPacketAllowed == false and
                 .safetyBoundary.signalsAllowed == false and
-                .safetyBoundary.injectionAllowed == false and
+                .safetyBoundary.injectionAllowed == true and
+                .safetyBoundary.injectionScope == "fixed_bounded_frida_agent_only" and
+                .safetyBoundary.arbitraryScriptInjectionAllowed == false and
+                .safetyBoundary.returnValueReplacementAllowed == false and
+                .safetyBoundary.arbitrarySpawnAllowed == false and
+                .safetyBoundary.targetFileWriteAllowed == false and
                 .safetyBoundary.orphanDebuggerRecoveryAllowed == true and
                 .safetyBoundary.orphanDebuggerRecoveryRequiresExactAuthorization == true and
                 ([.tools[].id] | index("host.debugger.lldb_server_session") != null) and
