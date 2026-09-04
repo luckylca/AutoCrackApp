@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+ROOT="/opt/autocrack/toolpacks/active/jnitrace"
+FRIDA_ROOT="/opt/autocrack/toolpacks/active/android-frida"
+export PYTHONPATH="$ROOT/python:$FRIDA_ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c '
+import sys
+sys.argv[0] = "jnitrace"
+from jnitrace.jnitrace import main
+raise SystemExit(main())
+' "$@"

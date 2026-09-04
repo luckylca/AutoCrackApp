@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+ROOT="/opt/autocrack/toolpacks/active/blutter"
+REV="4a60ac648bf448c5a7596437243bcd0b9376fdf0"
+STATE="${AUTOCRACK_BLUTTER_STATE_DIR:-/workspace/.autocrack/blutter/$REV}"
+MARKER="$STATE/.autocrack-source-revision"
+
+if [ ! -f "$MARKER" ] || [ "$(cat "$MARKER" 2>/dev/null || true)" != "$REV" ]; then
+    if [ -e "$STATE" ] && [ ! -f "$MARKER" ]; then
+        echo "Refusing to overwrite existing unowned Blutter state: $STATE" >&2
+        echo "Set AUTOCRACK_BLUTTER_STATE_DIR to an empty directory." >&2
+        exit 2
+    fi
+    mkdir -p "$STATE"
+    cp -a "$ROOT/upstream/." "$STATE/"
+    printf '%s\n' "$REV" > "$MARKER"
+fi
+
+export CC="${CC:-clang-16}"
+export CXX="${CXX:-clang++-16}"
+export CXXFLAGS="${CXXFLAGS:--stdlib=libc++ -fexperimental-library}"
+export LDFLAGS="${LDFLAGS:--stdlib=libc++ -fexperimental-library}"
+
+exec python3 "$STATE/blutter.py" "$@"

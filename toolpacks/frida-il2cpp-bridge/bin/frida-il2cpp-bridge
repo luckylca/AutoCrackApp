@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+ROOT="/opt/autocrack/toolpacks/active/frida-il2cpp-bridge"
+FRIDA_ROOT="/opt/autocrack/toolpacks/active/android-frida"
+
+if [ ! -d "$FRIDA_ROOT/python/frida_tools" ] || [ ! -d "$FRIDA_ROOT/python/frida" ]; then
+    echo "android-frida Toolpack is required" >&2
+    exit 2
+fi
+
+export PYTHONPATH="$ROOT/cli:$FRIDA_ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONDONTWRITEBYTECODE=1
+export npm_lifecycle_script="frida-il2cpp-bridge"
+
+exec /usr/bin/python3 -B "$ROOT/cli/main.py" "$@"

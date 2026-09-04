@@ -46,11 +46,18 @@ jobs:
               apt-get install -y --no-install-recommends \
                 bash ca-certificates coreutils findutils grep sed gawk file \
                 tar zip unzip xz-utils zstd curl wget git jq sqlite3 \
-                python3 binutils patchelf procps util-linux \
+                python3 python3-pyelftools python3-requests binutils patchelf procps util-linux adb \
+                cmake ninja-build build-essential pkg-config \
+                clang-16 libc++-16-dev libc++abi-16-dev libicu-dev libcapstone-dev \
                 openjdk-17-jre-headless
               test -x /usr/lib/jvm/java-17-openjdk-arm64/bin/java
               /usr/bin/java -version
               printf "{}\n" | /usr/bin/python3 -m json.tool >/dev/null
+              /usr/bin/clang-16 --version
+              /usr/bin/clang++-16 --version
+              /usr/bin/cmake --version
+              /usr/bin/ninja --version
+              /usr/bin/python3 -c "import elftools, requests"
               apt-get clean
               rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
               mkdir -p /workspace /root /opt/autocrack /opt/autocrack/toolpacks/packs
@@ -86,6 +93,12 @@ jobs:
               "requiredPaths": [
                   "/bin/bash",
                   "/usr/bin/env",
+                  "/usr/bin/adb",
+                  "/usr/bin/clang-16",
+                  "/usr/bin/clang++-16",
+                  "/usr/bin/cmake",
+                  "/usr/bin/ninja",
+                  "/usr/bin/pkg-config",
                   "/usr/bin/file",
                   "/usr/lib/jvm/java-17-openjdk-arm64/bin/java",
                   "/usr/bin/jq",
@@ -107,6 +120,12 @@ jobs:
 
           tar -tJf "$ARCHIVE" > dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)bin/bash$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/adb$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/clang-16$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/clang\+\+-16$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/cmake$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/ninja$' dist/rootfs/rootfs-entries.txt
+          grep -Eq '(^|/)usr/bin/pkg-config$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/java$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/lib/jvm/java-17-openjdk-arm64/bin/java$' dist/rootfs/rootfs-entries.txt
           grep -Eq '(^|/)usr/bin/jq$' dist/rootfs/rootfs-entries.txt

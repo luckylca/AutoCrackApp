@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+ROOT="/opt/autocrack/toolpacks/active/uiautomator2"
+export PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c '
+import sys
+sys.argv[0] = "uiautomator2"
+from uiautomator2.__main__ import main
+raise SystemExit(main())
+' "$@"

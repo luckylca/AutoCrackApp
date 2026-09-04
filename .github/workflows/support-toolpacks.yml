@@ -1,15 +1,25 @@
-name: Build Android host and pcap toolpacks
+name: Build support and S+A toolpacks
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - codex/frida-capabilities-1.0.4
+      - main
     paths:
       - '.github/workflows/support-toolpacks.yml'
       - 'toolpacks/android-host-shell/**'
       - 'toolpacks/android-pcap-helper/**'
       - 'toolpacks/pcap-analysis/**'
+      - 'toolpacks/_shared/**'
+      - 'toolpacks/apkid/**'
+      - 'toolpacks/androguard/**'
+      - 'toolpacks/jnitrace/**'
+      - 'toolpacks/uiautomator2/**'
+      - 'toolpacks/mitmproxy/**'
+      - 'toolpacks/capa/**'
+      - 'toolpacks/blutter/**'
+      - 'toolpacks/frida-il2cpp-bridge/**'
+      - 'scripts/download_locked_wheelhouse.py'
 
 permissions:
   contents: read
@@ -72,6 +82,541 @@ jobs:
             dist/pcap-analysis/manifest.json
             dist/pcap-analysis/payload.sha256
             dist/pcap-analysis/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+
+  apkid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Download pinned Linux ARM64 APKiD wheels
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/apkid-wheelhouse
+          python3 -m pip download \
+            --only-binary=:all: \
+            --platform manylinux2014_aarch64 \
+            --python-version 311 \
+            --implementation cp \
+            --abi cp311 \
+            --dest dist/apkid-wheelhouse \
+            apkid==3.1.0
+          printf '%s  %s\n' \
+            02e349865bc1005ae2beb27fbb58acdeabb56d1a60ce723c344cde1bb32896f8 \
+            dist/apkid-wheelhouse/apkid-3.1.0-py2.py3-none-any.whl | sha256sum -c -
+          printf '%s  %s\n' \
+            a0176641510cff158ab56fd60f8d3b67ffd804441def44df53a87a0632090225 \
+            dist/apkid-wheelhouse/yara_python_dex-1.0.7-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl | sha256sum -c -
+      - name: Build twice and verify deterministic APKiD Toolpack
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/apkid/build_toolpack.py \
+            --wheelhouse dist/apkid-wheelhouse \
+            --output-dir dist/apkid
+          python3 toolpacks/apkid/build_toolpack.py \
+            --wheelhouse dist/apkid-wheelhouse \
+            --output-dir dist/apkid-rerun
+          cmp dist/apkid/payload.sha256 dist/apkid-rerun/payload.sha256
+          cmp dist/apkid/payload.size dist/apkid-rerun/payload.size
+          unzip -t dist/apkid/*toolpack.zip
+      - name: Run APKiD self-tests in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/apkid-unpack
+          unzip -q dist/apkid/*toolpack.zip -d dist/apkid-unpack
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist/apkid-unpack:/input:ro" \
+            debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3 unzip
+              mkdir -p /opt/autocrack/toolpacks/active/apkid
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/apkid
+              chmod 0755 /opt/autocrack/toolpacks/active/apkid/bin/apkid
+              export PATH="/opt/autocrack/toolpacks/active/apkid/bin:$PATH"
+              apkid --help | grep -F "APKiD - Android Application Identifier v3.1.0"
+              PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/autocrack/toolpacks/active/apkid/python \
+                python3 -B -c "import apkid,apkid.apkid,apkid.rules,yara; print(\"AUTOCRACK_APKID_API_OK\")" \
+                | grep -Fx AUTOCRACK_APKID_API_OK
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-apkid-toolpack
+          path: |
+            dist/apkid/*toolpack.zip
+            dist/apkid/*toolpack.zip.sha256
+            dist/apkid/manifest.json
+            dist/apkid/payload.sha256
+            dist/apkid/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  androguard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Restore the exact Androguard ARM64 wheelhouse
+        run: |
+          set -euxo pipefail
+          python3 scripts/download_locked_wheelhouse.py             --lock toolpacks/androguard/wheelhouse.lock.json             --output-dir dist/androguard-wheelhouse
+      - name: Build twice and verify deterministic Androguard Toolpack
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/androguard/build_toolpack.py             --wheelhouse dist/androguard-wheelhouse             --output-dir dist/androguard
+          python3 toolpacks/androguard/build_toolpack.py             --wheelhouse dist/androguard-wheelhouse             --output-dir dist/androguard-rerun
+          cmp dist/androguard/payload.sha256 dist/androguard-rerun/payload.sha256
+          cmp dist/androguard/payload.size dist/androguard-rerun/payload.size
+          cmp             dist/androguard/AutoCrackApp-androguard-androguard-4.1.4_autocrack-1.0.0-toolpack.zip             dist/androguard-rerun/AutoCrackApp-androguard-androguard-4.1.4_autocrack-1.0.0-toolpack.zip
+          unzip -t dist/androguard/AutoCrackApp-androguard-androguard-4.1.4_autocrack-1.0.0-toolpack.zip
+      - name: Run full Androguard API smoke in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/androguard-unpack
+          unzip -q             dist/androguard/AutoCrackApp-androguard-androguard-4.1.4_autocrack-1.0.0-toolpack.zip             -d dist/androguard-unpack
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/androguard-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3 unzip
+              mkdir -p /opt/autocrack/toolpacks/active/androguard
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/androguard
+              chmod 0755 /opt/autocrack/toolpacks/active/androguard/bin/androguard
+              export PATH="/opt/autocrack/toolpacks/active/androguard/bin:$PATH"
+              export PYTHONPATH=/opt/autocrack/toolpacks/active/androguard/python
+              androguard --help | grep -F "Usage:"
+              python3 -B -c "import androguard; from androguard.misc import AnalyzeAPK; from androguard.core.apk import APK; from androguard.core.axml import AXMLPrinter,ARSCParser; print(androguard.__version__)"                 | grep -Fx 4.1.4
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-androguard-toolpack
+          path: |
+            dist/androguard/*toolpack.zip
+            dist/androguard/*toolpack.zip.sha256
+            dist/androguard/manifest.json
+            dist/androguard/payload.sha256
+            dist/androguard/payload.size
+          if-no-files-found: error
+          retention-days: 14
+  jnitrace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JNITRACE_VERSION: "3.3.1"
+      FRIDA_VERSION: "17.17.0"
+      FRIDA_PYTHON_WHEEL_SHA256: "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Fetch pinned jnitrace build inputs and Frida ARM64 binding
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/jnitrace-inputs
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/jnitrace-inputs/jnitrace-3.3.1.tar.gz             https://files.pythonhosted.org/packages/00/d9/25136bf8b76a99c8f93843f75771d2b19b29004d322b94bf565773120c8b/jnitrace-3.3.1.tar.gz
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/jnitrace-inputs/colorama-0.4.6-py2.py3-none-any.whl             https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/jnitrace-inputs/hexdump-3.3.zip             https://files.pythonhosted.org/packages/55/b3/279b1d57fa3681725d0db8820405cdcb4e62a9239c205e4ceac4391c78e4/hexdump-3.3.zip
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/jnitrace-inputs/setuptools-80.9.0-py3-none-any.whl             https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl
+          printf '%s  %s\n' 6fc6b39a561b34415250ddcc8eaa54a8d9414ca4f42532e909506493d471efed dist/jnitrace-inputs/jnitrace-3.3.1.tar.gz | sha256sum -c -
+          printf '%s  %s\n' 4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6 dist/jnitrace-inputs/colorama-0.4.6-py2.py3-none-any.whl | sha256sum -c -
+          printf '%s  %s\n' d781a43b0c16ace3f9366aade73e8ad3a7bd5137d58f0b45ab2d3f54876f20db dist/jnitrace-inputs/hexdump-3.3.zip | sha256sum -c -
+          printf '%s  %s\n' 062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922 dist/jnitrace-inputs/setuptools-80.9.0-py3-none-any.whl | sha256sum -c -
+          python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all:             --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi abi3             "frida==${FRIDA_VERSION}" --dest dist/jnitrace-inputs
+          FRIDA_WHEEL="$(find dist/jnitrace-inputs -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
+          test -n "$FRIDA_WHEEL"
+          printf '%s  %s\n' "$FRIDA_PYTHON_WHEEL_SHA256" "$FRIDA_WHEEL" | sha256sum -c -
+      - name: Build twice and verify deterministic jnitrace Toolpack
+        run: |
+          set -euxo pipefail
+          build_one() {
+            out="$1"
+            python3 toolpacks/jnitrace/build_toolpack.py               --jnitrace-sdist dist/jnitrace-inputs/jnitrace-3.3.1.tar.gz               --colorama-wheel dist/jnitrace-inputs/colorama-0.4.6-py2.py3-none-any.whl               --hexdump-zip dist/jnitrace-inputs/hexdump-3.3.zip               --setuptools-wheel dist/jnitrace-inputs/setuptools-80.9.0-py3-none-any.whl               --output-dir "$out"
+          }
+          build_one dist/jnitrace
+          build_one dist/jnitrace-rerun
+          cmp dist/jnitrace/payload.sha256 dist/jnitrace-rerun/payload.sha256
+          cmp dist/jnitrace/payload.size dist/jnitrace-rerun/payload.size
+          cmp dist/jnitrace/*toolpack.zip dist/jnitrace-rerun/*toolpack.zip
+          grep -Fx b45737d6d9041ef037123589533a8c94e0977a71cd24a24b9e816eb25eb43bcc dist/jnitrace/payload.sha256
+          grep -Fx 4528608 dist/jnitrace/payload.size
+          unzip -t dist/jnitrace/*toolpack.zip
+      - name: Run jnitrace + production Frida integration smoke on Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          rm -rf dist/jnitrace-unpack dist/frida-python
+          mkdir -p dist/jnitrace-unpack dist/frida-python
+          unzip -q dist/jnitrace/*toolpack.zip -d dist/jnitrace-unpack
+          FRIDA_WHEEL="$(find dist/jnitrace-inputs -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
+          unzip -q "$FRIDA_WHEEL" -d dist/frida-python
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/jnitrace-unpack:/jnitrace:ro"             -v "$PWD/dist/frida-python:/frida-python:ro"             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3 unzip
+              mkdir -p /opt/autocrack/toolpacks/active/jnitrace
+              mkdir -p /opt/autocrack/toolpacks/active/android-frida/python
+              unzip -q /jnitrace/payload.zip -d /opt/autocrack/toolpacks/active/jnitrace
+              cp -a /frida-python/. /opt/autocrack/toolpacks/active/android-frida/python/
+              chmod 0755 /opt/autocrack/toolpacks/active/jnitrace/bin/jnitrace
+              export PATH="/opt/autocrack/toolpacks/active/jnitrace/bin:$PATH"
+              jnitrace --version | grep -F "jnitrace 3.3.1"
+              jnitrace --help | grep -F -- "--remote"
+              test -s /opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js
+              PYTHONPATH=/opt/autocrack/toolpacks/active/jnitrace/python:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import frida, jnitrace.jnitrace; print(frida.__version__); print("AUTOCRACK_JNITRACE_IMPORT_OK")"                 | grep -F AUTOCRACK_JNITRACE_IMPORT_OK
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-jnitrace-toolpack
+          path: |
+            dist/jnitrace/*toolpack.zip
+            dist/jnitrace/*toolpack.zip.sha256
+            dist/jnitrace/manifest.json
+            dist/jnitrace/payload.sha256
+            dist/jnitrace/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  uiautomator2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Fetch pinned uiautomator2 and adbutils upstream artifacts
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/uiautomator2-inputs
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/uiautomator2-inputs/uiautomator2-3.7.0-py3-none-any.whl             https://files.pythonhosted.org/packages/55/23/a5f93de8bb197ae2d2d0185c2c13d4b36ae7f18215e3e599e217f8e90e0d/uiautomator2-3.7.0-py3-none-any.whl
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/uiautomator2-inputs/adbutils-2.11.0.tar.gz             https://files.pythonhosted.org/packages/b6/80/c0cc9b47c8273f1f9c5f00577605f9c5903acf74cd80569fa1cb1072fc9f/adbutils-2.11.0.tar.gz
+          printf '%s  %s\n' 731bf4e26e35cd440cd165b399b8a4d4b795178d78b9243769e336aee6dce985             dist/uiautomator2-inputs/uiautomator2-3.7.0-py3-none-any.whl | sha256sum -c -
+          printf '%s  %s\n' 7621182b219163bbfd16a240aa504c7834cf377d2bdc3f10452d5e8266fa7f87             dist/uiautomator2-inputs/adbutils-2.11.0.tar.gz | sha256sum -c -
+          python3 scripts/download_locked_wheelhouse.py             --lock toolpacks/uiautomator2/wheelhouse.lock.json             --output-dir dist/uiautomator2-wheelhouse
+      - name: Build twice and verify deterministic uiautomator2 Toolpack
+        run: |
+          set -euxo pipefail
+          build_one() {
+            out="$1"
+            python3 toolpacks/uiautomator2/build_toolpack.py               --uiautomator2-wheel dist/uiautomator2-inputs/uiautomator2-3.7.0-py3-none-any.whl               --adbutils-sdist dist/uiautomator2-inputs/adbutils-2.11.0.tar.gz               --wheelhouse dist/uiautomator2-wheelhouse               --output-dir "$out"
+          }
+          build_one dist/uiautomator2
+          build_one dist/uiautomator2-rerun
+          cmp dist/uiautomator2/payload.sha256 dist/uiautomator2-rerun/payload.sha256
+          cmp dist/uiautomator2/payload.size dist/uiautomator2-rerun/payload.size
+          cmp dist/uiautomator2/*toolpack.zip dist/uiautomator2-rerun/*toolpack.zip
+          grep -Fx 8765ee4b3a1670985f803db05284ab92499a7797e2d64468b7cb0da94e0ff4ca dist/uiautomator2/payload.sha256
+          grep -Fx 40688700 dist/uiautomator2/payload.size
+          unzip -t dist/uiautomator2/*toolpack.zip
+      - name: Run full uiautomator2 CLI and Python API smoke in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          rm -rf dist/uiautomator2-unpack
+          mkdir -p dist/uiautomator2-unpack
+          unzip -q dist/uiautomator2/*toolpack.zip -d dist/uiautomator2-unpack
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/uiautomator2-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3 unzip adb
+              mkdir -p /opt/autocrack/toolpacks/active/uiautomator2
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/uiautomator2
+              chmod 0755 /opt/autocrack/toolpacks/active/uiautomator2/bin/uiautomator2
+              chmod 0755 /opt/autocrack/toolpacks/active/uiautomator2/bin/u2cli
+              export PATH="/opt/autocrack/toolpacks/active/uiautomator2/bin:$PATH"
+              export PYTHONDONTWRITEBYTECODE=1
+              adb version
+              uiautomator2 version | grep -F "uiautomator2 version: 3.7.0"
+              uiautomator2 --help | grep -F "copy-assets"
+              u2cli --help | grep -F "Usage:"
+              PYTHONPATH=/opt/autocrack/toolpacks/active/uiautomator2/python                 python3 -B -c "import importlib.metadata,pathlib,shutil,uiautomator2,adbutils; p=pathlib.Path(uiautomator2.__file__).parent/'assets'; assert (p/'app-uiautomator.apk').is_file(); assert (p/'u2.jar').is_file(); assert shutil.which('adb'); print(importlib.metadata.version('uiautomator2')); print(importlib.metadata.version('adbutils')); print('AUTOCRACK_UIAUTOMATOR2_API_OK')"                 | grep -F AUTOCRACK_UIAUTOMATOR2_API_OK
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-uiautomator2-toolpack
+          path: |
+            dist/uiautomator2/*toolpack.zip
+            dist/uiautomator2/*toolpack.zip.sha256
+            dist/uiautomator2/manifest.json
+            dist/uiautomator2/payload.sha256
+            dist/uiautomator2/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  mitmproxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Fetch and verify official mitmproxy Linux aarch64 release
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/mitmproxy-inputs
+          curl --fail --location --retry 4 --retry-all-errors             -o dist/mitmproxy-inputs/mitmproxy-12.2.3-linux-aarch64.tar.gz             https://downloads.mitmproxy.org/12.2.3/mitmproxy-12.2.3-linux-aarch64.tar.gz
+          printf '%s  %s\n' b358643a6c4f4b39e33d985350f660b724fece95687d7daa899ef0c4e211f681             dist/mitmproxy-inputs/mitmproxy-12.2.3-linux-aarch64.tar.gz | sha256sum -c -
+      - name: Build twice and verify deterministic mitmproxy Toolpack
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/mitmproxy/build_toolpack.py             --archive dist/mitmproxy-inputs/mitmproxy-12.2.3-linux-aarch64.tar.gz             --output-dir dist/mitmproxy
+          python3 toolpacks/mitmproxy/build_toolpack.py             --archive dist/mitmproxy-inputs/mitmproxy-12.2.3-linux-aarch64.tar.gz             --output-dir dist/mitmproxy-rerun
+          cmp dist/mitmproxy/payload.sha256 dist/mitmproxy-rerun/payload.sha256
+          cmp dist/mitmproxy/payload.size dist/mitmproxy-rerun/payload.size
+          cmp dist/mitmproxy/*toolpack.zip dist/mitmproxy-rerun/*toolpack.zip
+          grep -Fx 79dc61fa447ac820c0026e36268559955e4a0a1ed37da2c9726e64a353a27cfb dist/mitmproxy/payload.sha256
+          grep -Fx 113846151 dist/mitmproxy/payload.size
+          unzip -t dist/mitmproxy/*toolpack.zip
+      - name: Run official commands and embedded addon API in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          rm -rf dist/mitmproxy-unpack
+          mkdir -p dist/mitmproxy-unpack
+          unzip -q dist/mitmproxy/*toolpack.zip -d dist/mitmproxy-unpack
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/mitmproxy-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates unzip
+              mkdir -p /opt/autocrack/toolpacks/active/mitmproxy
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/mitmproxy
+              chmod 0755 /opt/autocrack/toolpacks/active/mitmproxy/bin/mitmproxy
+              chmod 0755 /opt/autocrack/toolpacks/active/mitmproxy/bin/mitmdump
+              chmod 0755 /opt/autocrack/toolpacks/active/mitmproxy/bin/mitmweb
+              export PATH="/opt/autocrack/toolpacks/active/mitmproxy/bin:$PATH"
+              mitmproxy --version | grep -F "Mitmproxy: 12.2.3"
+              mitmweb --help | grep -i -F "usage:"
+              mitmdump -q                 -s /opt/autocrack/toolpacks/active/mitmproxy/examples/autocrack_addon_smoke.py                 | grep -F AUTOCRACK_MITMPROXY_ADDON_API_OK
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-mitmproxy-toolpack
+          path: |
+            dist/mitmproxy/*toolpack.zip
+            dist/mitmproxy/*toolpack.zip.sha256
+            dist/mitmproxy/manifest.json
+            dist/mitmproxy/payload.sha256
+            dist/mitmproxy/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  capa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Fetch pinned capa sources and ARM64 wheelhouse
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/capa-inputs
+          curl --fail --location --retry 6 --retry-all-errors             -o dist/capa-inputs/flare_capa-9.4.0.tar.gz             https://files.pythonhosted.org/packages/source/f/flare-capa/flare_capa-9.4.0.tar.gz
+          curl --fail --location --retry 6 --retry-all-errors             -o dist/capa-inputs/capa-rules-2af9fbfc1c9b4634dbeb76b5d34fca9389fa7f80.zip             https://codeload.github.com/mandiant/capa-rules/zip/2af9fbfc1c9b4634dbeb76b5d34fca9389fa7f80
+          printf '%s  %s\n'             c4f421abac566e23657241e4ddc66119beb0caf5f082ee42d68b7c879ebb7fc6             dist/capa-inputs/flare_capa-9.4.0.tar.gz | sha256sum -c -
+          printf '%s  %s\n'             2b3408c0ef9313683cfe2b7dab6c3fb8c2ac3fa8bb0c95281341d220dfc5e1ca             dist/capa-inputs/capa-rules-2af9fbfc1c9b4634dbeb76b5d34fca9389fa7f80.zip | sha256sum -c -
+          python3 scripts/download_locked_wheelhouse.py             --lock toolpacks/capa/wheelhouse.lock.json             --output-dir dist/capa-wheelhouse
+      - name: Build twice and verify deterministic capa Toolpack
+        run: |
+          set -euxo pipefail
+          build_one() {
+            out="$1"
+            python3 toolpacks/capa/build_toolpack.py               --wheelhouse dist/capa-wheelhouse               --capa-sdist dist/capa-inputs/flare_capa-9.4.0.tar.gz               --rules-zip dist/capa-inputs/capa-rules-2af9fbfc1c9b4634dbeb76b5d34fca9389fa7f80.zip               --output-dir "$out"
+          }
+          build_one dist/capa
+          build_one dist/capa-rerun
+          cmp dist/capa/payload.sha256 dist/capa-rerun/payload.sha256
+          cmp dist/capa/payload.size dist/capa-rerun/payload.size
+          cmp dist/capa/*toolpack.zip dist/capa-rerun/*toolpack.zip
+          grep -Fx 4940a6e91294aa8d76e00e0db67c27a5c5179313ceaee45b4ff822d5a74685a2 dist/capa/payload.sha256
+          grep -Fx 105462978 dist/capa/payload.size
+          unzip -t dist/capa/*toolpack.zip
+      - name: Run complete capa CLI API rules and signatures smoke in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          rm -rf dist/capa-unpack
+          mkdir -p dist/capa-unpack
+          unzip -q dist/capa/*toolpack.zip -d dist/capa-unpack
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/capa-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3 unzip
+              mkdir -p /opt/autocrack/toolpacks/active/capa
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/capa
+              chmod 0755 /opt/autocrack/toolpacks/active/capa/bin/capa
+              export PATH="/opt/autocrack/toolpacks/active/capa/bin:$PATH"
+              export PYTHONDONTWRITEBYTECODE=1
+              capa --version | grep -F "capa 9.4.0"
+              capa --help | grep -F -- "--json"
+              capa --help | grep -F -- "--rules"
+              capa --help | grep -F -- "--signatures"
+              PYTHONPATH=/opt/autocrack/toolpacks/active/capa/python                 python3 -B -c "import pathlib,capa,capa.main,capa.loader,capa.rules,capa.engine,capa.render.json; root=pathlib.Path(capa.__file__).resolve().parent.parent; assert len(list((root/'rules').rglob('*.yml')))==1042; assert len(list((root/'sigs').glob('*.sig')))==3; capa.rules.get_rules([root/'rules']); assert len(capa.main.get_default_signatures())==3; print('AUTOCRACK_CAPA_API_RULES_OK')"                 | grep -F AUTOCRACK_CAPA_API_RULES_OK
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-capa-toolpack
+          path: |
+            dist/capa/*toolpack.zip
+            dist/capa/*toolpack.zip.sha256
+            dist/capa/manifest.json
+            dist/capa/payload.sha256
+            dist/capa/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  blutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Fetch pinned complete Blutter source
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/blutter-inputs
+          curl --fail --location --retry 6 --retry-all-errors             -o dist/blutter-inputs/blutter-4a60ac648bf448c5a7596437243bcd0b9376fdf0.zip             https://codeload.github.com/worawit/blutter/zip/4a60ac648bf448c5a7596437243bcd0b9376fdf0
+          printf '%s  %s\n' f48e5a0d767dd5bb3dcd999afd45436c6de0f8b981a3cebe689750dc1a2af61f             dist/blutter-inputs/blutter-4a60ac648bf448c5a7596437243bcd0b9376fdf0.zip | sha256sum -c -
+      - name: Build twice and verify deterministic Blutter Toolpack
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/blutter/build_toolpack.py             --source-zip dist/blutter-inputs/blutter-4a60ac648bf448c5a7596437243bcd0b9376fdf0.zip             --output-dir dist/blutter
+          python3 toolpacks/blutter/build_toolpack.py             --source-zip dist/blutter-inputs/blutter-4a60ac648bf448c5a7596437243bcd0b9376fdf0.zip             --output-dir dist/blutter-rerun
+          cmp dist/blutter/payload.sha256 dist/blutter-rerun/payload.sha256
+          cmp dist/blutter/payload.size dist/blutter-rerun/payload.size
+          cmp dist/blutter/*toolpack.zip dist/blutter-rerun/*toolpack.zip
+          grep -Fx fb49fce4572731b3be175cb2719e59c7ba757a3d89bc86547f6816988a36a791 dist/blutter/payload.sha256
+          grep -Fx 582051 dist/blutter/payload.size
+          unzip -t dist/blutter/*toolpack.zip
+      - name: Run complete Blutter CLI/source/toolchain smoke in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          rm -rf dist/blutter-unpack
+          mkdir -p dist/blutter-unpack
+          unzip -q dist/blutter/*toolpack.zip -d dist/blutter-unpack
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/blutter-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends                 python3 python3-pyelftools python3-requests git                 cmake ninja-build build-essential pkg-config                 clang-16 libc++-16-dev libc++abi-16-dev                 libicu-dev libcapstone-dev unzip
+              mkdir -p /opt/autocrack/toolpacks/active/blutter /workspace
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/blutter
+              chmod 0755 /opt/autocrack/toolpacks/active/blutter/bin/blutter
+              export PATH="/opt/autocrack/toolpacks/active/blutter/bin:$PATH"
+              export AUTOCRACK_BLUTTER_STATE_DIR=/workspace/blutter-state
+              blutter --help | grep -F "Reversing a flutter application tool"
+              blutter --help | grep -F -- "--dart-version"
+              clang++-16 --version
+              cmake --version
+              ninja --version
+              pkg-config --exists capstone
+              PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import elftools,requests;print('AUTOCRACK_BLUTTER_TOOLCHAIN_OK')"                 | grep -F AUTOCRACK_BLUTTER_TOOLCHAIN_OK
+              grep -F "AutoCrack Debian ARM64 compatibility"                 /opt/autocrack/toolpacks/active/blutter/upstream/blutter/CMakeLists.txt
+              ! grep -F "add_link_options(-fexperimental-library -L\${LLVM_BIN_DIR}/../lib/c++ -dead_strip)"                 /opt/autocrack/toolpacks/active/blutter/upstream/blutter/CMakeLists.txt
+              test "$(cat /workspace/blutter-state/.autocrack-source-revision)" =                 4a60ac648bf448c5a7596437243bcd0b9376fdf0
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-blutter-toolpack
+          path: |
+            dist/blutter/*toolpack.zip
+            dist/blutter/*toolpack.zip.sha256
+            dist/blutter/manifest.json
+            dist/blutter/payload.sha256
+            dist/blutter/payload.size
+          if-no-files-found: error
+          retention-days: 14
+
+  frida-il2cpp-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      FRIDA_VERSION: "17.17.0"
+      FRIDA_PYTHON_WHEEL_SHA256: "82ddfa720588a0429fd3dd8e75ccf5c722d57da3d5544d1ba420741c032ba7a8"
+      FRIDA_TOOLS_VERSION: "14.10.4"
+      FRIDA_TOOLS_SDIST_SHA256: "7a2c544b545d095040fffbd3768a287a426343dad89095b4a24f4b20382d926a"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Fetch pinned official IL2CPP bridge npm package
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/il2cpp-inputs dist/il2cpp-frida
+          curl --fail --location --retry 6 --retry-all-errors             -o dist/il2cpp-inputs/frida-il2cpp-bridge-0.13.2.tgz             https://registry.npmjs.org/frida-il2cpp-bridge/-/frida-il2cpp-bridge-0.13.2.tgz
+          printf '%s  %s\n' 298430a57a9d713feedf2b26bd0495becf2823240429e6408545c86381ac8060             dist/il2cpp-inputs/frida-il2cpp-bridge-0.13.2.tgz | sha256sum -c -
+      - name: Build twice and verify deterministic IL2CPP Toolpack
+        run: |
+          set -euxo pipefail
+          python3 toolpacks/frida-il2cpp-bridge/build_toolpack.py             --npm-tgz dist/il2cpp-inputs/frida-il2cpp-bridge-0.13.2.tgz             --output-dir dist/frida-il2cpp-bridge
+          python3 toolpacks/frida-il2cpp-bridge/build_toolpack.py             --npm-tgz dist/il2cpp-inputs/frida-il2cpp-bridge-0.13.2.tgz             --output-dir dist/frida-il2cpp-bridge-rerun
+          cmp dist/frida-il2cpp-bridge/payload.sha256 dist/frida-il2cpp-bridge-rerun/payload.sha256
+          cmp dist/frida-il2cpp-bridge/payload.size dist/frida-il2cpp-bridge-rerun/payload.size
+          cmp dist/frida-il2cpp-bridge/*toolpack.zip dist/frida-il2cpp-bridge-rerun/*toolpack.zip
+          grep -Fx 7ed0b4ffdcbcd99dd7cc9281e4bcb611b7c67e0d183032e6ba6b424610029359             dist/frida-il2cpp-bridge/payload.sha256
+          grep -Fx 770897 dist/frida-il2cpp-bridge/payload.size
+          unzip -t dist/frida-il2cpp-bridge/*toolpack.zip
+      - name: Prepare pinned Android Frida Python client used by production
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/il2cpp-frida/download dist/il2cpp-frida/python dist/il2cpp-frida/tools-src
+          python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all:             --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi abi3             "frida==${FRIDA_VERSION}" --dest dist/il2cpp-frida/download
+          FRIDA_WHEEL="$(find dist/il2cpp-frida/download -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
+          test -n "$FRIDA_WHEEL"
+          printf '%s  %s\n' "$FRIDA_PYTHON_WHEEL_SHA256" "$FRIDA_WHEEL" | sha256sum -c -
+          unzip -q "$FRIDA_WHEEL" -d dist/il2cpp-frida/python
+
+          python3 -m pip download --disable-pip-version-check --no-deps             "frida-tools==${FRIDA_TOOLS_VERSION}" --dest dist/il2cpp-frida/download
+          TOOLS_SDIST="$(find dist/il2cpp-frida/download -type f -name "frida_tools-${FRIDA_TOOLS_VERSION}.tar.gz" -print -quit)"
+          test -n "$TOOLS_SDIST"
+          printf '%s  %s\n' "$FRIDA_TOOLS_SDIST_SHA256" "$TOOLS_SDIST" | sha256sum -c -
+          tar -xzf "$TOOLS_SDIST" -C dist/il2cpp-frida/tools-src
+          cp -a "dist/il2cpp-frida/tools-src/frida_tools-${FRIDA_TOOLS_VERSION}/frida_tools"             dist/il2cpp-frida/python/frida_tools
+
+          python3 -m pip download --disable-pip-version-check --no-deps --only-binary=:all:             --platform manylinux_2_17_aarch64 --python-version 311 --implementation cp --abi cp311             "colorama==0.4.6" "prompt-toolkit==3.0.53" "Pygments==2.21.0"             "wcwidth==0.8.3" "websockets==13.1"             --dest dist/il2cpp-frida/download
+          for wheel in             dist/il2cpp-frida/download/colorama-0.4.6-*.whl             dist/il2cpp-frida/download/prompt_toolkit-3.0.53-*.whl             dist/il2cpp-frida/download/pygments-2.21.0-*.whl             dist/il2cpp-frida/download/wcwidth-0.8.3-*.whl             dist/il2cpp-frida/download/websockets-13.1-*aarch64.whl; do
+            unzip -q "$wheel" -d dist/il2cpp-frida/python
+          done
+      - name: Run patched upstream CLI and full JS library smoke in Debian Bookworm ARM64
+        run: |
+          set -euxo pipefail
+          rm -rf dist/il2cpp-unpack
+          mkdir -p dist/il2cpp-unpack
+          unzip -q dist/frida-il2cpp-bridge/*toolpack.zip -d dist/il2cpp-unpack
+          docker run --rm --platform linux/arm64             -v "$PWD/dist/il2cpp-unpack:/input:ro"             -v "$PWD/dist/il2cpp-frida/python:/frida-python:ro"             debian:bookworm-slim /bin/bash -euxc '
+              apt-get update
+              apt-get install -y --no-install-recommends python3 unzip
+              mkdir -p /opt/autocrack/toolpacks/active/frida-il2cpp-bridge
+              mkdir -p /opt/autocrack/toolpacks/active/android-frida/python
+              unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/frida-il2cpp-bridge
+              cp -a /frida-python/. /opt/autocrack/toolpacks/active/android-frida/python/
+              chmod 0755 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/bin/frida-il2cpp-bridge
+              export PATH="/opt/autocrack/toolpacks/active/frida-il2cpp-bridge/bin:$PATH"
+              mkdir -p /tmp/frida-shims
+              printf "#!/bin/sh\nexit 0\n" > /tmp/frida-shims/frida
+              printf "#!/bin/sh\nexit 0\n" > /tmp/frida-shims/android-frida-server
+              chmod 0755 /tmp/frida-shims/*
+              export PATH="/tmp/frida-shims:$PATH"
+              frida-il2cpp-bridge --help | grep -F "IL2CPP options"
+              frida-il2cpp-bridge --help | grep -F "dump"
+              frida-il2cpp-bridge --version | grep -F "frida-il2cpp-bridge"
+              frida-il2cpp-bridge --version | grep -F "0.13.2"
+              PYTHONPATH=/opt/autocrack/toolpacks/active/frida-il2cpp-bridge/cli:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import src.app,src.dump.command; print('AUTOCRACK_IL2CPP_PY311_OK')"                 | grep -F AUTOCRACK_IL2CPP_PY311_OK
+              grep -F "globalThis.Il2Cpp = Il2Cpp"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.js
+              grep -F "function perform"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.d.ts
+              grep -F "function trace"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.d.ts
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AutoCrackApp-frida-il2cpp-bridge-toolpack
+          path: |
+            dist/frida-il2cpp-bridge/*toolpack.zip
+            dist/frida-il2cpp-bridge/*toolpack.zip.sha256
+            dist/frida-il2cpp-bridge/manifest.json
+            dist/frida-il2cpp-bridge/payload.sha256
+            dist/frida-il2cpp-bridge/payload.size
           if-no-files-found: error
           retention-days: 14
 

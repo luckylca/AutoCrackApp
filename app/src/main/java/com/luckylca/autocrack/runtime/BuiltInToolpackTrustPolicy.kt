@@ -1,5 +1,7 @@
 package com.luckylca.autocrack.runtime
 
+import java.security.MessageDigest
+
 internal object BuiltInToolpackTrustPolicy {
     private data class TrustedToolpack(
         val title: String,
@@ -11,6 +13,7 @@ internal object BuiltInToolpackTrustPolicy {
         val commands: Map<String, String>,
         val selfTests: Map<String, TrustedSelfTest>,
         val sources: Map<String, TrustedSource>,
+        val sourcesSha256: String? = null,
         val schemaVersion: Int = 1,
         val requires: ToolpackRequirements = ToolpackRequirements(),
     )
@@ -74,9 +77,26 @@ internal object BuiltInToolpackTrustPolicy {
                 sha256 = source.sha256,
             )
         }
-        require(actualSources == trusted.sources) {
-            "工具包来源或上游 SHA-256 与内置信任目录不一致"
+        if (trusted.sourcesSha256 != null) {
+            require(sourceSetSha256(manifest.sources) == trusted.sourcesSha256) {
+                "工具包来源集合 SHA-256 与内置信任目录不一致"
+            }
+        } else {
+            require(actualSources == trusted.sources) {
+                "工具包来源或上游 SHA-256 与内置信任目录不一致"
+            }
         }
+    }
+
+    private fun sourceSetSha256(sources: List<ToolpackSourceArtifact>): String {
+        val canonical = sources
+            .sortedWith(compareBy(ToolpackSourceArtifact::name, ToolpackSourceArtifact::version, ToolpackSourceArtifact::url, ToolpackSourceArtifact::sha256))
+            .joinToString(separator = "") { source ->
+                listOf(source.name, source.version, source.url, source.sha256).joinToString("\u0000") + "\n"
+            }
+        return MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
     }
 
     private val TRUSTED_TOOLPACKS = mapOf(
@@ -195,6 +215,442 @@ internal object BuiltInToolpackTrustPolicy {
                     url = "https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar",
                     sha256 = "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423",
                 ),
+            ),
+        ),
+        "apkid" to TrustedToolpack(
+            title = "APKiD full Android packer and protection identification",
+            version = "apkid-3.1.0_yara-python-dex-1.0.7_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "dd28ced9b9a616a43ef8bdd1cbe37a09c5eb03e1e1e405a0449c137ece8f5518",
+            payloadSizeBytes = 6_384_645L,
+            requiredPaths = setOf(
+                "bin/apkid",
+                "python/apkid/main.py",
+                "python/apkid/rules/rules.yarc",
+                "SKILL.md",
+            ),
+            commands = mapOf(
+                "apkid" to "bin/apkid",
+            ),
+            selfTests = mapOf(
+                "apkid-version" to TrustedSelfTest(
+                    title = "Upstream APKiD CLI",
+                    command = "apkid --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("APKiD - Android Application Identifier v3.1.0"),
+                ),
+                "apkid-python-api" to TrustedSelfTest(
+                    title = "Complete APKiD Python API and rules",
+                    command = "PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import apkid,apkid.apkid,apkid.rules,yara;print('AUTOCRACK_APKID_API_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_APKID_API_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "apkid-wheel" to TrustedSource(
+                    version = "3.1.0",
+                    url = "https://pypi.org/project/apkid/3.1.0/",
+                    sha256 = "02e349865bc1005ae2beb27fbb58acdeabb56d1a60ce723c344cde1bb32896f8",
+                ),
+                "yara-python-dex-linux-aarch64" to TrustedSource(
+                    version = "1.0.7",
+                    url = "https://pypi.org/project/yara-python-dex/1.0.7/",
+                    sha256 = "a0176641510cff158ab56fd60f8d3b67ffd804441def44df53a87a0632090225",
+                ),
+            ),
+            schemaVersion = 2,
+            requires = ToolpackRequirements(),
+        ),
+        "androguard" to TrustedToolpack(
+            title = "Androguard complete Android static analysis API and CLI",
+            version = "androguard-4.1.4_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "be941c731d37770f77a62f957db4a8ed65fb28283dfa58ece5c082852124bbc0",
+            payloadSizeBytes = 90_753_037L,
+            requiredPaths = setOf(
+                "bin/androguard",
+                "python/androguard/__init__.py",
+                "python/androguard/cli/cli.py",
+                "WHEELHOUSE.lock.json",
+                "SKILL.md",
+            ),
+            commands = mapOf(
+                "androguard" to "bin/androguard",
+            ),
+            selfTests = mapOf(
+                "androguard-cli" to TrustedSelfTest(
+                    title = "Complete upstream Androguard CLI",
+                    command = "androguard --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("Usage:", "androguard"),
+                ),
+                "androguard-python-api" to TrustedSelfTest(
+                    title = "Androguard high-level and resource Python APIs",
+                    command = "PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import androguard;from androguard.misc import AnalyzeAPK;from androguard.core.apk import APK;from androguard.core.axml import AXMLPrinter,ARSCParser;print(androguard.__version__);print('AUTOCRACK_ANDROGUARD_API_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("4.1.4", "AUTOCRACK_ANDROGUARD_API_OK"),
+                ),
+            ),
+            sources = emptyMap(),
+            sourcesSha256 = "8ed9134e13dece1520265735694292031fb98b4c3bb01f22d96c1b49763c61a5",
+            schemaVersion = 2,
+            requires = ToolpackRequirements(),
+        ),
+        "jnitrace" to TrustedToolpack(
+            title = "jnitrace complete JNI tracing client",
+            version = "jnitrace-3.3.1_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "b45737d6d9041ef037123589533a8c94e0977a71cd24a24b9e816eb25eb43bcc",
+            payloadSizeBytes = 4_528_608L,
+            requiredPaths = setOf(
+                "bin/jnitrace",
+                "python/jnitrace/jnitrace.py",
+                "python/jnitrace/build/jnitrace.js",
+                "python/jnitrace.egg-info/PKG-INFO",
+                "python/hexdump.py",
+                "SKILL.md",
+                "VERSION",
+            ),
+            commands = mapOf("jnitrace" to "bin/jnitrace"),
+            selfTests = mapOf(
+                "jnitrace-version" to TrustedSelfTest(
+                    title = "Upstream jnitrace CLI and Frida Python integration",
+                    command = "jnitrace --version",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("jnitrace 3.3.1"),
+                ),
+                "jnitrace-cli-surface" to TrustedSelfTest(
+                    title = "Spawn attach remote filters and backtrace CLI surface",
+                    command = "jnitrace --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf(
+                        "--inject-method",
+                        "--remote",
+                        "--backtrace",
+                        "--include",
+                        "--exclude",
+                        "--libraries",
+                    ),
+                ),
+                "jnitrace-engine" to TrustedSelfTest(
+                    title = "Upstream compiled JNI tracing engine",
+                    command = "test -s /opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js && printf 'AUTOCRACK_JNITRACE_ENGINE_OK\\n'",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_JNITRACE_ENGINE_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "jnitrace-sdist" to TrustedSource(
+                    version = "3.3.1",
+                    url = "https://files.pythonhosted.org/packages/00/d9/25136bf8b76a99c8f93843f75771d2b19b29004d322b94bf565773120c8b/jnitrace-3.3.1.tar.gz",
+                    sha256 = "6fc6b39a561b34415250ddcc8eaa54a8d9414ca4f42532e909506493d471efed",
+                ),
+                "colorama-wheel" to TrustedSource(
+                    version = "0.4.6",
+                    url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
+                    sha256 = "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+                ),
+                "hexdump-sdist" to TrustedSource(
+                    version = "3.3",
+                    url = "https://files.pythonhosted.org/packages/55/b3/279b1d57fa3681725d0db8820405cdcb4e62a9239c205e4ceac4391c78e4/hexdump-3.3.zip",
+                    sha256 = "d781a43b0c16ace3f9366aade73e8ad3a7bd5137d58f0b45ab2d3f54876f20db",
+                ),
+                "setuptools-wheel" to TrustedSource(
+                    version = "80.9.0",
+                    url = "https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl",
+                    sha256 = "062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922",
+                ),
+            ),
+            schemaVersion = 2,
+            requires = ToolpackRequirements(
+                commands = listOf("frida", "android-frida-server"),
+            ),
+        ),
+        "uiautomator2" to TrustedToolpack(
+            title = "uiautomator2 complete Android UI automation",
+            version = "uiautomator2-3.7.0_adbutils-2.11.0_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "8765ee4b3a1670985f803db05284ab92499a7797e2d64468b7cb0da94e0ff4ca",
+            payloadSizeBytes = 40_688_700L,
+            requiredPaths = setOf(
+                "bin/uiautomator2",
+                "bin/u2cli",
+                "python/uiautomator2/__init__.py",
+                "python/uiautomator2/__main__.py",
+                "python/uiautomator2/agent_cli/__main__.py",
+                "python/uiautomator2/assets/app-uiautomator.apk",
+                "python/uiautomator2/assets/u2.jar",
+                "python/uiautomator2/assets/version.json",
+                "python/adbutils/__init__.py",
+                "python/adbutils/_utils.py",
+                "python/adbutils.egg-info/PKG-INFO",
+                "WHEELHOUSE.lock.json",
+                "SKILL.md",
+                "VERSION",
+            ),
+            commands = mapOf(
+                "uiautomator2" to "bin/uiautomator2",
+                "u2cli" to "bin/u2cli",
+            ),
+            selfTests = mapOf(
+                "uiautomator2-version" to TrustedSelfTest(
+                    title = "Upstream uiautomator2 CLI",
+                    command = "uiautomator2 version",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("uiautomator2 version: 3.7.0"),
+                ),
+                "u2cli-help" to TrustedSelfTest(
+                    title = "Upstream u2cli command group",
+                    command = "u2cli --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("Usage:", "u2cli"),
+                ),
+                "uiautomator2-python-api" to TrustedSelfTest(
+                    title = "Full Python API, adbutils and embedded device assets",
+                    command = "PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import importlib.metadata,pathlib,shutil,uiautomator2,adbutils;p=pathlib.Path(uiautomator2.__file__).parent/'assets';assert (p/'app-uiautomator.apk').is_file();assert (p/'u2.jar').is_file();assert shutil.which('adb');print(importlib.metadata.version('uiautomator2'));print(importlib.metadata.version('adbutils'));print('AUTOCRACK_UIAUTOMATOR2_API_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf(
+                        "3.7.0",
+                        "2.11.0",
+                        "AUTOCRACK_UIAUTOMATOR2_API_OK",
+                    ),
+                ),
+            ),
+            sources = emptyMap(),
+            sourcesSha256 = "576954de71741b1eb14467e11bcee6f7b823208aa8ae6e5ec97a22204c1bf155",
+            schemaVersion = 2,
+            requires = ToolpackRequirements(
+                commands = listOf("adb"),
+            ),
+        ),
+        "mitmproxy" to TrustedToolpack(
+            title = "mitmproxy complete Linux ARM64 interception suite",
+            version = "mitmproxy-12.2.3-linux-aarch64_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "79dc61fa447ac820c0026e36268559955e4a0a1ed37da2c9726e64a353a27cfb",
+            payloadSizeBytes = 113_846_151L,
+            requiredPaths = setOf(
+                "bin/mitmproxy",
+                "bin/mitmdump",
+                "bin/mitmweb",
+                "examples/autocrack_addon_smoke.py",
+                "SKILL.md",
+                "VERSION",
+            ),
+            commands = mapOf(
+                "mitmproxy" to "bin/mitmproxy",
+                "mitmdump" to "bin/mitmdump",
+                "mitmweb" to "bin/mitmweb",
+            ),
+            selfTests = mapOf(
+                "mitmproxy-version" to TrustedSelfTest(
+                    title = "Official mitmproxy standalone version",
+                    command = "mitmproxy --version",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("Mitmproxy: 12.2.3"),
+                ),
+                "mitmdump-addon-api" to TrustedSelfTest(
+                    title = "Embedded upstream Python addon API",
+                    command = "mitmdump -q -s /opt/autocrack/toolpacks/active/mitmproxy/examples/autocrack_addon_smoke.py",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_MITMPROXY_ADDON_API_OK"),
+                ),
+                "mitmweb-help" to TrustedSelfTest(
+                    title = "Official mitmweb command",
+                    command = "mitmweb --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("usage:", "mitmweb"),
+                ),
+            ),
+            sources = mapOf(
+                "mitmproxy-linux-aarch64" to TrustedSource(
+                    version = "12.2.3",
+                    url = "https://downloads.mitmproxy.org/12.2.3/mitmproxy-12.2.3-linux-aarch64.tar.gz",
+                    sha256 = "b358643a6c4f4b39e33d985350f660b724fece95687d7daa899ef0c4e211f681",
+                ),
+            ),
+            schemaVersion = 2,
+            requires = ToolpackRequirements(),
+        ),
+        "capa" to TrustedToolpack(
+            title = "capa complete ARM64 capability analysis API and rules",
+            version = "capa-9.4.0_rules-9.4.0_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "4940a6e91294aa8d76e00e0db67c27a5c5179313ceaee45b4ff822d5a74685a2",
+            payloadSizeBytes = 105_462_978L,
+            requiredPaths = setOf(
+                "bin/capa",
+                "python/capa/__init__.py",
+                "python/capa/main.py",
+                "python/capa/loader.py",
+                "python/capa/engine.py",
+                "python/capa/rules/__init__.py",
+                "python/capa/render/json.py",
+                "python/rules/anti-analysis/anti-av/block-operations-on-executable-memory-pages-using-arbitrary-code-guard.yml",
+                "python/rules/nursery",
+                "python/sigs/1_flare_msvc_rtf_32_64.sig",
+                "python/sigs/2_flare_msvc_atlmfc_32_64.sig",
+                "python/sigs/3_flare_common_libs.sig",
+                "WHEELHOUSE.lock.json",
+                "SKILL.md",
+                "VERSION",
+            ),
+            commands = mapOf(
+                "capa" to "bin/capa",
+            ),
+            selfTests = mapOf(
+                "capa-version" to TrustedSelfTest(
+                    title = "Upstream capa CLI version",
+                    command = "capa --version",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("capa 9.4.0"),
+                ),
+                "capa-cli" to TrustedSelfTest(
+                    title = "Complete upstream capa CLI",
+                    command = "capa --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("--json", "--rules", "--signatures"),
+                ),
+                "capa-python-api" to TrustedSelfTest(
+                    title = "Full Python API and embedded rule/signature resources",
+                    command = "PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import pathlib,capa,capa.main,capa.loader,capa.rules,capa.engine,capa.render.json;root=pathlib.Path(capa.__file__).resolve().parent.parent;assert len(list((root/'rules').rglob('*.yml')))==1042;assert len(list((root/'sigs').glob('*.sig')))==3;capa.rules.get_rules([root/'rules']);assert len(capa.main.get_default_signatures())==3;print('AUTOCRACK_CAPA_API_RULES_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_CAPA_API_RULES_OK"),
+                ),
+            ),
+            sources = emptyMap(),
+            sourcesSha256 = "e8782a2ecbddfe6e17630b39030152d1e3dc65d3dd7f965a3f37f9d70372b617",
+            schemaVersion = 2,
+            requires = ToolpackRequirements(),
+        ),
+        "blutter" to TrustedToolpack(
+            title = "Blutter complete Flutter Dart AOT analysis pipeline",
+            version = "blutter-4a60ac648bf448c5a7596437243bcd0b9376fdf0_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "fb49fce4572731b3be175cb2719e59c7ba757a3d89bc86547f6816988a36a791",
+            payloadSizeBytes = 582_051L,
+            requiredPaths = setOf(
+                "bin/blutter",
+                "upstream/blutter.py",
+                "upstream/dartvm_fetch_build.py",
+                "upstream/extract_dart_info.py",
+                "upstream/blutter/CMakeLists.txt",
+                "upstream/scripts/frida.template.js",
+                "upstream/scripts/dartvm_create_srclist.py",
+                "upstream/.autocrack-source-revision",
+                "AUTOCRACK_PATCH.md",
+                "SKILL.md",
+                "VERSION",
+            ),
+            commands = mapOf(
+                "blutter" to "bin/blutter",
+            ),
+            selfTests = mapOf(
+                "blutter-cli" to TrustedSelfTest(
+                    title = "Complete upstream Blutter CLI",
+                    command = "blutter --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf(
+                        "Reversing a flutter application tool",
+                        "--dart-version",
+                        "--rebuild",
+                        "--no-analysis",
+                    ),
+                ),
+                "blutter-toolchain" to TrustedSelfTest(
+                    title = "Linux ARM64 Blutter compiler and Python dependencies",
+                    command = "clang++-16 --version >/dev/null && cmake --version >/dev/null && ninja --version >/dev/null && pkg-config --exists capstone && PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import elftools,requests;print('AUTOCRACK_BLUTTER_TOOLCHAIN_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_BLUTTER_TOOLCHAIN_OK"),
+                ),
+                "blutter-source" to TrustedSelfTest(
+                    title = "Pinned full upstream Blutter source and patch",
+                    command = "test -s /opt/autocrack/toolpacks/active/blutter/upstream/blutter.py && test -s /opt/autocrack/toolpacks/active/blutter/upstream/dartvm_fetch_build.py && test -s /opt/autocrack/toolpacks/active/blutter/upstream/scripts/frida.template.js && grep -F 'AutoCrack Debian ARM64 compatibility' /opt/autocrack/toolpacks/active/blutter/upstream/blutter/CMakeLists.txt && printf 'AUTOCRACK_BLUTTER_SOURCE_OK\\n'",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_BLUTTER_SOURCE_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "blutter-source" to TrustedSource(
+                    version = "4a60ac648bf448c5a7596437243bcd0b9376fdf0",
+                    url = "https://codeload.github.com/worawit/blutter/zip/4a60ac648bf448c5a7596437243bcd0b9376fdf0",
+                    sha256 = "f48e5a0d767dd5bb3dcd999afd45436c6de0f8b981a3cebe689750dc1a2af61f",
+                ),
+            ),
+            schemaVersion = 2,
+            requires = ToolpackRequirements(
+                commands = listOf(
+                    "clang-16",
+                    "clang++-16",
+                    "cmake",
+                    "ninja",
+                    "pkg-config",
+                    "git",
+                    "python3",
+                ),
+            ),
+        ),
+        "frida-il2cpp-bridge" to TrustedToolpack(
+            title = "frida-il2cpp-bridge complete IL2CPP runtime toolkit",
+            version = "frida-il2cpp-bridge-0.13.2_autocrack-1.0.0",
+            architecture = "arm64",
+            payloadSha256 = "7ed0b4ffdcbcd99dd7cc9281e4bcb611b7c67e0d183032e6ba6b424610029359",
+            payloadSizeBytes = 770_897L,
+            requiredPaths = setOf(
+                "bin/frida-il2cpp-bridge",
+                "package.json",
+                "dist/index.js",
+                "dist/index.js.map",
+                "dist/index.d.ts",
+                "cli/main.py",
+                "cli/src/app.py",
+                "cli/src/dump/agent.js",
+                "upstream-original/package.json",
+                "upstream-original/dist/index.js",
+                "upstream-original/cli/main.py",
+                "AUTOCRACK_PATCH.md",
+                "SKILL.md",
+                "VERSION",
+            ),
+            commands = mapOf(
+                "frida-il2cpp-bridge" to "bin/frida-il2cpp-bridge",
+            ),
+            selfTests = mapOf(
+                "frida-il2cpp-cli" to TrustedSelfTest(
+                    title = "Upstream IL2CPP bridge CLI",
+                    command = "frida-il2cpp-bridge --help",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("IL2CPP options", "dump"),
+                ),
+                "frida-il2cpp-version" to TrustedSelfTest(
+                    title = "Upstream bridge and Frida version reporting",
+                    command = "frida-il2cpp-bridge --version",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("frida-il2cpp-bridge", "0.13.2"),
+                ),
+                "frida-il2cpp-library" to TrustedSelfTest(
+                    title = "Complete compiled Il2Cpp runtime library surface",
+                    command = "grep -F 'globalThis.Il2Cpp = Il2Cpp' /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.js >/dev/null && grep -F 'function perform' /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.d.ts >/dev/null && grep -F 'function trace' /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.d.ts >/dev/null && printf 'AUTOCRACK_IL2CPP_LIBRARY_OK\\n'",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_IL2CPP_LIBRARY_OK"),
+                ),
+                "frida-il2cpp-python311" to TrustedSelfTest(
+                    title = "Patched upstream CLI imports on rootfs Python 3.11",
+                    command = "PYTHONDONTWRITEBYTECODE=1 python3 -B -c \"import sys;sys.path[:0]=['/opt/autocrack/toolpacks/active/frida-il2cpp-bridge/cli','/opt/autocrack/toolpacks/active/android-frida/python'];import src.app,src.dump.command;print('AUTOCRACK_IL2CPP_PY311_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_IL2CPP_PY311_OK"),
+                ),
+            ),
+            sources = mapOf(
+                "frida-il2cpp-bridge-npm" to TrustedSource(
+                    version = "0.13.2",
+                    url = "https://registry.npmjs.org/frida-il2cpp-bridge/-/frida-il2cpp-bridge-0.13.2.tgz",
+                    sha256 = "298430a57a9d713feedf2b26bd0495becf2823240429e6408545c86381ac8060",
+                ),
+            ),
+            schemaVersion = 2,
+            requires = ToolpackRequirements(
+                commands = listOf("frida", "android-frida-server"),
             ),
         ),
         "lief-static" to TrustedToolpack(

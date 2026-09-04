@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+ROOT="/opt/autocrack/toolpacks/active/apkid"
+export PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c '
+import sys
+from apkid.main import main
+sys.exit(main())
+' "$@"

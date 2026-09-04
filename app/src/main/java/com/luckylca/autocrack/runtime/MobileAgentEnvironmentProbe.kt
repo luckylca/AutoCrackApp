@@ -118,6 +118,7 @@ class MobileAgentEnvironmentProbe(context: Context) {
                     if command -v python3 >/dev/null 2>&1; then echo python=OK; else echo python=MISSING; fi
                     if command -v git >/dev/null 2>&1; then echo git=OK; else echo git=MISSING; fi
                     if command -v java >/dev/null 2>&1; then echo java=OK; else echo java=MISSING; fi
+                    if command -v adb >/dev/null 2>&1; then echo adb=OK; else echo adb=MISSING; fi
                     if command -v clang >/dev/null 2>&1; then echo clang=OK; else echo clang=MISSING; fi
                     if python3 - <<'PY' >/dev/null 2>&1
 import socket
@@ -140,6 +141,7 @@ PY
         checks += pathCheck("python", "Python", values)
         checks += pathCheck("git", "Git", values)
         checks += pathCheck("java", "Java", values)
+        checks += pathCheck("adb", "ADB host", values)
         checks += pathCheck("clang", "Clang", values)
         val readinessResult = runCatching { toolpackInstaller.inspectInstalledReadiness() }
         val readiness = readinessResult.getOrNull()

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+ROOT="/opt/autocrack/toolpacks/active/androguard"
+export PYTHONPATH="$ROOT/python${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -c '
+import sys
+from androguard.cli.cli import entry_point
+sys.exit(entry_point())
+' "$@"

@@ -26,3 +26,4 @@ keystore.properties
 /toolpacks/runtime-inspect/dist/
 /toolpacks/memory-dump/dist/
 /toolpacks/runtime-control/dist/
+/toolpacks/*/dist/
