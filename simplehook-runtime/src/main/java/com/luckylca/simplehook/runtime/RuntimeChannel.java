@@ -1,5 +1,6 @@
 package com.luckylca.simplehook.runtime;
 
+import android.annotation.SuppressLint;
 import android.app.BroadcastOptions;
 import android.app.Activity;
 import android.content.ComponentName;
@@ -65,11 +66,16 @@ final class RuntimeChannel {
         if (Build.VERSION.SDK_INT >= 33) {
             context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
         } else {
-            context.registerReceiver(receiver, filter);
+            registerLegacyReceiver(receiver, filter);
         }
         rulesReceiverRegistered = true;
         de.robv.android.xposed.XposedBridge.log("SimpleHook rules broadcast receiver installed: "
                 + packageName + ":" + processName);
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void registerLegacyReceiver(BroadcastReceiver receiver, IntentFilter filter) {
+        context.registerReceiver(receiver, filter);
     }
 
     JSONObject rulesForPackage(String packageName, String processName) throws JSONException {

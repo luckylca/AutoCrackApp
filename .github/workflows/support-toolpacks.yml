@@ -255,7 +255,10 @@ jobs:
           FRIDA_WHEEL="$(find dist/jnitrace-inputs -maxdepth 1 -type f -name 'frida-*-manylinux_2_17_aarch64.whl' -print -quit)"
           unzip -q "$FRIDA_WHEEL" -d dist/frida-python
           docker run --rm --platform linux/arm64             -v "$PWD/dist/jnitrace-unpack:/jnitrace:ro"             -v "$PWD/dist/frida-python:/frida-python:ro"             debian:bookworm-slim /bin/bash -euxc '
+              trap 'rc=$?; echo "::error title=jnitrace-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              current=apt-update
               apt-get update
+              current=apt-install
               apt-get install -y --no-install-recommends python3 unzip
               mkdir -p /opt/autocrack/toolpacks/active/jnitrace
               mkdir -p /opt/autocrack/toolpacks/active/android-frida/python
@@ -263,10 +266,14 @@ jobs:
               cp -a /frida-python/. /opt/autocrack/toolpacks/active/android-frida/python/
               chmod 0755 /opt/autocrack/toolpacks/active/jnitrace/bin/jnitrace
               export PATH="/opt/autocrack/toolpacks/active/jnitrace/bin:$PATH"
+              current=version
               jnitrace --version | grep -F "jnitrace 3.3.1"
+              current=help-remote
               jnitrace --help | grep -F -- "--remote"
+              current=engine-js
               test -s /opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js
-              PYTHONPATH=/opt/autocrack/toolpacks/active/jnitrace/python:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import frida, jnitrace.jnitrace; print(frida.__version__); print("AUTOCRACK_JNITRACE_IMPORT_OK")"                 | grep -F AUTOCRACK_JNITRACE_IMPORT_OK
+              current=python-import
+              PYTHONPATH=/opt/autocrack/toolpacks/active/jnitrace/python:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import frida, jnitrace.jnitrace; print(frida.__version__); print('AUTOCRACK_JNITRACE_IMPORT_OK')"                 | grep -F AUTOCRACK_JNITRACE_IMPORT_OK
             '
       - uses: actions/upload-artifact@v4
         with:
@@ -319,7 +326,10 @@ jobs:
           mkdir -p dist/uiautomator2-unpack
           unzip -q dist/uiautomator2/*toolpack.zip -d dist/uiautomator2-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/uiautomator2-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              trap 'rc=$?; echo "::error title=uiautomator2-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              current=apt-update
               apt-get update
+              current=apt-install
               apt-get install -y --no-install-recommends python3 unzip adb
               mkdir -p /opt/autocrack/toolpacks/active/uiautomator2
               unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/uiautomator2
@@ -327,10 +337,15 @@ jobs:
               chmod 0755 /opt/autocrack/toolpacks/active/uiautomator2/bin/u2cli
               export PATH="/opt/autocrack/toolpacks/active/uiautomator2/bin:$PATH"
               export PYTHONDONTWRITEBYTECODE=1
+              current=adb
               adb version
+              current=version
               uiautomator2 version | grep -F "uiautomator2 version: 3.7.0"
+              current=help-copy-assets
               uiautomator2 --help | grep -F "copy-assets"
+              current=u2cli-help
               u2cli --help | grep -F "Usage:"
+              current=python-api
               PYTHONPATH=/opt/autocrack/toolpacks/active/uiautomator2/python                 python3 -B -c "import importlib.metadata,pathlib,shutil,uiautomator2,adbutils; p=pathlib.Path(uiautomator2.__file__).parent/'assets'; assert (p/'app-uiautomator.apk').is_file(); assert (p/'u2.jar').is_file(); assert shutil.which('adb'); print(importlib.metadata.version('uiautomator2')); print(importlib.metadata.version('adbutils')); print('AUTOCRACK_UIAUTOMATOR2_API_OK')"                 | grep -F AUTOCRACK_UIAUTOMATOR2_API_OK
             '
       - uses: actions/upload-artifact@v4
@@ -440,17 +455,25 @@ jobs:
           mkdir -p dist/capa-unpack
           unzip -q dist/capa/*toolpack.zip -d dist/capa-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/capa-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              trap 'rc=$?; echo "::error title=capa-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              current=apt-update
               apt-get update
+              current=apt-install
               apt-get install -y --no-install-recommends python3 unzip
               mkdir -p /opt/autocrack/toolpacks/active/capa
               unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/capa
               chmod 0755 /opt/autocrack/toolpacks/active/capa/bin/capa
               export PATH="/opt/autocrack/toolpacks/active/capa/bin:$PATH"
               export PYTHONDONTWRITEBYTECODE=1
+              current=version
               capa --version | grep -F "capa 9.4.0"
+              current=help-json
               capa --help | grep -F -- "--json"
+              current=help-rules
               capa --help | grep -F -- "--rules"
+              current=help-signatures
               capa --help | grep -F -- "--signatures"
+              current=python-api-rules
               PYTHONPATH=/opt/autocrack/toolpacks/active/capa/python                 python3 -B -c "import pathlib,capa,capa.main,capa.loader,capa.rules,capa.engine,capa.render.json; root=pathlib.Path(capa.__file__).resolve().parent.parent; assert len(list((root/'rules').rglob('*.yml')))==1042; assert len(list((root/'sigs').glob('*.sig')))==3; capa.rules.get_rules([root/'rules']); assert len(capa.main.get_default_signatures())==3; print('AUTOCRACK_CAPA_API_RULES_OK')"                 | grep -F AUTOCRACK_CAPA_API_RULES_OK
             '
       - uses: actions/upload-artifact@v4
@@ -497,23 +520,36 @@ jobs:
           mkdir -p dist/blutter-unpack
           unzip -q dist/blutter/*toolpack.zip -d dist/blutter-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/blutter-unpack:/input:ro"             debian:bookworm-slim /bin/bash -euxc '
+              trap 'rc=$?; echo "::error title=blutter-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
               export DEBIAN_FRONTEND=noninteractive
+              current=apt-update
               apt-get update
+              current=apt-install
               apt-get install -y --no-install-recommends                 python3 python3-pyelftools python3-requests git                 cmake ninja-build build-essential pkg-config                 clang-16 libc++-16-dev libc++abi-16-dev                 libicu-dev libcapstone-dev unzip
               mkdir -p /opt/autocrack/toolpacks/active/blutter /workspace
               unzip -q /input/payload.zip -d /opt/autocrack/toolpacks/active/blutter
               chmod 0755 /opt/autocrack/toolpacks/active/blutter/bin/blutter
               export PATH="/opt/autocrack/toolpacks/active/blutter/bin:$PATH"
               export AUTOCRACK_BLUTTER_STATE_DIR=/workspace/blutter-state
+              current=help
               blutter --help | grep -F "Reversing a flutter application tool"
+              current=help-dart-version
               blutter --help | grep -F -- "--dart-version"
+              current=clang
               clang++-16 --version
+              current=cmake
               cmake --version
+              current=ninja
               ninja --version
+              current=capstone
               pkg-config --exists capstone
+              current=python-imports
               PYTHONDONTWRITEBYTECODE=1 python3 -B -c "import elftools,requests;print('AUTOCRACK_BLUTTER_TOOLCHAIN_OK')"                 | grep -F AUTOCRACK_BLUTTER_TOOLCHAIN_OK
+              current=cmake-patch-marker
               grep -F "AutoCrack Debian ARM64 compatibility"                 /opt/autocrack/toolpacks/active/blutter/upstream/blutter/CMakeLists.txt
+              current=cmake-dead-strip-removed
               ! grep -F "add_link_options(-fexperimental-library -L\${LLVM_BIN_DIR}/../lib/c++ -dead_strip)"                 /opt/autocrack/toolpacks/active/blutter/upstream/blutter/CMakeLists.txt
+              current=state-marker
               test "$(cat /workspace/blutter-state/.autocrack-source-revision)" =                 4a60ac648bf448c5a7596437243bcd0b9376fdf0
             '
       - uses: actions/upload-artifact@v4
@@ -586,7 +622,10 @@ jobs:
           mkdir -p dist/il2cpp-unpack
           unzip -q dist/frida-il2cpp-bridge/*toolpack.zip -d dist/il2cpp-unpack
           docker run --rm --platform linux/arm64             -v "$PWD/dist/il2cpp-unpack:/input:ro"             -v "$PWD/dist/il2cpp-frida/python:/frida-python:ro"             debian:bookworm-slim /bin/bash -euxc '
+              trap 'rc=$?; echo "::error title=il2cpp-arm64-smoke::${current:-unknown} failed (rc=$rc)"; exit $rc' ERR
+              current=apt-update
               apt-get update
+              current=apt-install
               apt-get install -y --no-install-recommends python3 unzip
               mkdir -p /opt/autocrack/toolpacks/active/frida-il2cpp-bridge
               mkdir -p /opt/autocrack/toolpacks/active/android-frida/python
@@ -599,13 +638,21 @@ jobs:
               printf "#!/bin/sh\nexit 0\n" > /tmp/frida-shims/android-frida-server
               chmod 0755 /tmp/frida-shims/*
               export PATH="/tmp/frida-shims:$PATH"
+              current=help-options
               frida-il2cpp-bridge --help | grep -F "IL2CPP options"
+              current=help-dump
               frida-il2cpp-bridge --help | grep -F "dump"
+              current=version-name
               frida-il2cpp-bridge --version | grep -F "frida-il2cpp-bridge"
+              current=version-number
               frida-il2cpp-bridge --version | grep -F "0.13.2"
+              current=python-import
               PYTHONPATH=/opt/autocrack/toolpacks/active/frida-il2cpp-bridge/cli:/opt/autocrack/toolpacks/active/android-frida/python                 python3 -B -c "import src.app,src.dump.command; print('AUTOCRACK_IL2CPP_PY311_OK')"                 | grep -F AUTOCRACK_IL2CPP_PY311_OK
+              current=js-global
               grep -F "globalThis.Il2Cpp = Il2Cpp"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.js
+              current=types-perform
               grep -F "function perform"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.d.ts
+              current=types-trace
               grep -F "function trace"                 /opt/autocrack/toolpacks/active/frida-il2cpp-bridge/dist/index.d.ts
             '
       - uses: actions/upload-artifact@v4

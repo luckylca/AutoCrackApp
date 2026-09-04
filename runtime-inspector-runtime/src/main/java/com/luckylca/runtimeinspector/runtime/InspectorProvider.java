@@ -27,7 +27,9 @@ public final class InspectorProvider extends ContentProvider {
 
     @Override
     public boolean onCreate() {
-        preferences = requireContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        Context context = getContext();
+        if (context == null) return false;
+        preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         return true;
     }
 
@@ -142,7 +144,9 @@ public final class InspectorProvider extends ContentProvider {
         int uid = Binder.getCallingUid();
         if (uid == 0 || uid == Process.SHELL_UID || uid == Process.myUid()) return;
         String claimed = input.optString("package", null);
-        String[] packages = requireContext().getPackageManager().getPackagesForUid(uid);
+        Context context = getContext();
+        if (context == null) throw new SecurityException("Provider context unavailable");
+        String[] packages = context.getPackageManager().getPackagesForUid(uid);
         if (claimed == null || packages == null || !Arrays.asList(packages).contains(claimed)) {
             throw new SecurityException("Runtime may only complete its own package request");
         }

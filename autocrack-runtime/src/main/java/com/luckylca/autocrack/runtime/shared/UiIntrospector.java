@@ -116,12 +116,17 @@ public final class UiIntrospector {
         ViewGroup.LayoutParams lp=view.getLayoutParams();
         if(lp!=null){JSONObject layout=new JSONObject().put("class",lp.getClass().getName()).put("width",lp.width).put("height",lp.height);if(lp instanceof ViewGroup.MarginLayoutParams margin)layout.put("margin",new JSONArray().put(margin.leftMargin).put(margin.topMargin).put(margin.rightMargin).put(margin.bottomMargin));value.put("layout_params",layout);}
         value.put("background",drawable(view.getBackground())); if(Build.VERSION.SDK_INT>=23)value.put("foreground",drawable(view.getForeground()));
-        if(view instanceof TextView text)value.put("textview",new JSONObject().put("text",cut(String.valueOf(text.getText()))).put("hint",text.getHint()==null?JSONObject.NULL:cut(String.valueOf(text.getHint()))).put("text_size_px",text.getTextSize()).put("text_color",text.getCurrentTextColor()).put("hint_color",text.getCurrentHintTextColor()).put("selection_start",text.getSelectionStart()).put("selection_end",text.getSelectionEnd()).put("editable",text.getEditableText()!=null).put("input_type",text.getInputType()).put("single_line",text.isSingleLine()));
+        if(view instanceof TextView text)value.put("textview",new JSONObject().put("text",cut(String.valueOf(text.getText()))).put("hint",text.getHint()==null?JSONObject.NULL:cut(String.valueOf(text.getHint()))).put("text_size_px",text.getTextSize()).put("text_color",text.getCurrentTextColor()).put("hint_color",text.getCurrentHintTextColor()).put("selection_start",text.getSelectionStart()).put("selection_end",text.getSelectionEnd()).put("editable",text.getEditableText()!=null).put("input_type",text.getInputType()).put("single_line",isSingleLineCompat(text)));
         if(view instanceof ImageView image)value.put("imageview",new JSONObject().put("drawable",drawable(image.getDrawable())).put("scale_type",String.valueOf(image.getScaleType())).put("adjust_view_bounds",image.getAdjustViewBounds()).put("image_matrix",image.getImageMatrix()==null?JSONObject.NULL:String.valueOf(image.getImageMatrix())));
         if(view instanceof AdapterView<?> adapter){Object a=adapter.getAdapter();value.put("adapterview",new JSONObject().put("count",adapter.getCount()).put("first_visible_position",adapter.getFirstVisiblePosition()).put("last_visible_position",adapter.getLastVisiblePosition()).put("selected_position",adapter.getSelectedItemPosition()).put("adapter_class",a==null?JSONObject.NULL:a.getClass().getName()).put("adapter_handle",a==null?JSONObject.NULL:ObjectRegistry.get().put(a,false,"adapter")));}
         if(view instanceof VideoView video){JSONObject vv=new JSONObject();vv.put("uri",nullable(fieldText(video,"mUri"))).put("headers",nullable(fieldText(video,"mHeaders")));value.put("videoview",vv);}
         if(view instanceof WebView web){JSONObject w=new JSONObject().put("url",nullable(safeString(web::getUrl))).put("title",nullable(safeString(web::getTitle))).put("progress",safeInt(web::getProgress,-1));try{w.put("user_agent",web.getSettings().getUserAgentString()).put("javascript_enabled",web.getSettings().getJavaScriptEnabled()).put("dom_storage_enabled",web.getSettings().getDomStorageEnabled()).put("mixed_content_mode",Build.VERSION.SDK_INT>=21?web.getSettings().getMixedContentMode():JSONObject.NULL);}catch(Throwable e){w.put("settings_error",e.toString());}value.put("webview",w);}
         return ok().put("view",value);
+    }
+
+    private static boolean isSingleLineCompat(TextView text){
+        if(Build.VERSION.SDK_INT>=29)return text.isSingleLine();
+        return text.getMaxLines()==1;
     }
 
     private static JSONObject parent(JSONObject request)throws Exception{

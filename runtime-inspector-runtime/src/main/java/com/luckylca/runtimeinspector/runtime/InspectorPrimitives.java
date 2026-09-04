@@ -186,7 +186,11 @@ case "webview_eval_js" -> {
             if (includeHidden && !roughScreenBounds(view).contains(x, y)) return false;
             float[] point = new float[]{x, y};
             Matrix matrix = new Matrix();
-            view.transformMatrixToGlobal(matrix);
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                view.transformMatrixToGlobal(matrix);
+            } else {
+                transformMatrixToGlobalCompat(view, matrix);
+            }
             int[] root = new int[2];
             View rootView = view.getRootView();
             if (rootView != null) rootView.getLocationOnScreen(root);
@@ -198,6 +202,17 @@ case "webview_eval_js" -> {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    private static void transformMatrixToGlobalCompat(View view, Matrix matrix) {
+        android.view.ViewParent parent = view.getParent();
+        if (parent instanceof View parentView) {
+            transformMatrixToGlobalCompat(parentView, matrix);
+            matrix.preTranslate(-parentView.getScrollX(), -parentView.getScrollY());
+        }
+        matrix.preTranslate(view.getLeft(), view.getTop());
+        Matrix local = view.getMatrix();
+        if (local != null && !local.isIdentity()) matrix.preConcat(local);
     }
 
     private static Rect roughScreenBounds(View view) {

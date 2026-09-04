@@ -214,6 +214,9 @@ final class InspectorChannel {
     }
 
     private int verifyModuleSender(BroadcastReceiver receiver) {
+        if (Build.VERSION.SDK_INT < 34) {
+            throw new SecurityException("Runtime request sender identity requires API 34+");
+        }
         int uid = receiver.getSentFromUid();
         String[] packages = uid < 0 ? null : context.getPackageManager().getPackagesForUid(uid);
         if (packages == null) throw new SecurityException("Runtime request sender package unavailable");

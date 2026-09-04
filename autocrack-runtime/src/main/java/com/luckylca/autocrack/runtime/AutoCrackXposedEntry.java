@@ -66,7 +66,7 @@ public final class AutoCrackXposedEntry implements IXposedHookLoadPackage {
             @Override
             protected void afterHookedMethod(MethodHookParam param) {
                 Context context = (Context) param.args[0];
-                String processName = Application.getProcessName();
+                String processName = params.processName != null ? params.processName : params.packageName;
                 String key = params.packageName + ":" + processName + ":" + android.os.Process.myPid();
                 if (!STARTED.add(key)) return;
                 try {
