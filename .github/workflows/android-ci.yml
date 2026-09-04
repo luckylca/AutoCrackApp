@@ -38,7 +38,7 @@ jobs:
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
           grep -F 'class GdbRemoteRunTimeoutException' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerRemoteClient.kt
-          grep -F 'step_timeout_target_state_unresolved' \
+          grep -F 'step_timeout_auto_interrupt_recovered' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt
           grep -F 'interrupt_stop_recovered' \
             app/src/main/java/com/luckylca/autocrack/runtime/HostDebuggerControlBridge.kt

@@ -3,6 +3,10 @@ name: Build Debian arm64 rootfs
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rootfs-package.yml'
   workflow_dispatch:
 
 permissions:
