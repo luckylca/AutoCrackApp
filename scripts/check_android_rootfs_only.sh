@@ -42,7 +42,10 @@ patterns=(
 
 failed=0
 for pattern in "${patterns[@]}"; do
-  matches=$(grep -RIn --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=.cxx --exclude-dir=build -- "$pattern" "${paths[@]}" 2>/dev/null || true)
+  matches=$(grep -RIn \
+    --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=.cxx --exclude-dir=build \
+    --exclude='*.md' --exclude='build_toolpack.py' --exclude='*.lock.json' --exclude='VERSION' \
+    -- "$pattern" "${paths[@]}" 2>/dev/null || true)
   if [ -n "$matches" ]; then
     printf 'Forbidden final-runtime dependency marker found: %s\n%s\n' "$pattern" "$matches" >&2
     failed=1

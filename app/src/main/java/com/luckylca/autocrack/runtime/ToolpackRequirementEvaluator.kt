@@ -1,7 +1,7 @@
 package com.luckylca.autocrack.runtime
 
 /**
- * Host-side snapshot of the shared AutoCrack Runtime contract.
+ * App-side snapshot of the shared AutoCrack Runtime contract.
  *
  * RuntimeDispatcher is the protocol authority inside the LSPosed runtime APK. Keep this snapshot
  * intentionally boring and cover it with a source-contract test so the app-side Toolpack
