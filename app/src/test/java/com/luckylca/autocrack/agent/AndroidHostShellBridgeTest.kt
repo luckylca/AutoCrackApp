@@ -27,7 +27,7 @@ class AndroidHostShellBridgeTest {
 
     @Test
     fun observationAndDebuggingCommandsAreNotCapabilityGated() {
-        assertNull(MobileAgentDangerousCommandClassifier.classify("frida -H 127.0.0.1:27042 -l /workspace/test.js Settings"))
+        assertNull(MobileAgentDangerousCommandClassifier.classify("frida -H 127.0.0.1:27042 -p 123 -q -e 'console.log(Process.id)'"))
         assertNull(MobileAgentDangerousCommandClassifier.classify("lldb -o 'gdb-remote 127.0.0.1:12345'"))
         assertNull(MobileAgentDangerousCommandClassifier.classify("tcpdump -i any 'tcp port 443 or udp port 443'"))
         assertNull(MobileAgentDangerousCommandClassifier.classify("pm list packages"))
@@ -36,6 +36,19 @@ class AndroidHostShellBridgeTest {
 
     @Test
     fun runtimeToolpackMutationsAreGatedButInspectionRemainsReadOnly() {
+        listOf(
+            "lldb --batch -o 'memory write 0x1000 0x90'",
+            "lldb --batch -o 'register write pc 0x1234'",
+            "frida -p 123 -q -e 'Interceptor.replace(ptr(\"0x1234\"), cb)'",
+            "frida -p 123 -q -e 'Memory.writeU32(ptr(\"0x1234\"), 1)'",
+            "frida -p 123 -q -e 'Java.use(\"A\").m.implementation = function(){}'",
+        ).forEach { command ->
+            assertEquals(
+                DangerousOperationCategory.TARGET_RUNTIME_MUTATION,
+                MobileAgentDangerousCommandClassifier.classify(command),
+            )
+        }
+
         assertNull(MobileAgentDangerousCommandClassifier.classify("runtime-inspect process --package com.example --json"))
         assertNull(MobileAgentDangerousCommandClassifier.classify("ui-inspect tree --package com.example --json"))
         assertNull(MobileAgentDangerousCommandClassifier.classify("runtime-control secure-status --package com.example --json"))

@@ -45,8 +45,8 @@ class AndroidFridaToolpackTrustPolicyTest {
         version = "frida-17.17.0-autocrack-1.1.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "c4da46d6d03a1b88d9d6031631ada4cf4ec52405e79aaf487f8ac2f5369055c9",
-        payloadSizeBytes = 147_144_577L,
+        payloadSha256 = "c756804f9f0841057fa4698e524299ed8c9d3c61f1d1db26be30b10a34ad04fa",
+        payloadSizeBytes = 147_147_144L,
         requiredPaths = listOf(
             "bin/frida-server-android",
             "bin/android-frida-server",
@@ -57,6 +57,7 @@ class AndroidFridaToolpackTrustPolicyTest {
             "bin/frida",
             "bin/frida-ps",
             "bin/frida-trace",
+            "SKILL.md",
         ),
         commands = listOf(
             ToolpackCommand("android-frida-server", "bin/android-frida-server"),

@@ -31,6 +31,7 @@ class MobileAgentEnvironmentProbe(context: Context) {
     private val layout = RuntimeLayout(appContext).initialize()
     private val runner = ProcessRootCommandRunner()
     private val rootDetector = RootDetector(runner)
+    private val toolpackInstaller = ToolpackPackageInstaller(appContext, layout)
 
     suspend fun inspect(): MobileAgentEnvironmentReport = withContext(Dispatchers.IO) {
         val root = rootDetector.inspect()
@@ -65,10 +66,22 @@ class MobileAgentEnvironmentProbe(context: Context) {
             detail = layout.readRootfsVersion() ?: layout.readRootfsState().name,
             safelyRepairable = !rootfsInstalled,
         )
+        checks += EnvironmentCheckItem(
+            id = "runtime-contract",
+            label = "AutoCrack Runtime contract",
+            healthy = true,
+            detail = "v${ToolpackRuntimeContract.VERSION} · ${ToolpackRuntimeContract.CAPABILITIES.size} capabilities",
+        )
         if (!root.isRootGranted || !rootfsInstalled) {
             listOf("chroot", "mount", "/proc", "/sys", "/dev", "/dev/pts", "Storage", "Network", "bash", "Python").forEach { label ->
                 checks += EnvironmentCheckItem(label.lowercase(), label, false, "需要 Root 与已安装 RootFS")
             }
+            checks += EnvironmentCheckItem(
+                id = "toolpacks",
+                label = "Toolpacks",
+                healthy = false,
+                detail = "需要 Root 与已安装 RootFS 才能验证 Toolpack readiness",
+            )
             return@withContext MobileAgentEnvironmentReport(root, checks)
         }
 
@@ -128,6 +141,36 @@ PY
         checks += pathCheck("git", "Git", values)
         checks += pathCheck("java", "Java", values)
         checks += pathCheck("clang", "Clang", values)
+        val readinessResult = runCatching { toolpackInstaller.inspectInstalledReadiness() }
+        val readiness = readinessResult.getOrNull()
+        if (readiness == null) {
+            checks += EnvironmentCheckItem(
+                id = "toolpacks",
+                label = "Toolpacks",
+                healthy = false,
+                detail = "readiness 检查失败：${readinessResult.exceptionOrNull()?.message ?: "unknown"}",
+            )
+        } else {
+            val readyCount = readiness.count(ToolpackReadinessReport::healthy)
+            checks += EnvironmentCheckItem(
+                id = "toolpacks",
+                label = "Toolpacks",
+                healthy = readiness.all(ToolpackReadinessReport::healthy),
+                detail = if (readiness.isEmpty()) {
+                    "未安装额外 Toolpack"
+                } else {
+                    "$readyCount/${readiness.size} ready · runtime v${ToolpackRuntimeContract.VERSION}"
+                },
+            )
+            readiness.forEach { report ->
+                checks += EnvironmentCheckItem(
+                    id = "toolpack:${report.id}",
+                    label = "Toolpack · ${report.title}",
+                    healthy = report.healthy,
+                    detail = listOfNotNull(report.version, report.summary()).joinToString(" · "),
+                )
+            }
+        }
         return@withContext MobileAgentEnvironmentReport(root, checks)
     }
 

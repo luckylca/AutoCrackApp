@@ -85,6 +85,7 @@ def main() -> None:
             "bin/frida",
             "bin/frida-ps",
             "bin/frida-trace",
+            "SKILL.md",
         ],
         "commands": [
             {"name": "android-frida-server", "relativePath": "bin/android-frida-server"},

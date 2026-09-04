@@ -91,6 +91,7 @@ def main() -> int:
         shutil.copy2(args.apktool_jar, payload / "lib" / "apktool" / "apktool.jar")
         copy_executable(root / "bin" / "jadx", payload / "bin" / "jadx")
         copy_executable(root / "bin" / "apktool", payload / "bin" / "apktool")
+        shutil.copy2(root / "SKILL.md", payload / "SKILL.md")
         payload_zip = output_dir / "payload.zip"
         deterministic_zip(payload, payload_zip)
 
@@ -114,6 +115,7 @@ def main() -> int:
             "bin/apktool",
             "lib/jadx/bin/jadx",
             "lib/apktool/apktool.jar",
+            "SKILL.md",
         ],
         "commands": [
             {

@@ -154,9 +154,9 @@ class BuiltInToolpackTrustPolicyTest {
         version = "pcap-summary-1.0.0",
         architecture = "all",
         payloadEntry = "payload.zip",
-        payloadSha256 = "cfa34e98e43c6665143acacbedd9b249cdfb0f81c76cccf516b17fd4cffaebe9",
-        payloadSizeBytes = 11_703L,
-        requiredPaths = listOf("bin/pcap-summary"),
+        payloadSha256 = "695b6b569af3acea7b5ad64e35fb029db8dcf42771e73ff21d72dfed209d8437",
+        payloadSizeBytes = 12_540L,
+        requiredPaths = listOf("bin/pcap-summary", "SKILL.md"),
         commands = listOf(ToolpackCommand("pcap-summary", "bin/pcap-summary")),
         selfTests = listOf(
             ToolpackSelfTest(
@@ -184,13 +184,14 @@ class BuiltInToolpackTrustPolicyTest {
         version = "jadx-1.5.6_apktool-3.0.3_autocrack-1.0.1",
         architecture = "all",
         payloadEntry = "payload.zip",
-        payloadSha256 = "2071081447bc2765760eb436c08819d4a3a2c8853785451bbc1f4516a6a89109",
-        payloadSizeBytes = 87_888_327L,
+        payloadSha256 = "b81d5ccf6d9730ab7864ad6380696a88f1e7aa7f97a7f34bd578fdb9572187b9",
+        payloadSizeBytes = 93_755_288L,
         requiredPaths = listOf(
             "bin/jadx",
             "bin/apktool",
             "lib/jadx/bin/jadx",
             "lib/apktool/apktool.jar",
+            "SKILL.md",
         ),
         commands = listOf(
             ToolpackCommand("jadx", "bin/jadx"),
@@ -242,9 +243,9 @@ class BuiltInToolpackTrustPolicyTest {
         version = "perfetto-58.2-autocrack-1.0.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "087425724070bd58fd41e35aa568ec3874ff8779420196efd2a273c91dfd3ef1",
-        payloadSizeBytes = 14_086_296L,
-        requiredPaths = listOf("bin/trace_processor"),
+        payloadSha256 = "25271c9f340962e9364c9abba00c1e57ee5c2a4b12ca551c327d640564f19a4b",
+        payloadSizeBytes = 14_087_073L,
+        requiredPaths = listOf("bin/trace_processor", "SKILL.md"),
         commands = listOf(ToolpackCommand("trace_processor", "bin/trace_processor")),
         selfTests = listOf(
             ToolpackSelfTest(
@@ -272,12 +273,13 @@ class BuiltInToolpackTrustPolicyTest {
         version = "checksec-3.2.0_autocrack-1.0.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "4fe3c74c7af905a8586d8ec3cc8157f8e312aec9eef73708818429f5f6910983",
-        payloadSizeBytes = 4_459_830L,
+        payloadSha256 = "9c92996c255866bfcd5fdd1567ad103e685fcfb4fe1f5206b9c32f5a8d7e201b",
+        payloadSizeBytes = 4_460_638L,
         requiredPaths = listOf(
             "bin/checksec",
             "bin/elf-deps",
             "bin/elf-report",
+            "SKILL.md",
         ),
         commands = listOf(
             ToolpackCommand("checksec", "bin/checksec"),
@@ -324,14 +326,15 @@ class BuiltInToolpackTrustPolicyTest {
         version = "rizin-0.9.1_autocrack-1.0.1",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "54d465c8fe84e6f5e5f8be0b56780633f28b2ead84453618fff282ddb50d84b1",
-        payloadSizeBytes = 60_113_392L,
+        payloadSha256 = "be88eeb4918c2a6fe07a59e17e3190113fb0f534349dfa57b4a72644aa72ea39",
+        payloadSizeBytes = 60_114_281L,
         requiredPaths = listOf(
             "bin/rizin",
             "bin/rz-functions",
             "bin/rz-disasm",
             "bin/rz-deep-report",
             "lib/rizin/rizin",
+            "SKILL.md",
         ),
         commands = listOf(
             ToolpackCommand("rizin", "bin/rizin"),

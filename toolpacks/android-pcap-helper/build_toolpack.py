@@ -77,6 +77,7 @@ def main() -> None:
         (payload / "bin").mkdir(parents=True)
         shutil.copy2(binary, payload / "host-bin" / "tcpdump")
         shutil.copy2(Path(__file__).resolve().parent / "bin" / "tcpdump", payload / "bin" / "tcpdump")
+        shutil.copy2(Path(__file__).resolve().parent / "SKILL.md", payload / "SKILL.md")
         manifest = {
             "schemaVersion": 1,
             "id": "android-pcap-helper",
@@ -86,7 +87,7 @@ def main() -> None:
             "payloadEntry": "payload.zip",
             "payloadSha256": "0" * 64,
             "payloadSizeBytes": 1,
-            "requiredPaths": ["bin/tcpdump", "host-bin/tcpdump"],
+            "requiredPaths": ["bin/tcpdump", "host-bin/tcpdump", "SKILL.md"],
             "commands": [{"name": "tcpdump", "relativePath": "bin/tcpdump"}],
             "selfTests": [
                 {"id": "tcpdump-binary", "title": "Android tcpdump binary", "command": "test -x /opt/autocrack/toolpacks/active/android-pcap-helper/host-bin/tcpdump && printf 'AUTOCRACK_TCPDUMP_BINARY_OK\n'", "expectedExitCodes": [0], "outputContains": ["AUTOCRACK_TCPDUMP_BINARY_OK"]},

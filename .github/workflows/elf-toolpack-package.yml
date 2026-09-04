@@ -57,6 +57,7 @@ jobs:
         run: |
           set -euxo pipefail
           cat > dist/payload/bin/elf-deps <<'EOF'
+          cp toolpacks/elf-native-static/SKILL.md dist/payload/SKILL.md
           #!/bin/sh
           set -eu
 
@@ -167,7 +168,8 @@ jobs:
                   info = zipfile.ZipInfo(relative, fixed_time)
                   info.create_system = 3
                   info.compress_type = zipfile.ZIP_STORED
-                  info.external_attr = (stat.S_IFREG | 0o755) << 16
+                  mode = 0o755 if relative.startswith("bin/") else 0o644
+                  info.external_attr = (stat.S_IFREG | mode) << 16
                   archive.writestr(info, path.read_bytes())
 
           payload_bytes = payload_zip.read_bytes()
@@ -184,7 +186,7 @@ jobs:
               "payloadEntry": "payload.zip",
               "payloadSha256": payload_sha,
               "payloadSizeBytes": payload_size,
-              "requiredPaths": ["bin/checksec", "bin/elf-deps", "bin/elf-report"],
+              "requiredPaths": ["bin/checksec", "bin/elf-deps", "bin/elf-report", "SKILL.md"],
               "commands": [
                   {"name": "checksec", "relativePath": "bin/checksec"},
                   {"name": "elf-deps", "relativePath": "bin/elf-deps"},

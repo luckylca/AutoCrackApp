@@ -5,13 +5,15 @@ import org.junit.Test
 
 class RuntimeInspectorToolpackTrustPolicyTest {
     @Test
-    fun acceptsPinnedRuntimeInspectorToolpack() {
-        BuiltInToolpackTrustPolicy.requireTrusted(trustedManifest())
+    fun legacyRuntimeInspectorIsNoLongerTrusted() {
+        assertThrows(IllegalStateException::class.java) {
+            BuiltInToolpackTrustPolicy.requireTrusted(trustedManifest())
+        }
     }
 
     @Test
     fun rejectsModifiedRuntimeInspectorPayload() {
-        assertThrows(IllegalArgumentException::class.java) {
+        assertThrows(IllegalStateException::class.java) {
             BuiltInToolpackTrustPolicy.requireTrusted(
                 trustedManifest().copy(payloadSha256 = "a".repeat(64)),
             )

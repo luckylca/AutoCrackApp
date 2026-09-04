@@ -31,6 +31,10 @@ class AgentToolSessionFactory(
 ) {
     private val appContext = context.applicationContext
 
+    /**
+     * Legacy function-tool session retained only for compatibility/debug validation.
+     * Production Mobile Agent conversations use [createMobileAgent] and Pi-style CLI Toolpacks.
+     */
     suspend fun create(
         extraction: ExtractionReport,
         allowDynamicTools: Boolean,

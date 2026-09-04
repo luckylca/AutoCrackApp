@@ -87,6 +87,7 @@ def main() -> None:
         root = Path(__file__).resolve().parent
         shutil.copy2(root / "bin" / "lldb", payload / "bin" / "lldb")
         shutil.copy2(root / "bin" / "android-lldb-server", payload / "bin" / "android-lldb-server")
+        shutil.copy2(root / "SKILL.md", payload / "SKILL.md")
         manifest = {
             "schemaVersion": 1,
             "id": "android-lldb-server",
@@ -96,7 +97,7 @@ def main() -> None:
             "payloadEntry": "payload.zip",
             "payloadSha256": "0" * 64,
             "payloadSizeBytes": 1,
-            "requiredPaths": ["bin/lldb", "bin/android-lldb-server", "host-bin/lldb-server-android", "lib/llvm-14/bin/lldb", "lib/llvm-14/lib/python3.11/dist-packages/six.py"],
+            "requiredPaths": ["bin/lldb", "bin/android-lldb-server", "host-bin/lldb-server-android", "lib/llvm-14/bin/lldb", "lib/llvm-14/lib/python3.11/dist-packages/six.py", "SKILL.md"],
             "commands": [
                 {"name": "lldb", "relativePath": "bin/lldb"},
                 {"name": "android-lldb-server", "relativePath": "bin/android-lldb-server"},

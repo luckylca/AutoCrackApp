@@ -61,14 +61,15 @@ class AndroidLldbToolpackTrustPolicyTest {
         version = "android-llvm-r522817_lldb-14_autocrack-2.0.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "7e2330f33fe458fce5888c1cd65d604b9e0ff4af7c3e17453c1ec40f169cfdd4",
-        payloadSizeBytes = 283_870_902L,
+        payloadSha256 = "639f4d94159807a2105852dc7cea8eb696469ce2f592c3adc7ca95827fe3770b",
+        payloadSizeBytes = 283_871_844L,
         requiredPaths = listOf(
             "bin/lldb",
             "bin/android-lldb-server",
             "host-bin/lldb-server-android",
             "lib/llvm-14/bin/lldb",
             "lib/llvm-14/lib/python3.11/dist-packages/six.py",
+            "SKILL.md",
         ),
         commands = listOf(
             ToolpackCommand("lldb", "bin/lldb"),

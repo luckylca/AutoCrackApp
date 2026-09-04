@@ -9,22 +9,20 @@ object MobileAgentPromptBuilder {
             "- 当前没有安装额外工具包"
         } else {
             runtime.installedToolpacks.joinToString("\n") { pack ->
+                val commands = pack.manifest.commands.map { it.name }
+                val commandHint = commands.take(MAX_COMMAND_HINTS).joinToString(",").let { visible ->
+                    if (commands.size > MAX_COMMAND_HINTS) "$visible,+${commands.size - MAX_COMMAND_HINTS}" else visible
+                }
                 buildString {
                     append("- ").append(pack.manifest.title).append(' ').append(pack.manifest.version)
-                    pack.manifest.description.takeIf(String::isNotBlank)?.let { append(" — ").append(it) }
-                    appendLine()
-                    pack.manifest.commands.forEach { command ->
-                        append("  - ").append(command.name)
-                        command.description.takeIf(String::isNotBlank)?.let { append(" — ").append(it) }
-                        appendLine()
-                    }
+                        .append(" [").append(pack.manifest.id).append(']')
+                    if (commandHint.isNotBlank()) append(" · commands: ").append(commandHint)
                     if ("SKILL.md" in pack.manifest.requiredPaths) {
-                        append("  - skill: /opt/autocrack/toolpacks/active/")
+                        append(" · skill: /opt/autocrack/toolpacks/active/")
                             .append(pack.manifest.id)
                             .append("/SKILL.md")
-                        appendLine()
                     }
-                }.trimEnd()
+                }
             }
         }
         return """
@@ -34,7 +32,7 @@ object MobileAgentPromptBuilder {
             - exec_bash: Execute Bash inside the Debian environment. The current working directory is /workspace.
             - read_file: Read a file from /workspace using a relative path.
             - write_file: Write a file under /workspace using a relative path.
-            - kill_process: Terminate a process started during the Agent session.
+            - kill_process: Terminate a process by PID using Android root.
 
             Installed toolpack commands are also available on PATH:
             $toolpacks
@@ -42,7 +40,7 @@ object MobileAgentPromptBuilder {
             Guidelines:
             - Keep the harness simple: exec_bash is the main capability. Installed toolpacks are ordinary shell commands on PATH, not separate model tools.
             - Use read_file and write_file for file contents under /workspace; use exec_bash for shell discovery, pipelines, scripts, rg/grep/find, and CLI composition.
-            - Before first using a non-trivial installed CLI for a task, inspect its --help. If its entry above exposes a skill path, read that SKILL.md when the task matches the toolpack.
+            - Discover lazily: use AUTOC_TOOLPACK_COMMANDS, command -v, --help, and the matching SKILL.md instead of assuming an unlisted subcommand or option.
             - Use android-shell from Bash when a command must run on the Android host rather than inside Debian.
             - Prefer machine-readable --json output when a CLI supports it. Check ok, supported, error/reason, handles, and tokens instead of assuming empty output means success.
             - For the shared AutoCrack Runtime CLI family, use runtime-inspect doctor --package <target> --json when runtime readiness is unknown or after a bridge/runtime failure. Do not change LSPosed configuration merely because a heartbeat is absent.
@@ -57,4 +55,6 @@ object MobileAgentPromptBuilder {
             Current working directory: /workspace
         """.trimIndent()
     }
+
+    private const val MAX_COMMAND_HINTS = 3
 }

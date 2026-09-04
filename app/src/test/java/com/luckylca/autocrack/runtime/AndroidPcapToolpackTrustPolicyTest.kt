@@ -45,9 +45,9 @@ class AndroidPcapToolpackTrustPolicyTest {
         version = "tcpdump-4.99.5_libpcap-1.10.5_autocrack-1.1.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "0090c82f039f2a61b69533eaaa9063611f6bd5bd1a71992b4794aa94bef7db9e",
-        payloadSizeBytes = 3_945_278L,
-        requiredPaths = listOf("bin/tcpdump", "host-bin/tcpdump"),
+        payloadSha256 = "78fd0429a1cc422a6b9c17fb685d39ba069e3605d1c0db0b3e5ad49e08b976a2",
+        payloadSizeBytes = 3_946_116L,
+        requiredPaths = listOf("bin/tcpdump", "host-bin/tcpdump", "SKILL.md"),
         commands = listOf(ToolpackCommand("tcpdump", "bin/tcpdump")),
         selfTests = listOf(
             ToolpackSelfTest(

@@ -9,6 +9,7 @@ PID_FILE = "/data/local/tmp/autocrack-frida-server.pid"
 LOG_FILE = "/data/local/tmp/autocrack-frida-server.log"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 27042
+LEGACY_BINARY = "/data/local/tmp/frida-server-android"
 
 
 def host_binary() -> str:
@@ -64,10 +65,42 @@ printf '%s\n%s\n' "$PID" "$VERSION"
     }
 
 
+def recover_legacy_server() -> int:
+    """Stop only the verified pre-Pi AutoCrack helper that can own Frida's fixed port."""
+    script = r'''
+LEGACY="$1"
+FOUND=0
+for PID in $(pidof frida-server-android 2>/dev/null || true); do
+  [ -d "/proc/$PID" ] || continue
+  EXE=$(readlink "/proc/$PID/exe" 2>/dev/null || true)
+  [ "$EXE" = "$LEGACY" ] || continue
+  kill -TERM "$PID" 2>/dev/null || true
+  FOUND=$((FOUND + 1))
+done
+[ "$FOUND" -eq 0 ] || sleep 1
+for PID in $(pidof frida-server-android 2>/dev/null || true); do
+  [ -d "/proc/$PID" ] || continue
+  EXE=$(readlink "/proc/$PID/exe" 2>/dev/null || true)
+  [ "$EXE" = "$LEGACY" ] || continue
+  kill -KILL "$PID" 2>/dev/null || true
+done
+printf '%s\n' "$FOUND"
+'''
+    result = android_shell("sh", "-c", script, "autocrack-frida-recover-legacy", LEGACY_BINARY)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or "legacy Frida recovery failed")
+    value = result.stdout.strip().splitlines()
+    return int(value[-1]) if value and value[-1].isdigit() else 0
+
+
 def start() -> int:
     running, details = status()
     if running:
         return emit(True, "running", **details)
+    try:
+        recovered_legacy = recover_legacy_server()
+    except RuntimeError as error:
+        return emit(False, "legacy_recovery_failed", error=str(error))
     binary = host_binary()
     script = r'''
 BIN="$1"; PID_FILE="$2"; LOG_FILE="$3"; HOST="$4"; PORT="$5"
@@ -86,6 +119,8 @@ printf '%s\n' "$PID"
     for _ in range(50):
         running, details = status()
         if running:
+            if recovered_legacy:
+                details["recoveredLegacyServers"] = recovered_legacy
             return emit(True, "running", **details)
         time.sleep(0.1)
     log = android_shell("sh", "-c", 'tail -n 20 "$1" 2>/dev/null || true', "autocrack-frida-log", LOG_FILE)

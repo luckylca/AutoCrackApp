@@ -1,6 +1,7 @@
 package com.luckylca.autocrack.runtime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,6 +23,39 @@ class SharedRuntimeToolpackTrustPolicyTest {
             assertTrue(manifest.requires.commands.contains("android-shell"))
             BuiltInToolpackTrustPolicy.requireTrusted(manifest)
         }
+    }
+
+    @Test
+    fun legacyRuntimeInspectorIsNotTrusted() {
+        val legacy = ToolpackPackageManifest(
+            schemaVersion = 1,
+            id = "runtime-inspector",
+            title = "Legacy Runtime Inspector",
+            version = "0.1.0",
+            architecture = "all",
+            payloadEntry = ToolpackPackageManifest.PAYLOAD_ENTRY,
+            payloadSha256 = "a".repeat(64),
+            payloadSizeBytes = 1,
+            requiredPaths = listOf("bin/runtime-inspector"),
+            commands = listOf(ToolpackCommand("runtime-inspector", "bin/runtime-inspector")),
+            selfTests = listOf(
+                ToolpackSelfTest("help", "help", "true", setOf(0), emptyList()),
+            ),
+            sources = listOf(
+                ToolpackSourceArtifact(
+                    "legacy",
+                    "0.1.0",
+                    "https://example.com/legacy",
+                    "b".repeat(64),
+                ),
+            ),
+        )
+
+        val error = assertThrows(IllegalStateException::class.java) {
+            BuiltInToolpackTrustPolicy.requireTrusted(legacy)
+        }
+        assertTrue(error.message.orEmpty().contains("不在 AutoCrackApp 内置信任目录"))
+        assertFalse(error.message.orEmpty().contains("payload SHA-256"))
     }
 
     @Test
@@ -128,8 +162,8 @@ class SharedRuntimeToolpackTrustPolicyTest {
   "description": "Inspect target process, Activity, ClassLoader, class metadata and object handles.",
   "architecture": "all",
   "payloadEntry": "payload.zip",
-  "payloadSha256": "a3d409c6a762bc72261c6438c622e598707f0b6a2aacfa3a58358eafe6b80e3b",
-  "payloadSizeBytes": 17926,
+  "payloadSha256": "2540d2e2e42bd1f2cbd1c52a1cd06f853032e021a06fccbb40903854bd3e8a37",
+  "payloadSizeBytes": 18049,
   "requiredPaths": [
     "bin/runtime-inspect",
     "libexec/runtime_inspect_cli.py",

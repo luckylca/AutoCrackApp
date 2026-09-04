@@ -9,7 +9,7 @@ runtime-inspect --help
 runtime-inspect doctor --package PKG --json
 ```
 
-Run `doctor` when starting a multi-step runtime task, when the target was restarted, or after bridge/runtime errors. `doctor` is read-only and retries one startup `RUNTIME_TIMEOUT` once to cover the receiver-registration race; mutation commands are never retried automatically. A missing target heartbeat alone does not prove the LSPosed module is disabled.
+Run `doctor` when starting a multi-step runtime task, when the target was restarted, or after bridge/runtime errors. `doctor` is read-only. The Stage 60 transport preserves the same request UUID across delivery recovery, uses the ordered-broadcast handshake to establish the target Binder endpoint, prefers direct Binder requests once available, and can thaw MIUI/Greeze-frozen targets when required. A missing target heartbeat alone does not prove the LSPosed module is disabled.
 
 ## Typical workflow
 

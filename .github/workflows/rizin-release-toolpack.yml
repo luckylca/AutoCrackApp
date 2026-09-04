@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euxo pipefail
           cp toolpacks/rizin-deep-static/bin/* dist/payload/bin/
+          cp toolpacks/rizin-deep-static/SKILL.md dist/payload/SKILL.md
           chmod 0755 dist/payload/bin/*
 
       - name: Build deterministic payload and provisional manifest
@@ -110,7 +111,8 @@ jobs:
                   "bin/rz-functions",
                   "bin/rz-disasm",
                   "bin/rz-deep-report",
-                  "lib/rizin/rizin"
+                  "lib/rizin/rizin",
+                  "SKILL.md"
               ],
               "commands": [
                   {"name": "rizin", "relativePath": "bin/rizin"},

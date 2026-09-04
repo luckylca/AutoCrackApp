@@ -256,6 +256,11 @@ data class ToolpackInstallResult(
     val durationMillis: Long,
 )
 
+data class ToolpackVerifiedInstallResult(
+    val install: ToolpackInstallResult,
+    val selfTest: ToolpackSelfTestReport,
+)
+
 data class InstalledToolpack(
     val manifest: ToolpackPackageManifest,
     val packagePath: String,

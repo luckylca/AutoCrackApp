@@ -39,12 +39,13 @@ class LiefToolpackTrustPolicyTest {
         version = "lief-1.0.0-autocrack-1.0.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "ca01f7b80573b459f9a55658d4a493475b401e154b5aa9e80d1a7696ad5d6f15",
-        payloadSizeBytes = 12_245_708L,
+        payloadSha256 = "b2bb3a3a2fae53782bd1bc3bc357504bd7a1747dc782a2942944510b3fa34e78",
+        payloadSizeBytes = 12_246_513L,
         requiredPaths = listOf(
             "bin/lief-elf-report",
             "libexec/lief_elf_report.py",
             "python/lief/__init__.py",
+            "SKILL.md",
         ),
         commands = listOf(ToolpackCommand("lief-elf-report", "bin/lief-elf-report")),
         selfTests = listOf(

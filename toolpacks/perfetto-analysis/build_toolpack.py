@@ -63,7 +63,8 @@ def main() -> None:
         payload = Path(tmp) / "payload"
         (payload / "bin").mkdir(parents=True)
         shutil.copy2(binary, payload / "bin" / "trace_processor")
-        manifest = {"schemaVersion": 1, "id": "perfetto-analysis", "title": "Perfetto trace analysis", "version": version, "architecture": "arm64", "payloadEntry": "payload.zip", "payloadSha256": "0" * 64, "payloadSizeBytes": 1, "requiredPaths": ["bin/trace_processor"], "commands": [{"name": "trace_processor", "relativePath": "bin/trace_processor"}], "selfTests": [{"id": "trace-processor-help", "title": "Perfetto trace_processor ARM64 CLI", "command": "trace_processor --help >/dev/null", "expectedExitCodes": [0], "outputContains": []}], "sources": [{"name": "perfetto-linux-arm64", "version": "58.2", "url": "https://github.com/google/perfetto/releases/download/v58.2/linux-arm64.zip", "sha256": actual}]}
+        shutil.copy2(Path(__file__).resolve().parent / "SKILL.md", payload / "SKILL.md")
+        manifest = {"schemaVersion": 1, "id": "perfetto-analysis", "title": "Perfetto trace analysis", "version": version, "architecture": "arm64", "payloadEntry": "payload.zip", "payloadSha256": "0" * 64, "payloadSizeBytes": 1, "requiredPaths": ["bin/trace_processor", "SKILL.md"], "commands": [{"name": "trace_processor", "relativePath": "bin/trace_processor"}], "selfTests": [{"id": "trace-processor-help", "title": "Perfetto trace_processor ARM64 CLI", "command": "trace_processor --help >/dev/null", "expectedExitCodes": [0], "outputContains": []}], "sources": [{"name": "perfetto-linux-arm64", "version": "58.2", "url": "https://github.com/google/perfetto/releases/download/v58.2/linux-arm64.zip", "sha256": actual}]}
         write_outer(manifest, payload, Path(args.output_dir), "AutoCrackApp-perfetto-analysis-toolpack.zip", {"bin/trace_processor"})
 
 if __name__ == "__main__":

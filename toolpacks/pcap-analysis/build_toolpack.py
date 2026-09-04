@@ -65,6 +65,7 @@ def main() -> None:
         payload = Path(tmp) / "payload"
         (payload / "bin").mkdir(parents=True)
         shutil.copy2(root / "bin" / "pcap-summary", payload / "bin" / "pcap-summary")
+        shutil.copy2(root / "SKILL.md", payload / "SKILL.md")
         manifest = {
             "schemaVersion": 1,
             "id": "rootfs-pcap-analysis",
@@ -74,7 +75,7 @@ def main() -> None:
             "payloadEntry": "payload.zip",
             "payloadSha256": "0" * 64,
             "payloadSizeBytes": 1,
-            "requiredPaths": ["bin/pcap-summary"],
+            "requiredPaths": ["bin/pcap-summary", "SKILL.md"],
             "commands": [{"name": "pcap-summary", "relativePath": "bin/pcap-summary"}],
             "selfTests": [{"id": "pcap-summary-self-test", "title": "Pure Python pcap summary helper", "command": "pcap-summary --self-test", "expectedExitCodes": [0], "outputContains": ["PCAP_SUMMARY_SELF_TEST_OK"]}],
             "sources": [{"name": "pcap-summary", "version": "1.0.0", "url": "https://github.com/luckylca/AutoCrackApp/tree/main/toolpacks/pcap-analysis", "sha256": sha256(root / "bin" / "pcap-summary")}],

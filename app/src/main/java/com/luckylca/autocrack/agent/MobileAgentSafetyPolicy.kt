@@ -59,13 +59,16 @@ object MobileAgentDangerousCommandClassifier {
             "|simplehook\\s+rules\\s+(?:add|update|enable|disable|remove)\\b" +
             ")",
     )
+    private val explicitDebuggerMutation = Regex(
+        "(?is)(?:^|[;&|\\n])[^\\n;&|]*(?:lldb\\b[^\\n;&|]*(?:memory\\s+write|register\\s+write)|frida\\b[^\\n;&|]*(?:Interceptor\\.replace|Memory\\.write[A-Za-z0-9_]*|\\.implementation\\s*=))",
+    )
 
     fun classify(script: String): DangerousOperationCategory? = when {
         isDestructiveDelete(script) -> DangerousOperationCategory.DESTRUCTIVE_DELETE
         blockWrite.containsMatchIn(script) -> DangerousOperationCategory.BLOCK_DEVICE_WRITE
         deviceControl.containsMatchIn(script) -> DangerousOperationCategory.DEVICE_CONTROL
         packageDataChange.containsMatchIn(script) -> DangerousOperationCategory.PACKAGE_DATA_CHANGE
-        targetRuntimeMutation.containsMatchIn(script) -> DangerousOperationCategory.TARGET_RUNTIME_MUTATION
+        targetRuntimeMutation.containsMatchIn(script) || explicitDebuggerMutation.containsMatchIn(script) -> DangerousOperationCategory.TARGET_RUNTIME_MUTATION
         mountControl.containsMatchIn(script) -> DangerousOperationCategory.MOUNT_CONTROL
         systemSettingChange.containsMatchIn(script) || systemPathMutation.containsMatchIn(script) ||
             systemPathRedirect.containsMatchIn(script) ->

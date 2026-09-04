@@ -79,10 +79,12 @@ import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import com.luckylca.autocrack.root.RootStatus
 import com.luckylca.autocrack.runtime.ChrootPtySessionManager
+import com.luckylca.autocrack.runtime.ChrootRuntimeEngine
 import com.luckylca.autocrack.runtime.EnvironmentCheckItem
 import com.luckylca.autocrack.runtime.InstalledToolpack
 import com.luckylca.autocrack.runtime.MobileAgentEnvironmentProbe
 import com.luckylca.autocrack.runtime.RootfsPackageInstaller
+import com.luckylca.autocrack.runtime.RootShellRuntimeEngine
 import com.luckylca.autocrack.runtime.RuntimeLayout
 import com.luckylca.autocrack.runtime.RuntimeRootfsState
 import com.luckylca.autocrack.runtime.ToolpackPackageInstaller
@@ -194,6 +196,16 @@ internal fun MobilePiAgentScreen(
     var toolLog by remember { mutableStateOf("") }
 
     var pendingSave by remember { mutableStateOf<Pair<String, AgentManagedFile>?>(null) }
+
+    suspend fun createToolpackSelfTestEngine(): ChrootRuntimeEngine {
+        val root = rootDetector.inspect()
+        require(root.isRootGranted) { root.diagnostic ?: "Toolpack 自检需要 Root" }
+        val suPath = requireNotNull(root.suPath) { "Root 已授权但未找到可用 su" }
+        return ChrootRuntimeEngine(
+            layout = layout,
+            hostEngine = RootShellRuntimeEngine(layout, suPath),
+        )
+    }
 
     fun loadProviderDraft(provider: LlmProviderConfig) {
         editingProviderId = provider.id
@@ -440,12 +452,21 @@ internal fun MobilePiAgentScreen(
         if (uri != null) {
             scope.launch {
                 toolpackStatus = "正在安装并校验工具包…"
-                runCatching { toolpackInstaller.install(uri) { progress -> toolpackStatus = progress } }
-                    .onSuccess { result ->
-                        toolpackStatus = "已安装 ${result.manifest.title} ${result.manifest.version}"
+                runCatching {
+                    val chroot = createToolpackSelfTestEngine()
+                    toolpackInstaller.installAndSelfTest(uri, chroot) { progress -> toolpackStatus = progress }
+                }
+                    .onSuccess { verified ->
+                        toolpackStatus = "已安装并通过自检 ${verified.install.manifest.title} ${verified.install.manifest.version}"
                         toolpackRefreshKey += 1
+                        refreshRootAndRootfs(refreshEnvironment = true)
                     }
-                    .onFailure { error -> toolpackStatus = "安装失败：${error.message}" }
+                    .onFailure { error ->
+                        toolpackStatus = error.message?.takeIf { it.startsWith("工具包已安装但自检失败") }
+                            ?: "安装失败：${error.message}"
+                        toolpackRefreshKey += 1
+                        refreshRootAndRootfs(refreshEnvironment = true)
+                    }
             }
         }
     }
@@ -458,11 +479,14 @@ internal fun MobilePiAgentScreen(
                 runCatching {
                     ptyManager.close()
                     val result = rootfsInstaller.install(uri) { progress -> rootfsStatus = progress }
+                    val chroot = createToolpackSelfTestEngine()
                     preservedToolpacks.forEach { pack ->
                         val packageFile = File(pack.packagePath)
                         if (packageFile.isFile) {
-                            rootfsStatus = "正在恢复工具包：${pack.manifest.title}"
-                            toolpackInstaller.install(Uri.fromFile(packageFile))
+                            rootfsStatus = "正在恢复并自检工具包：${pack.manifest.title}"
+                            toolpackInstaller.installAndSelfTest(Uri.fromFile(packageFile), chroot) { progress ->
+                                rootfsStatus = "恢复 ${pack.manifest.title}：$progress"
+                            }
                         }
                     }
                     result

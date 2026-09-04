@@ -121,6 +121,11 @@ class ToolpackPackageInstaller(
                 payloadFile = payloadFile,
                 onProgress = onProgress,
             )
+            val requirementReport = evaluateRequirements(manifest)
+            requirementReport.requireCompatible(manifest.id)
+            if (requirementReport.warnings.isNotEmpty()) {
+                onProgress("工具包依赖满足，存在可选能力警告：${requirementReport.warnings.joinToString("；")}")
+            }
             previousInstalled = readInstalled(manifest.id, requireTrusted = false)
             validateCommandConflicts(manifest)
 
@@ -167,7 +172,8 @@ class ToolpackPackageInstaller(
                     .put("installedPath", target.path)
                     .put("payloadBytes", payloadFile.length())
                     .put("extractedEntries", extraction.first)
-                    .put("extractedBytes", extraction.second),
+                    .put("extractedBytes", extraction.second)
+                    .put("requirementWarnings", JSONArray(requirementReport.warnings)),
             )
             ToolpackInstallResult(
                 manifest = manifest,
@@ -252,6 +258,92 @@ class ToolpackPackageInstaller(
         installed
     }
 
+    fun evaluateRequirements(manifest: ToolpackPackageManifest): ToolpackRequirementReport =
+        ToolpackRequirementEvaluator.evaluate(
+            manifest = manifest,
+            availableCommands = availableCommandNames(),
+        )
+
+    suspend fun inspectInstalledReadiness(): List<ToolpackReadinessReport> = withContext(Dispatchers.IO) {
+        initializeAppDirectories()
+        if (layout.rootfsRoot.isDirectory) initializeRootfsDirectories()
+        installedRecordsRoot.listFiles()
+            .orEmpty()
+            .filter { file -> file.isFile && file.extension == "json" }
+            .sortedBy(File::getName)
+            .map { file ->
+                val parsed = runCatching {
+                    parseInstalledToolpackRecord(file.readText(Charsets.UTF_8), requireTrusted = false)
+                }
+                val installed = parsed.getOrNull()
+                if (installed == null) {
+                    ToolpackReadinessReport(
+                        id = file.nameWithoutExtension,
+                        title = file.nameWithoutExtension,
+                        version = null,
+                        trusted = false,
+                        requirements = null,
+                        missingPaths = emptyList(),
+                        invalidCommandShims = emptyList(),
+                        failure = "已安装记录解析失败：${parsed.exceptionOrNull()?.message ?: "unknown"}",
+                    )
+                } else {
+                    val manifest = installed.manifest
+                    val trustFailure = runCatching {
+                        BuiltInToolpackTrustPolicy.requireTrusted(manifest)
+                    }.exceptionOrNull()
+                    val installedRoot = File(installed.installedPath)
+                    val missingPaths = manifest.requiredPaths.filter { relativePath ->
+                        runCatching {
+                            ToolpackPathPolicy.resolve(installedRoot, relativePath).exists()
+                        }.getOrDefault(false).not()
+                    }
+                    val invalidShims = manifest.commands.mapNotNull { command ->
+                        val shim = File(rootfsCommandRoot, command.name)
+                        val owned = shim.isFile && runCatching {
+                            shim.readText(Charsets.UTF_8).contains(toolpackMarker(manifest.id))
+                        }.getOrDefault(false)
+                        command.name.takeUnless { owned }
+                    }
+                    ToolpackReadinessReport(
+                        id = manifest.id,
+                        title = manifest.title,
+                        version = manifest.version,
+                        trusted = trustFailure == null,
+                        requirements = evaluateRequirements(manifest),
+                        missingPaths = missingPaths,
+                        invalidCommandShims = invalidShims,
+                        failure = trustFailure?.message,
+                    )
+                }
+            }
+    }
+
+    suspend fun installAndSelfTest(
+        packageUri: Uri,
+        chrootEngine: ChrootRuntimeEngine,
+        onProgress: (String) -> Unit = {},
+    ): ToolpackVerifiedInstallResult {
+        val install = install(packageUri, onProgress)
+        val installed = withContext(Dispatchers.IO) {
+            readInstalled(install.manifest.id, requireTrusted = true)
+                ?: error("工具包安装记录不存在：${install.manifest.id}")
+        }
+        val selfTest = runSelfTests(installed, chrootEngine, onProgress)
+        if (!selfTest.passed) {
+            val failures = selfTest.results
+                .filterNot(ToolpackSelfTestResult::passed)
+                .joinToString("；") { result ->
+                    "${result.test.id}: ${result.failure ?: "unknown"}"
+                }
+            throw IllegalStateException(
+                "工具包已安装但自检失败：${install.manifest.title} ${install.manifest.version}；$failures",
+            )
+        }
+        onProgress("工具包已安装并通过自检：${install.manifest.title} ${install.manifest.version}")
+        return ToolpackVerifiedInstallResult(install, selfTest)
+    }
+
     suspend fun pruneUnreferencedPackages(): ToolpackPackagePruneResult = withContext(Dispatchers.IO) {
         initializeAppDirectories()
         pruneUnreferencedPackagesInternal()
@@ -263,6 +355,7 @@ class ToolpackPackageInstaller(
         onProgress: (String) -> Unit = {},
     ): ToolpackSelfTestReport {
         BuiltInToolpackTrustPolicy.requireTrusted(installed.manifest)
+        evaluateRequirements(installed.manifest).requireCompatible(installed.manifest.id)
         require(File(installed.installedPath).isDirectory) {
             "工具包安装目录不存在；rootfs 更新后请重新安装工具包"
         }
@@ -790,6 +883,22 @@ class ToolpackPackageInstaller(
                 return FileVisitResult.CONTINUE
             }
         })
+    }
+
+    private fun availableCommandNames(): Set<String> = buildSet {
+        listOf(
+            rootfsCommandRoot,
+            File(layout.rootfsRoot, "usr/local/sbin"),
+            File(layout.rootfsRoot, "usr/bin"),
+            File(layout.rootfsRoot, "usr/sbin"),
+            File(layout.rootfsRoot, "bin"),
+            File(layout.rootfsRoot, "sbin"),
+            File(layout.rootfsRoot, "usr/lib/jvm/java-17-openjdk-arm64/bin"),
+        ).forEach { directory ->
+            directory.listFiles().orEmpty().forEach { candidate ->
+                if (candidate.isFile || Files.isSymbolicLink(candidate.toPath())) add(candidate.name)
+            }
+        }
     }
 
     private fun toolpackMarker(id: String): String = "# AutoCrackApp toolpack:$id"

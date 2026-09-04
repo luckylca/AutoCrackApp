@@ -184,6 +184,7 @@ jobs:
             cp toolpacks/frida/frida_tools_launcher.py dist/payload/libexec/frida_tools_launcher.py
             cp toolpacks/frida/frida-autocrack-client dist/payload/bin/frida-autocrack-client
             cp toolpacks/frida/android-frida-server dist/payload/bin/android-frida-server
+            cp toolpacks/frida/SKILL.md dist/payload/SKILL.md
             for command in \
               frida frida-ls-devices frida-ps frida-kill frida-ls frida-rm frida-pull frida-push \
               frida-discover frida-trace frida-strace frida-itrace frida-join frida-create \
