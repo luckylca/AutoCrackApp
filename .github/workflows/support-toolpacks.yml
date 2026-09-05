@@ -243,8 +243,8 @@ jobs:
           cmp dist/jnitrace/payload.sha256 dist/jnitrace-rerun/payload.sha256
           cmp dist/jnitrace/payload.size dist/jnitrace-rerun/payload.size
           cmp dist/jnitrace/*toolpack.zip dist/jnitrace-rerun/*toolpack.zip
-          grep -Fx b45737d6d9041ef037123589533a8c94e0977a71cd24a24b9e816eb25eb43bcc dist/jnitrace/payload.sha256
-          grep -Fx 4528608 dist/jnitrace/payload.size
+          grep -Fx 92efc9377bbc3c2f52649675560908ec16573485e3df7641a15c42e9a61f35e3 dist/jnitrace/payload.sha256
+          grep -Fx 4674924 dist/jnitrace/payload.size
           unzip -t dist/jnitrace/*toolpack.zip
       - name: Run jnitrace + production Frida integration smoke on Debian Bookworm ARM64
         run: |
@@ -591,8 +591,8 @@ jobs:
           cmp dist/frida-il2cpp-bridge/payload.sha256 dist/frida-il2cpp-bridge-rerun/payload.sha256
           cmp dist/frida-il2cpp-bridge/payload.size dist/frida-il2cpp-bridge-rerun/payload.size
           cmp dist/frida-il2cpp-bridge/*toolpack.zip dist/frida-il2cpp-bridge-rerun/*toolpack.zip
-          grep -Fx 7ed0b4ffdcbcd99dd7cc9281e4bcb611b7c67e0d183032e6ba6b424610029359             dist/frida-il2cpp-bridge/payload.sha256
-          grep -Fx 770897 dist/frida-il2cpp-bridge/payload.size
+          grep -Fx 89b0f41048881e1f835fa9c5b577de5f72a642295e5d5ed0824eb313fac8b12e             dist/frida-il2cpp-bridge/payload.sha256
+          grep -Fx 771584 dist/frida-il2cpp-bridge/payload.size
           unzip -t dist/frida-il2cpp-bridge/*toolpack.zip
       - name: Prepare pinned Android Frida Python client used by production
         run: |
