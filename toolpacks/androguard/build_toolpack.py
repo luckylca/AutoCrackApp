@@ -102,7 +102,7 @@ def main() -> int:
                     "title": "Complete upstream Androguard CLI",
                     "command": "androguard --help",
                     "expectedExitCodes": [0],
-                    "outputContains": ["Usage:", "androguard"],
+                    "outputContains": ["Usage:", "Androguard"],
                 },
                 {
                     "id": "androguard-python-api",

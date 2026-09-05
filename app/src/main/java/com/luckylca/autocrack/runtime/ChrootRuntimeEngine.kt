@@ -97,30 +97,33 @@ class ChrootRuntimeEngine(
     private suspend fun cleanupTaggedProcesses(executionToken: String): ShellCommandResult =
         hostEngine.execute(
             ShellCommandRequest(
-                command = ChrootOrphanCleanupCommandBuilder.build(executionToken),
+                command = ChrootOrphanCleanupCommandBuilder.build(executionToken, layout.rootfsRoot.path),
                 workingDirectory = layout.runtimeRoot.path,
                 timeoutMillis = ORPHAN_CLEANUP_TIMEOUT_MILLIS,
                 identity = HostExecutionIdentity.ROOT,
+                outputMode = ShellOutputMode.DISCARD,
             ),
         )
 
     suspend fun cleanupStaleAgentProcesses(): ShellCommandResult =
         hostEngine.execute(
             ShellCommandRequest(
-                command = ChrootStaleAgentCleanupCommandBuilder.build(),
+                command = ChrootStaleAgentCleanupCommandBuilder.build(layout.rootfsRoot.path),
                 workingDirectory = layout.runtimeRoot.path,
                 timeoutMillis = ORPHAN_CLEANUP_TIMEOUT_MILLIS,
                 identity = HostExecutionIdentity.ROOT,
+                outputMode = ShellOutputMode.DISCARD,
             ),
         )
 
     suspend fun cleanupAgentSessionProcesses(sessionId: String): ShellCommandResult =
         hostEngine.execute(
             ShellCommandRequest(
-                command = ChrootAgentSessionCleanupCommandBuilder.build(sessionId),
+                command = ChrootAgentSessionCleanupCommandBuilder.build(sessionId, layout.rootfsRoot.path),
                 workingDirectory = layout.runtimeRoot.path,
                 timeoutMillis = ORPHAN_CLEANUP_TIMEOUT_MILLIS,
                 identity = HostExecutionIdentity.ROOT,
+                outputMode = ShellOutputMode.DISCARD,
             ),
         )
 
@@ -238,117 +241,94 @@ class ChrootRuntimeEngine(
     }
 }
 
+private object ChrootTaggedProcessCleanupScriptBuilder {
+    fun build(
+        marker: String,
+        rootfsPath: String,
+        successPrefix: String,
+        remainingPrefix: String,
+    ): String = """
+        set -eu
+        MARKER=${ShellEscaper.quote(marker)}
+        ROOTFS=${ShellEscaper.quote(rootfsPath)}
+
+        # Android exposes many /proc entries. Never read arbitrary system-service environ files:
+        # first retain only root userspace processes whose /proc/PID/root is exactly this managed
+        # Debian rootfs, then probe the tiny chroot-only candidate set with a per-read timeout.
+        find_tagged_pids() {
+          ps -A -o PID=,PPID=,UID= 2>/dev/null |
+            awk '${'$'}1 > 1 && ${'$'}2 != 2 && ${'$'}3 == 0 { print ${'$'}1 }' |
+            while IFS= read -r PID; do
+              case "${'$'}PID" in ''|*[!0-9]*) continue ;; esac
+              PROCESS_ROOT=${'$'}(readlink "/proc/${'$'}PID/root" 2>/dev/null || true)
+              [ "${'$'}PROCESS_ROOT" = "${'$'}ROOTFS" ] || continue
+              ENV_FILE=/proc/${'$'}PID/environ
+              [ -r "${'$'}ENV_FILE" ] || continue
+              if timeout -k 0.02 0.05 grep -a -q -F -- "${'$'}MARKER" "${'$'}ENV_FILE" 2>/dev/null; then
+                printf '%s\n' "${'$'}PID"
+              fi
+            done
+        }
+
+        still_alive() {
+          for PID in ${'$'}1; do
+            [ -d "/proc/${'$'}PID" ] && printf '%s\n' "${'$'}PID"
+          done
+        }
+
+        PIDS=${'$'}(find_tagged_pids | sort -nr -u)
+        for PID in ${'$'}PIDS; do kill -TERM "${'$'}PID" 2>/dev/null || true; done
+        [ -z "${'$'}PIDS" ] || sleep 0.25
+
+        REMAINING=${'$'}(still_alive "${'$'}PIDS" | sort -nr -u)
+        for PID in ${'$'}REMAINING; do kill -KILL "${'$'}PID" 2>/dev/null || true; done
+        [ -z "${'$'}REMAINING" ] || sleep 0.10
+
+        FINAL=${'$'}(still_alive "${'$'}REMAINING" | sort -nr -u)
+        [ -z "${'$'}FINAL" ] || {
+          printf '$remainingPrefix=%s\n' "${'$'}FINAL" >&2
+          exit 1
+        }
+        printf '$successPrefix term=%s kill=%s\n' \
+          "${'$'}(printf '%s\n' "${'$'}PIDS" | awk 'NF {n++} END {print n+0}')" \
+          "${'$'}(printf '%s\n' "${'$'}REMAINING" | awk 'NF {n++} END {print n+0}')"
+    """.trimIndent()
+}
+
 internal object ChrootOrphanCleanupCommandBuilder {
     private val TOKEN_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-    fun build(executionToken: String): String {
+    fun build(executionToken: String, rootfsPath: String): String {
         require(TOKEN_REGEX.matches(executionToken)) { "非法 chroot request token" }
-        val marker = ShellEscaper.quote("AUTOC_CHROOT_REQUEST_TOKEN=$executionToken")
-        return """
-            set -eu
-            MARKER=$marker
-            find_tagged_pids() {
-              grep -a -l -F -- "${'$'}MARKER" /proc/[0-9]*/environ 2>/dev/null |
-                while IFS= read -r ENV_FILE; do
-                  PID=${'$'}{ENV_FILE#/proc/}
-                  PID=${'$'}{PID%/environ}
-                  case "${'$'}PID" in ''|*[!0-9]*) continue ;; esac
-                  [ "${'$'}PID" -gt 1 ] && printf '%s\n' "${'$'}PID"
-                done
-            }
-
-            PIDS=${'$'}(find_tagged_pids | sort -nr -u)
-            for PID in ${'$'}PIDS; do kill -TERM "${'$'}PID" 2>/dev/null || true; done
-            [ -z "${'$'}PIDS" ] || sleep 1
-
-            REMAINING=${'$'}(find_tagged_pids | sort -nr -u)
-            for PID in ${'$'}REMAINING; do kill -KILL "${'$'}PID" 2>/dev/null || true; done
-            [ -z "${'$'}REMAINING" ] || sleep 1
-
-            FINAL=${'$'}(find_tagged_pids | sort -nr -u)
-            [ -z "${'$'}FINAL" ] || {
-              printf 'CHROOT_ORPHAN_CLEANUP_REMAINING=%s\n' "${'$'}FINAL" >&2
-              exit 1
-            }
-            printf 'CHROOT_ORPHAN_CLEANUP_OK term=%s kill=%s\n' \
-              "${'$'}(printf '%s\n' "${'$'}PIDS" | awk 'NF {n++} END {print n+0}')" \
-              "${'$'}(printf '%s\n' "${'$'}REMAINING" | awk 'NF {n++} END {print n+0}')"
-        """.trimIndent()
+        return ChrootTaggedProcessCleanupScriptBuilder.build(
+            marker = "AUTOC_CHROOT_REQUEST_TOKEN=$executionToken",
+            rootfsPath = rootfsPath,
+            successPrefix = "CHROOT_ORPHAN_CLEANUP_OK",
+            remainingPrefix = "CHROOT_ORPHAN_CLEANUP_REMAINING",
+        )
     }
 }
 
 internal object ChrootStaleAgentCleanupCommandBuilder {
-    fun build(): String {
-        val marker = ShellEscaper.quote("AUTOC_AGENT_MODE=raw_bash")
-        return """
-            set -eu
-            MARKER=$marker
-            find_tagged_pids() {
-              grep -a -l -F -- "${'$'}MARKER" /proc/[0-9]*/environ 2>/dev/null |
-                while IFS= read -r ENV_FILE; do
-                  PID=${'$'}{ENV_FILE#/proc/}
-                  PID=${'$'}{PID%/environ}
-                  case "${'$'}PID" in ''|*[!0-9]*) continue ;; esac
-                  [ "${'$'}PID" -gt 1 ] && printf '%s\n' "${'$'}PID"
-                done
-            }
-
-            PIDS=${'$'}(find_tagged_pids | sort -nr -u)
-            for PID in ${'$'}PIDS; do kill -TERM "${'$'}PID" 2>/dev/null || true; done
-            [ -z "${'$'}PIDS" ] || sleep 1
-
-            REMAINING=${'$'}(find_tagged_pids | sort -nr -u)
-            for PID in ${'$'}REMAINING; do kill -KILL "${'$'}PID" 2>/dev/null || true; done
-            [ -z "${'$'}REMAINING" ] || sleep 1
-
-            FINAL=${'$'}(find_tagged_pids | sort -nr -u)
-            [ -z "${'$'}FINAL" ] || {
-              printf 'CHROOT_STALE_AGENT_CLEANUP_REMAINING=%s\n' "${'$'}FINAL" >&2
-              exit 1
-            }
-            printf 'CHROOT_STALE_AGENT_CLEANUP_OK term=%s kill=%s\n' \
-              "${'$'}(printf '%s\n' "${'$'}PIDS" | awk 'NF {n++} END {print n+0}')" \
-              "${'$'}(printf '%s\n' "${'$'}REMAINING" | awk 'NF {n++} END {print n+0}')"
-        """.trimIndent()
-    }
+    fun build(rootfsPath: String): String = ChrootTaggedProcessCleanupScriptBuilder.build(
+        marker = "AUTOC_AGENT_MODE=raw_bash",
+        rootfsPath = rootfsPath,
+        successPrefix = "CHROOT_STALE_AGENT_CLEANUP_OK",
+        remainingPrefix = "CHROOT_STALE_AGENT_CLEANUP_REMAINING",
+    )
 }
 
 internal object ChrootAgentSessionCleanupCommandBuilder {
     private val SESSION_ID_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-    fun build(sessionId: String): String {
+    fun build(sessionId: String, rootfsPath: String): String {
         require(SESSION_ID_REGEX.matches(sessionId)) { "非法 Agent session id" }
-        val marker = ShellEscaper.quote("AUTOC_AGENT_SESSION_ID=$sessionId")
-        return """
-            set -eu
-            MARKER=$marker
-            find_tagged_pids() {
-              grep -a -l -F -- "${'$'}MARKER" /proc/[0-9]*/environ 2>/dev/null |
-                while IFS= read -r ENV_FILE; do
-                  PID=${'$'}{ENV_FILE#/proc/}
-                  PID=${'$'}{PID%/environ}
-                  case "${'$'}PID" in ''|*[!0-9]*) continue ;; esac
-                  [ "${'$'}PID" -gt 1 ] && printf '%s\n' "${'$'}PID"
-                done
-            }
-
-            PIDS=${'$'}(find_tagged_pids | sort -nr -u)
-            for PID in ${'$'}PIDS; do kill -TERM "${'$'}PID" 2>/dev/null || true; done
-            [ -z "${'$'}PIDS" ] || sleep 1
-
-            REMAINING=${'$'}(find_tagged_pids | sort -nr -u)
-            for PID in ${'$'}REMAINING; do kill -KILL "${'$'}PID" 2>/dev/null || true; done
-            [ -z "${'$'}REMAINING" ] || sleep 1
-
-            FINAL=${'$'}(find_tagged_pids | sort -nr -u)
-            [ -z "${'$'}FINAL" ] || {
-              printf 'CHROOT_AGENT_SESSION_CLEANUP_REMAINING=%s\n' "${'$'}FINAL" >&2
-              exit 1
-            }
-            printf 'CHROOT_AGENT_SESSION_CLEANUP_OK term=%s kill=%s\n' \
-              "${'$'}(printf '%s\n' "${'$'}PIDS" | awk 'NF {n++} END {print n+0}')" \
-              "${'$'}(printf '%s\n' "${'$'}REMAINING" | awk 'NF {n++} END {print n+0}')"
-        """.trimIndent()
+        return ChrootTaggedProcessCleanupScriptBuilder.build(
+            marker = "AUTOC_AGENT_SESSION_ID=$sessionId",
+            rootfsPath = rootfsPath,
+            successPrefix = "CHROOT_AGENT_SESSION_CLEANUP_OK",
+            remainingPrefix = "CHROOT_AGENT_SESSION_CLEANUP_REMAINING",
+        )
     }
 }
 

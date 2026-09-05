@@ -35,6 +35,7 @@ class DebugProductionAgentToolsValidationActivity : Activity() {
                         .put("success", false)
                         .put("failure", error.message ?: error::class.java.name)
                         .put("exception", error::class.java.name)
+                        .put("stackTrace", error.stackTraceToString())
                 }
                 val output = File(filesDir, REPORT_PATH)
                 output.parentFile?.mkdirs()
@@ -83,10 +84,14 @@ class DebugProductionAgentToolsValidationActivity : Activity() {
         )
         delay(500)
 
+        markStage("before_target_extract")
         val extraction = repository.extractPackage(root, packageName)
+        markStage("after_target_extract")
         val factory = AgentToolSessionFactory(applicationContext, runner, detector)
         val events = JSONArray()
+        markStage("before_autocrack_extract")
         val nativeExtraction = repository.extractPackage(root, AUTOCRACK_PACKAGE)
+        markStage("after_autocrack_extract")
 
         suspend fun call(session: AgentToolSession, name: String, args: JSONObject = JSONObject()): JSONObject {
             val result = JSONObject(session.dispatch(name, args))

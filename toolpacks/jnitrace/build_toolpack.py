@@ -22,7 +22,7 @@ from python_wheel_toolpack import (  # noqa: E402
 
 TOOLPACK_ID = "jnitrace"
 UPSTREAM_VERSION = "3.3.1"
-VERSION = "jnitrace-3.3.1_autocrack-1.0.0"
+VERSION = "jnitrace-3.3.1_autocrack-1.0.1"
 
 JNITRACE_SHA256 = "6fc6b39a561b34415250ddcc8eaa54a8d9414ca4f42532e909506493d471efed"
 JNITRACE_URL = "https://files.pythonhosted.org/packages/00/d9/25136bf8b76a99c8f93843f75771d2b19b29004d322b94bf565773120c8b/jnitrace-3.3.1.tar.gz"
@@ -62,6 +62,25 @@ def install_hexdump(archive: Path, python_root: Path) -> None:
         (egg_info / "dependency_links.txt").write_text("\n", encoding="utf-8")
 
 
+def apply_frida17_compatibility_patch(agent_bundle: Path) -> None:
+    text = agent_bundle.read_text(encoding="utf-8")
+    replacements = {
+        'Module.findExportByName(null, "dlopen")': 'Module.findGlobalExportByName("dlopen")',
+        'Module.findExportByName(null, "dlsym")': 'Module.findGlobalExportByName("dlsym")',
+        'Module.findExportByName(null, "dlclose")': 'Module.findGlobalExportByName("dlclose")',
+    }
+    for old, new in replacements.items():
+        count = text.count(old)
+        if count != 1:
+            raise SystemExit(
+                f"Frida 17 compatibility patch mismatch for {old!r}: expected 1, got {count}"
+            )
+        text = text.replace(old, new)
+    if "Module.findExportByName(" in text:
+        raise SystemExit("legacy Frida Module.findExportByName remains after compatibility patch")
+    agent_bundle.write_text(text, encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build full upstream jnitrace Toolpack")
     parser.add_argument("--jnitrace-sdist", required=True, type=Path)
@@ -88,10 +107,16 @@ def main() -> int:
         extract_wheel(args.colorama_wheel, python_root)
         extract_wheel(args.setuptools_wheel, python_root)
         install_hexdump(args.hexdump_zip, python_root)
+        original_agent = source_root / "jnitrace" / "build" / "jnitrace.js"
+        original_copy = payload / "upstream-original" / "jnitrace" / "build" / "jnitrace.js"
+        original_copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(original_agent, original_copy)
+        apply_frida17_compatibility_patch(python_root / "jnitrace" / "build" / "jnitrace.js")
 
         copy_executable(ROOT / "bin" / "jnitrace", payload / "bin" / "jnitrace")
         shutil.copy2(ROOT / "SKILL.md", payload / "SKILL.md")
         shutil.copy2(ROOT / "VERSION", payload / "VERSION")
+        shutil.copy2(ROOT / "AUTOCRACK_PATCH.md", payload / "AUTOCRACK_PATCH.md")
         for optional in ("README.md", "LICENSE"):
             source = source_root / optional
             if source.is_file():
@@ -115,7 +140,8 @@ def main() -> int:
             "version": VERSION,
             "description": (
                 "Complete upstream jnitrace 3.3.1 CLI/Python package and compiled "
-                "jnitrace.js engine, reusing the production AutoCrack Frida Toolpack."
+                "jnitrace.js engine, with a documented three-call Frida 17 API compatibility "
+                "patch while retaining the untouched upstream agent bundle."
             ),
             "architecture": "arm64",
             "payloadEntry": "payload.zip",
@@ -129,6 +155,8 @@ def main() -> int:
                 "python/hexdump.py",
                 "SKILL.md",
                 "VERSION",
+                "AUTOCRACK_PATCH.md",
+                "upstream-original/jnitrace/build/jnitrace.js",
             ],
             "commands": [
                 {
@@ -158,6 +186,19 @@ def main() -> int:
                         "--exclude",
                         "--libraries",
                     ],
+                },
+                {
+                    "id": "jnitrace-frida17-compat",
+                    "title": "Frida 17 static Module API compatibility patch",
+                    "command": (
+                        "python3 -c \"from pathlib import Path; "
+                        "p=Path('/opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js'); "
+                        "s=p.read_text(); assert 'Module.findExportByName(' not in s; "
+                        "assert s.count('Module.findGlobalExportByName') >= 3; "
+                        "print('AUTOCRACK_JNITRACE_FRIDA17_OK')\""
+                    ),
+                    "expectedExitCodes": [0],
+                    "outputContains": ["AUTOCRACK_JNITRACE_FRIDA17_OK"],
                 },
                 {
                     "id": "jnitrace-engine",

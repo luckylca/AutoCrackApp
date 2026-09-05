@@ -228,7 +228,7 @@ class AgentApkDexToolExecutor(
 
     companion object {
         const val TOOLPACK_ID = "apk-dex-static"
-        const val TOOLPACK_VERSION = "jadx-1.5.6_apktool-3.0.3"
+        const val TOOLPACK_VERSION = "jadx-1.5.6_apktool-3.0.3_autocrack-1.0.1"
         private const val TOOL_JADX_CLASS = "apk_jadx_class"
         private const val TOOL_APKTOOL_DECODE = "apktool_decode_summary"
         private const val TOOL_SMALI_SEARCH = "apktool_smali_search"

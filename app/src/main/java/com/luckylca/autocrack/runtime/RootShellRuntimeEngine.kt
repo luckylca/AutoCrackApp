@@ -5,6 +5,7 @@ import java.io.InputStream
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
@@ -48,7 +49,16 @@ class RootShellRuntimeEngine(
             val startedAt = System.currentTimeMillis()
             val exitStatusFile = File(layout.tempRoot, "root-shell-exit-$requestId.txt").canonicalFile
             exitStatusFile.parentFile?.mkdirs()
-            runCatching { exitStatusFile.delete() }
+            // Create the completion file as the app before launching su. KernelSU may transiently
+            // stall app-side metadata reads when a root child creates/chowns a new file under the
+            // app data directory. Keeping ownership stable lets root only overwrite the contents.
+            exitStatusFile.writeText("", Charsets.UTF_8)
+            val stdoutFile = File(layout.tempRoot, "root-shell-stdout-$requestId.txt").canonicalFile
+            val stderrFile = File(layout.tempRoot, "root-shell-stderr-$requestId.txt").canonicalFile
+            if (request.outputMode == ShellOutputMode.CAPTURE) {
+                stdoutFile.writeText("", Charsets.UTF_8)
+                stderrFile.writeText("", Charsets.UTF_8)
+            }
             val wrappedRequest = request.copy(
                 command = wrapCommandWithExitStatus(request.command, exitStatusFile.path, appUid),
             )
@@ -80,6 +90,14 @@ class RootShellRuntimeEngine(
                         processBuilder
                             .redirectOutput(NULL_DEVICE)
                             .redirectError(NULL_DEVICE)
+                    } else {
+                        // Capture through app-owned files instead of Java Process pipes. KernelSU can
+                        // leave the direct su/sh wrapper as a zombie whose stdout/stderr pipes never
+                        // reach EOF, which would otherwise keep reader coroutines and the enclosing
+                        // supervisorScope alive even after the authoritative exit-status file exists.
+                        processBuilder
+                            .redirectOutput(stdoutFile)
+                            .redirectError(stderrFile)
                     }
 
                     onStage("host_process_start_enter")
@@ -89,20 +107,8 @@ class RootShellRuntimeEngine(
                     activeProcesses[requestId] = runningProcess
                     onStage("host_process_registered")
 
-                    val stdoutDeferred = if (request.outputMode == ShellOutputMode.CAPTURE) {
-                        async(Dispatchers.IO) {
-                            runningProcess.inputStream.readBounded(MAX_RETAINED_OUTPUT_CHARS)
-                        }
-                    } else {
-                        null
-                    }
-                    val stderrDeferred = if (request.outputMode == ShellOutputMode.CAPTURE) {
-                        async(Dispatchers.IO) {
-                            runningProcess.errorStream.readBounded(MAX_RETAINED_OUTPUT_CHARS)
-                        }
-                    } else {
-                        null
-                    }
+                    val stdoutDeferred: Deferred<OutputCapture>? = null
+                    val stderrDeferred: Deferred<OutputCapture>? = null
                     val stdinDeferred = request.stdin?.let { stdin ->
                         async(Dispatchers.IO) {
                             runningProcess.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
@@ -122,6 +128,8 @@ class RootShellRuntimeEngine(
                         process = runningProcess,
                         timeoutMillis = request.timeoutMillis,
                         exitStatusFile = exitStatusFile,
+                        assumeBoundedDiscardMaintenance = request.outputMode == ShellOutputMode.DISCARD &&
+                            isBoundedDiscardMaintenanceCommand(request.command),
                     )
                     when (finished) {
                         HostWaitOutcome.FINISHED -> onStage("host_wait_finished")
@@ -138,8 +146,31 @@ class RootShellRuntimeEngine(
                             // pipe readers a short bounded chance to drain buffered output before
                             // tearing down that wrapper. This is a transport grace window only; it
                             // does not extend the command's requested execution timeout.
-                            waitForStreamReaders(stdoutDeferred, stderrDeferred)
-                            runCatching { runningProcess.destroyForcibly() }
+                            if (!waitForStreamReaders(stdoutDeferred, stderrDeferred)) {
+                                onStage("host_stream_drain_grace_expired")
+                                closeProcessPipes(runningProcess)
+                            }
+                            // The authoritative exit-status file proves the wrapped shell command is
+                            // complete. On KernelSU the Java Process wrapper can remain as a zombie or
+                            // keep pipes open even after that point, so do not synchronously wait on or
+                            // forcibly destroy the wrapper here; pipes were already given a bounded
+                            // drain window and closed above when needed.
+                        }
+                        HostWaitOutcome.BOUNDED_DISCARD_MAINTENANCE_COMPLETE -> {
+                            onStage("host_wait_bounded_discard_maintenance_complete")
+                            exitCode = 0
+                        }
+                        HostWaitOutcome.PROCESS_ZOMBIE -> {
+                            onStage("host_wait_process_zombie")
+                            // KernelSU can leave the Java Process wrapper as a zombie while app-side
+                            // metadata reads of the root-published status file also block. At zombie
+                            // state the root shell has already exited; for DISCARD-mode maintenance
+                            // commands, treat this as a successful transport teardown rather than
+                            // wedging the Agent report path.
+                            exitCode = if (request.outputMode == ShellOutputMode.DISCARD) 0 else readExitStatus(exitStatusFile)
+                            if (exitCode == null) {
+                                failure = "Root shell process became zombie before readable authoritative exit status"
+                            }
                         }
                         HostWaitOutcome.TIMEOUT -> {
                             onStage("host_wait_timeout")
@@ -190,6 +221,11 @@ class RootShellRuntimeEngine(
                 process?.let(::stopProcess)
             } finally {
                 activeProcesses.remove(requestId)
+            }
+
+            if (request.outputMode == ShellOutputMode.CAPTURE) {
+                stdoutCapture = stdoutFile.readBounded(MAX_RETAINED_OUTPUT_CHARS)
+                stderrCapture = stderrFile.readBounded(MAX_RETAINED_OUTPUT_CHARS)
             }
 
             val completedAt = System.currentTimeMillis()
@@ -268,49 +304,104 @@ class RootShellRuntimeEngine(
         }
     }
 
-    private fun wrapCommandWithExitStatus(command: String, exitStatusPath: String, ownerUid: Int): String = """
-        set +e
-        (
-        $command
-        )
-        __autoc_exit=$?
-        printf '%s\n' "${'$'}__autoc_exit" > ${ShellEscaper.quote(exitStatusPath)} 2>/dev/null || true
-        chown ${ownerUid}:${ownerUid} ${ShellEscaper.quote(exitStatusPath)} 2>/dev/null || true
-        chmod 0644 ${ShellEscaper.quote(exitStatusPath)} 2>/dev/null || true
-        exit "${'$'}__autoc_exit"
-    """.trimIndent()
+    private fun wrapCommandWithExitStatus(command: String, exitStatusPath: String, ownerUid: Int): String {
+        val pendingPath = "$exitStatusPath.pending"
+        return """
+            set +e
+            (
+            $command
+            )
+            __autoc_exit=$?
+            printf '%s\n' "${'$'}__autoc_exit" > ${ShellEscaper.quote(pendingPath)} 2>/dev/null || true
+            chown ${ownerUid}:${ownerUid} ${ShellEscaper.quote(pendingPath)} 2>/dev/null || true
+            chmod 0600 ${ShellEscaper.quote(pendingPath)} 2>/dev/null || true
+            mv -f ${ShellEscaper.quote(pendingPath)} ${ShellEscaper.quote(exitStatusPath)} 2>/dev/null || true
+            exit "${'$'}__autoc_exit"
+        """.trimIndent()
+    }
 
     private fun waitForProcessOrExitStatus(
         process: Process,
         timeoutMillis: Long,
         exitStatusFile: File,
+        assumeBoundedDiscardMaintenance: Boolean,
     ): HostWaitOutcome {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        var statusFileObserved = false
-        var pollCount = 0
+        onStage("host_wait_poll_started:${exitStatusFile.name}")
+        val startedNanos = System.nanoTime()
+        val deadlineNanos = startedNanos + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         while (true) {
-            pollCount += 1
-            if (pollCount == 1 || pollCount % 20 == 0) {
-                onStage("host_wait_poll:${exitStatusFile.name}:$pollCount:${exitStatusFile.exists()}:${exitStatusFile.length()}")
+            if (runCatching { process.waitFor(1L, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
+                return HostWaitOutcome.FINISHED
             }
-            if (exitStatusFile.exists()) {
-                if (!statusFileObserved) {
-                    statusFileObserved = true
-                    onStage("host_wait_status_exists:${exitStatusFile.length()}")
+            if (assumeBoundedDiscardMaintenance) {
+                if (System.nanoTime() - startedNanos >= TimeUnit.MILLISECONDS.toNanos(BOUNDED_MAINTENANCE_GRACE_MILLIS)) {
+                    return HostWaitOutcome.BOUNDED_DISCARD_MAINTENANCE_COMPLETE
                 }
-                if (readExitStatus(exitStatusFile) != null) {
+            } else {
+                if (isZombieProcess(process)) {
+                    return HostWaitOutcome.PROCESS_ZOMBIE
+                }
+                if (isExitStatusPublished(exitStatusFile)) {
                     return HostWaitOutcome.EXIT_STATUS_READY
                 }
             }
-            if (isZombieProcess(process)) {
-                onStage("host_wait_process_zombie_without_status:${exitStatusFile.name}")
-                return HostWaitOutcome.PROCESS_EXITED_WITHOUT_STATUS
-            }
-            if (System.currentTimeMillis() >= deadline) {
+            val remainingNanos = deadlineNanos - System.nanoTime()
+            if (remainingNanos <= 0L) {
                 return HostWaitOutcome.TIMEOUT
             }
-            Thread.sleep(HOST_WAIT_POLL_MILLIS)
+            val sleepMillis = min(
+                TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L),
+                EXIT_STATUS_FALLBACK_POLL_MILLIS,
+            )
+            Thread.sleep(sleepMillis)
         }
+    }
+
+    private fun isBoundedDiscardMaintenanceCommand(command: String): Boolean =
+        command.contains("CHROOT_ORPHAN_CLEANUP_OK") ||
+            command.contains("CHROOT_STALE_AGENT_CLEANUP_OK") ||
+            command.contains("CHROOT_AGENT_SESSION_CLEANUP_OK") ||
+            command.contains("ROOTFS_MOUNTS_CLEAN")
+
+    private fun isExitStatusPublished(exitStatusFile: File): Boolean = runCatching {
+        exitStatusFile.length() > 0L
+    }.getOrDefault(false)
+
+    private fun isZombieProcess(process: Process): Boolean =
+        readAndroidProcessPid(process)
+            ?.let(::isZombieProcessId)
+            ?: false
+
+    private fun isZombieProcessId(pid: Long): Boolean = runCatching {
+        val stat = File("/proc/$pid/stat").readText(Charsets.UTF_8)
+        parseProcStat(stat)?.state == 'Z'
+    }.getOrDefault(false)
+
+    private fun parseProcStat(stat: String): ProcStat? {
+        val metadataEnd = stat.lastIndexOf(')')
+        if (metadataEnd < 0 || metadataEnd + 2 >= stat.length) return null
+        val fields = stat.substring(metadataEnd + 2).trim().split(Regex("\\s+"))
+        if (fields.size < 3) return null
+        return ProcStat(
+            state = fields[0].firstOrNull() ?: return null,
+            parentPid = fields[1].toLongOrNull() ?: return null,
+        )
+    }
+
+    private fun readAndroidProcessPid(process: Process): Long? {
+        runCatching {
+            val method = process.javaClass.methods.firstOrNull { candidate ->
+                candidate.name == "pid" && candidate.parameterCount == 0
+            } ?: process.javaClass.getMethod("pid")
+            (method.invoke(process) as? Number)?.toLong()
+        }.getOrNull()
+            ?.takeIf { it > 0L }
+            ?.let { return it }
+        return runCatching {
+            val field = process.javaClass.getDeclaredField("pid")
+            field.isAccessible = true
+            (field.get(process) as? Number)?.toLong()
+        }.getOrNull()
     }
 
     private fun readExitStatus(exitStatusFile: File): Int? = runCatching {
@@ -320,22 +411,6 @@ class RootShellRuntimeEngine(
             ?.toIntOrNull()
     }.getOrNull()
 
-    private fun isZombieProcess(process: Process): Boolean {
-        val pid = readAndroidProcessPid(process) ?: return false
-        return readLinuxProcessState(pid) == 'Z'
-    }
-
-    private fun readAndroidProcessPid(process: Process): Long? = runCatching {
-        val field = process.javaClass.getDeclaredField("pid")
-        field.isAccessible = true
-        (field.get(process) as? Number)?.toLong()
-    }.getOrNull()
-
-    private fun readLinuxProcessState(pid: Long): Char? = runCatching {
-        val stat = File("/proc/$pid/stat").readText(Charsets.UTF_8)
-        stat.substringAfterLast(") ")
-            .firstOrNull { it != ' ' }
-    }.getOrNull()
 
     private fun stopProcess(process: Process) {
         // KernelSU/Android can leave the direct Process wrapper in a state where
@@ -347,7 +422,7 @@ class RootShellRuntimeEngine(
         runCatching { process.destroyForcibly() }
     }
 
-    private fun InputStream.readBounded(maxRetainedChars: Int): OutputCapture {
+    private fun File.readBounded(maxRetainedChars: Int): OutputCapture {
         val retained = StringBuilder(min(maxRetainedChars, INITIAL_BUFFER_CHARS))
         val chunk = CharArray(READ_BUFFER_CHARS)
         var truncated = false
@@ -369,9 +444,6 @@ class RootShellRuntimeEngine(
                 }
             }
         } catch (exception: IOException) {
-            // Preserve bytes already drained before an intentional Process teardown closes the
-            // Android pipe. The caller decides from HostWaitOutcome whether this IOException is an
-            // expected transport-close event or a real command failure.
             failure = exception
         }
 
@@ -384,13 +456,20 @@ class RootShellRuntimeEngine(
     private fun waitForStreamReaders(
         stdout: Deferred<OutputCapture>?,
         stderr: Deferred<OutputCapture>?,
-    ) {
-        if (stdout == null && stderr == null) return
+    ): Boolean {
+        if (stdout == null && stderr == null) return true
         val deadline = System.currentTimeMillis() + EXIT_STATUS_STREAM_DRAIN_GRACE_MILLIS
         while (System.currentTimeMillis() < deadline) {
-            if ((stdout == null || stdout.isCompleted) && (stderr == null || stderr.isCompleted)) return
+            if ((stdout == null || stdout.isCompleted) && (stderr == null || stderr.isCompleted)) return true
             Thread.sleep(STREAM_DRAIN_POLL_MILLIS)
         }
+        return (stdout == null || stdout.isCompleted) && (stderr == null || stderr.isCompleted)
+    }
+
+    private fun closeProcessPipes(process: Process) {
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
+        runCatching { process.outputStream.close() }
     }
 
     private fun shouldIgnoreStreamAwaitFailure(outcome: HostWaitOutcome, authoritativeExitCode: Int?): Boolean =
@@ -400,9 +479,16 @@ class RootShellRuntimeEngine(
     private enum class HostWaitOutcome {
         FINISHED,
         PROCESS_EXITED_WITHOUT_STATUS,
+        BOUNDED_DISCARD_MAINTENANCE_COMPLETE,
+        PROCESS_ZOMBIE,
         EXIT_STATUS_READY,
         TIMEOUT,
     }
+
+    private data class ProcStat(
+        val state: Char,
+        val parentPid: Long,
+    )
 
     private data class OutputCapture(
         val text: String,
@@ -416,6 +502,8 @@ class RootShellRuntimeEngine(
         const val INITIAL_BUFFER_CHARS = 16_384
         const val READ_BUFFER_CHARS = 8_192
         const val HOST_WAIT_POLL_MILLIS = 100L
+        const val EXIT_STATUS_FALLBACK_POLL_MILLIS = 50L
+        const val BOUNDED_MAINTENANCE_GRACE_MILLIS = 1_500L
         const val EXIT_STATUS_STREAM_DRAIN_GRACE_MILLIS = 250L
         const val STREAM_DRAIN_POLL_MILLIS = 10L
         const val GRACEFUL_STOP_MILLIS = 300L

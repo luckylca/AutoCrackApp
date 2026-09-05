@@ -56,7 +56,7 @@ class AndroguardToolpackTrustPolicyTest {
                 title = "Complete upstream Androguard CLI",
                 command = "androguard --help",
                 expectedExitCodes = setOf(0),
-                outputContains = listOf("Usage:", "androguard"),
+                outputContains = listOf("Usage:", "Androguard"),
             ),
             ToolpackSelfTest(
                 id = "androguard-python-api",

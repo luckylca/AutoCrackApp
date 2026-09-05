@@ -1,4 +1,4 @@
-# AutoCrack Python 3.11 compatibility patch
+# AutoCrack Python 3.11 and versioned-layout compatibility patch
 
 Upstream package: `frida-il2cpp-bridge 0.13.2`
 
@@ -20,6 +20,16 @@ The staging patch is deliberately limited to typing constructs:
 These constructs are static type metadata only. Frida session handling, target
 selection, dump agent JavaScript, dump formatting, CLI options, messages and
 all upstream runtime code remain unchanged.
+
+The upstream CLI also discovers its npm module root by requiring a parent
+directory whose name is exactly `frida-il2cpp-bridge`. AutoCrack installs
+Toolpacks under `packs/<id>/<version>/` and exposes them through an `active`
+symlink, so `Path.resolve()` reaches the version directory first and the
+upstream name-based search incorrectly walks one level too far. The staging
+patch changes only that root-discovery predicate: it walks upward to the first
+directory that actually contains `package.json`. This keeps the CLI compatible
+with versioned Toolpack installs without hard-coding a specific AutoCrack
+version or changing Frida/IL2CPP behavior.
 
 The Toolpack also retains an untouched copy of the official npm package under
 `upstream-original/` for direct audit against the patched working copy.

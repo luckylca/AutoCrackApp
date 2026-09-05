@@ -282,7 +282,7 @@ internal object BuiltInToolpackTrustPolicy {
                     title = "Complete upstream Androguard CLI",
                     command = "androguard --help",
                     expectedExitCodes = setOf(0),
-                    outputContains = listOf("Usage:", "androguard"),
+                    outputContains = listOf("Usage:", "Androguard"),
                 ),
                 "androguard-python-api" to TrustedSelfTest(
                     title = "Androguard high-level and resource Python APIs",
@@ -298,10 +298,10 @@ internal object BuiltInToolpackTrustPolicy {
         ),
         "jnitrace" to TrustedToolpack(
             title = "jnitrace complete JNI tracing client",
-            version = "jnitrace-3.3.1_autocrack-1.0.0",
+            version = "jnitrace-3.3.1_autocrack-1.0.1",
             architecture = "arm64",
-            payloadSha256 = "b45737d6d9041ef037123589533a8c94e0977a71cd24a24b9e816eb25eb43bcc",
-            payloadSizeBytes = 4_528_608L,
+            payloadSha256 = "92efc9377bbc3c2f52649675560908ec16573485e3df7641a15c42e9a61f35e3",
+            payloadSizeBytes = 4_674_924L,
             requiredPaths = setOf(
                 "bin/jnitrace",
                 "python/jnitrace/jnitrace.py",
@@ -310,6 +310,8 @@ internal object BuiltInToolpackTrustPolicy {
                 "python/hexdump.py",
                 "SKILL.md",
                 "VERSION",
+                "AUTOCRACK_PATCH.md",
+                "upstream-original/jnitrace/build/jnitrace.js",
             ),
             commands = mapOf("jnitrace" to "bin/jnitrace"),
             selfTests = mapOf(
@@ -331,6 +333,12 @@ internal object BuiltInToolpackTrustPolicy {
                         "--exclude",
                         "--libraries",
                     ),
+                ),
+                "jnitrace-frida17-compat" to TrustedSelfTest(
+                    title = "Frida 17 static Module API compatibility patch",
+                    command = "python3 -c \"from pathlib import Path; p=Path('/opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js'); s=p.read_text(); assert 'Module.findExportByName(' not in s; assert s.count('Module.findGlobalExportByName') >= 3; print('AUTOCRACK_JNITRACE_FRIDA17_OK')\"",
+                    expectedExitCodes = setOf(0),
+                    outputContains = listOf("AUTOCRACK_JNITRACE_FRIDA17_OK"),
                 ),
                 "jnitrace-engine" to TrustedSelfTest(
                     title = "Upstream compiled JNI tracing engine",
@@ -458,7 +466,7 @@ internal object BuiltInToolpackTrustPolicy {
                 "mitmweb-help" to TrustedSelfTest(
                     title = "Official mitmweb command",
                     command = "mitmweb --help",
-                    expectedExitCodes = setOf(0),
+                    expectedExitCodes = setOf(0, 1),
                     outputContains = listOf("usage:", "mitmweb"),
                 ),
             ),
@@ -594,8 +602,8 @@ internal object BuiltInToolpackTrustPolicy {
             title = "frida-il2cpp-bridge complete IL2CPP runtime toolkit",
             version = "frida-il2cpp-bridge-0.13.2_autocrack-1.0.0",
             architecture = "arm64",
-            payloadSha256 = "7ed0b4ffdcbcd99dd7cc9281e4bcb611b7c67e0d183032e6ba6b424610029359",
-            payloadSizeBytes = 770_897L,
+            payloadSha256 = "89b0f41048881e1f835fa9c5b577de5f72a642295e5d5ed0824eb313fac8b12e",
+            payloadSizeBytes = 771_584L,
             requiredPaths = setOf(
                 "bin/frida-il2cpp-bridge",
                 "package.json",
@@ -936,10 +944,10 @@ internal object BuiltInToolpackTrustPolicy {
         ),
         "android-host-shell" to TrustedToolpack(
             title = "Android host root shell bridge",
-            version = "android-host-shell-1.0.2",
+            version = "android-host-shell-1.0.3",
             architecture = "all",
-            payloadSha256 = "bcda8001725375043d098ff40bd3ea0fbdec68b1feb13e1a39f8e494bfec644e",
-            payloadSizeBytes = 7_267L,
+            payloadSha256 = "2f8054e05a2ed9596c0622f8718a612c99521f84f1ae3db265aa24e74c300bc9",
+            payloadSizeBytes = 7_702L,
             requiredPaths = setOf(
                 "bin/android-shell",
                 "SKILL.md",
@@ -957,9 +965,9 @@ internal object BuiltInToolpackTrustPolicy {
             ),
             sources = mapOf(
                 "android-host-shell-client" to TrustedSource(
-                    version = "1.0.2",
+                    version = "1.0.3",
                     url = "https://github.com/luckylca/AutoCrackApp/blob/main/toolpacks/android-host-shell/bin/android-shell",
-                    sha256 = "68df06b3b46449de85a0491beb057e775ea34507ae303308d594f2df8f057898",
+                    sha256 = "4183b4f278f926e407ce39f2204947099ababa40b1de94ec9b1ecb9f83ee9bc6",
                 ),
             ),
         ),

@@ -8,6 +8,8 @@ The `jnitrace` command is the upstream CLI. AutoCrack only supplies the
 environment needed to reuse the existing `android-frida` Toolpack; no upstream
 options are removed or replaced.
 
+For Frida 17, AutoCrack applies the upstream migration required by Frida's removed static `Module.findExportByName()` API to exactly the three `dlopen`/`dlsym`/`dlclose` lookups in the compiled agent. The untouched upstream `jnitrace.js` is retained under `upstream-original/`, and `AUTOCRACK_PATCH.md` documents the delta. No tracing filters, callbacks, CLI flags, Python APIs, or output schema are removed.
+
 ## Required companion Toolpack
 
 Start the existing Frida server before tracing:

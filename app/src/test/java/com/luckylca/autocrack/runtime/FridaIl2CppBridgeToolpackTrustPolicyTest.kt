@@ -57,8 +57,8 @@ class FridaIl2CppBridgeToolpackTrustPolicyTest {
         version = "frida-il2cpp-bridge-0.13.2_autocrack-1.0.0",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "7ed0b4ffdcbcd99dd7cc9281e4bcb611b7c67e0d183032e6ba6b424610029359",
-        payloadSizeBytes = 770_897L,
+        payloadSha256 = "89b0f41048881e1f835fa9c5b577de5f72a642295e5d5ed0824eb313fac8b12e",
+        payloadSizeBytes = 771_584L,
         requiredPaths = listOf(
             "bin/frida-il2cpp-bridge",
             "package.json",

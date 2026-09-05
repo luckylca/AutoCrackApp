@@ -107,7 +107,7 @@ data class ToolpackRequirements(
         fun parse(json: JSONObject?): ToolpackRequirements {
             if (json == null) return ToolpackRequirements()
             return ToolpackRequirements(
-                runtime = json.optString("runtime").takeIf(String::isNotBlank),
+                runtime = if (json.isNull("runtime")) null else json.optString("runtime").takeIf(String::isNotBlank),
                 capabilities = json.optJSONArray("capabilities")?.toStringList().orEmpty(),
                 commands = json.optJSONArray("commands")?.toStringList().orEmpty(),
                 optionalCapabilities = json.optJSONArray("optionalCapabilities")?.toStringList().orEmpty(),

@@ -54,6 +54,8 @@ public final class RuntimeTestProvider extends ContentProvider {
             case "exception" -> invokeException(response, target);
             case "load_delayed_class" -> response.put("value", loadDelayedClass().getName());
             case "load_delayed" -> invokeDelayed(response);
+            case "load_jni_trace_probe" -> loadJniTraceProbe(response);
+            case "jni_trace_probe" -> response.put("value", JniTraceProbe.run());
             case "reset_fields" -> {
                 HookTargets.staticField = 7;
                 target.instanceField = 11;
@@ -62,6 +64,13 @@ public final class RuntimeTestProvider extends ContentProvider {
             }
             default -> error("UNKNOWN_OPERATION", "Unknown test operation: " + operation);
         };
+    }
+
+    private JSONObject loadJniTraceProbe(JSONObject response) throws Exception {
+        String path = getContext().getApplicationInfo().nativeLibraryDir
+                + "/libautocrack_jnitrace_probe.so";
+        System.load(path);
+        return response.put("loaded", true).put("path", path);
     }
 
     private static JSONObject invokeException(JSONObject response, HookTargets target) throws Exception {

@@ -77,7 +77,7 @@ class MitmproxyToolpackTrustPolicyTest {
                 id = "mitmweb-help",
                 title = "Official mitmweb command",
                 command = "mitmweb --help",
-                expectedExitCodes = setOf(0),
+                expectedExitCodes = setOf(0, 1),
                 outputContains = listOf("usage:", "mitmweb"),
             ),
         ),

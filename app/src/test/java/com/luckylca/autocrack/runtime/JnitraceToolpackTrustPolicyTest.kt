@@ -33,11 +33,11 @@ class JnitraceToolpackTrustPolicyTest {
         schemaVersion = 2,
         id = "jnitrace",
         title = "jnitrace complete JNI tracing client",
-        version = "jnitrace-3.3.1_autocrack-1.0.0",
+        version = "jnitrace-3.3.1_autocrack-1.0.1",
         architecture = "arm64",
         payloadEntry = "payload.zip",
-        payloadSha256 = "b45737d6d9041ef037123589533a8c94e0977a71cd24a24b9e816eb25eb43bcc",
-        payloadSizeBytes = 4_528_608L,
+        payloadSha256 = "92efc9377bbc3c2f52649675560908ec16573485e3df7641a15c42e9a61f35e3",
+        payloadSizeBytes = 4_674_924L,
         requiredPaths = listOf(
             "bin/jnitrace",
             "python/jnitrace/jnitrace.py",
@@ -46,6 +46,8 @@ class JnitraceToolpackTrustPolicyTest {
             "python/hexdump.py",
             "SKILL.md",
             "VERSION",
+            "AUTOCRACK_PATCH.md",
+            "upstream-original/jnitrace/build/jnitrace.js",
         ),
         commands = listOf(ToolpackCommand("jnitrace", "bin/jnitrace")),
         selfTests = listOf(
@@ -69,6 +71,13 @@ class JnitraceToolpackTrustPolicyTest {
                     "--exclude",
                     "--libraries",
                 ),
+            ),
+            ToolpackSelfTest(
+                id = "jnitrace-frida17-compat",
+                title = "Frida 17 static Module API compatibility patch",
+                command = "python3 -c \"from pathlib import Path; p=Path('/opt/autocrack/toolpacks/active/jnitrace/python/jnitrace/build/jnitrace.js'); s=p.read_text(); assert 'Module.findExportByName(' not in s; assert s.count('Module.findGlobalExportByName') >= 3; print('AUTOCRACK_JNITRACE_FRIDA17_OK')\"",
+                expectedExitCodes = setOf(0),
+                outputContains = listOf("AUTOCRACK_JNITRACE_FRIDA17_OK"),
             ),
             ToolpackSelfTest(
                 id = "jnitrace-engine",

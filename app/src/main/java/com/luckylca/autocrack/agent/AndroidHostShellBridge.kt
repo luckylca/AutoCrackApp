@@ -200,7 +200,7 @@ class AndroidHostShellBridge(
 
     companion object {
         const val TOOLPACK_ID = "android-host-shell"
-        const val TOOLPACK_VERSION = "android-host-shell-1.0.2"
+        const val TOOLPACK_VERSION = "android-host-shell-1.0.3"
         const val COMMAND_NAME = "android-shell"
         const val ENV_HOST = "AUTOC_ANDROID_HOST_ADDR"
         const val ENV_PORT = "AUTOC_ANDROID_HOST_PORT"

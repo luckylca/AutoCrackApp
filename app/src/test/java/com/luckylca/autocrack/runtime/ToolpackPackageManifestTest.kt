@@ -43,6 +43,24 @@ class ToolpackPackageManifestTest {
     }
 
     @Test
+    fun schemaV2ExplicitNullRuntimeRoundTripsAsKotlinNull() {
+        val v2 = validManifest()
+            .replace("\"schemaVersion\": 1", "\"schemaVersion\": 2")
+            .replace(
+                "\"requiredPaths\": [\"bin/jadx\", \"bin/apktool\"],",
+                "\"requiredPaths\": [\"bin/jadx\", \"bin/apktool\"],\n          \"requires\": {\"runtime\": null, \"capabilities\": [], \"commands\": [], \"optionalCapabilities\": []},",
+            )
+
+        val parsed = ToolpackPackageManifest.parse(v2)
+        assertEquals(null, parsed.requires.runtime)
+        assertEquals(ToolpackRequirements(), parsed.requires)
+
+        val roundTrip = ToolpackPackageManifest.parse(parsed.toJson().toString())
+        assertEquals(null, roundTrip.requires.runtime)
+        assertEquals(ToolpackRequirements(), roundTrip.requires)
+    }
+
+    @Test
     fun rejectsTraversalInRequiredPath() {
         val invalid = validManifest().replace(
             "\"requiredPaths\": [\"bin/jadx\", \"bin/apktool\"]",

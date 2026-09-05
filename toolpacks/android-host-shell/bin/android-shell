@@ -42,6 +42,10 @@ def parse(argv):
         usage()
         raise SystemExit(0)
     if argv[0] == "--self-test":
+        host_workspace = "/data/data/com.luckylca.autocrack/files/workspaces/runtime-foundation"
+        assert map_workspace_argument("/workspace/probe.txt", host_workspace) == host_workspace + "/probe.txt"
+        assert map_workspace_argument(host_workspace + "/probe.txt", host_workspace) == host_workspace + "/probe.txt"
+        assert map_workspace_argument("echo /workspace/a", host_workspace) == "echo " + host_workspace + "/a"
         print("ANDROID_HOST_SHELL_CLIENT_OK")
         raise SystemExit(0)
 
@@ -79,7 +83,7 @@ def map_workspace_argument(value: str, host_workspace: str) -> str:
     if not host_workspace:
         return value
     host_workspace = host_workspace.rstrip("/")
-    return re.sub(r"/workspace(?=/|$|[\\s;&|)>'\"`])", host_workspace, value)
+    return re.sub(r"/workspace(?=/|$|[\s;&|)>'\"`])", host_workspace, value)
 
 
 def read_response(sock):

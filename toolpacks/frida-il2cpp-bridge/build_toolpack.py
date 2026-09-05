@@ -118,6 +118,25 @@ def apply_python311_typing_patch(package_root: Path) -> None:
     remove_override_decorators(io, 4)
 
 
+def apply_versioned_layout_patch(package_root: Path) -> None:
+    init = package_root / "cli" / "src" / "__init__.py"
+    replace_exact(
+        init,
+        """NPM_MODULE_PATH = Path(__file__).resolve()
+while NPM_MODULE_PATH.stem != __name__:
+    NPM_MODULE_PATH = NPM_MODULE_PATH.parent
+    if NPM_MODULE_PATH == NPM_MODULE_PATH.parent:
+        raise RuntimeError("Could not locate npm module path, please file a bug")
+""",
+        """NPM_MODULE_PATH = Path(__file__).resolve()
+while not (NPM_MODULE_PATH / "package.json").is_file():
+    NPM_MODULE_PATH = NPM_MODULE_PATH.parent
+    if NPM_MODULE_PATH == NPM_MODULE_PATH.parent:
+        raise RuntimeError("Could not locate npm module path, please file a bug")
+""",
+    )
+
+
 def assert_python311_grammar(package_root: Path) -> None:
     failures = []
     for path in sorted((package_root / "cli").rglob("*.py")):
@@ -155,6 +174,7 @@ def main() -> int:
         )
 
         apply_python311_typing_patch(payload)
+        apply_versioned_layout_patch(payload)
         assert_python311_grammar(payload)
 
         bin_root = payload / "bin"

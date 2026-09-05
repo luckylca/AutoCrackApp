@@ -3,14 +3,16 @@ package com.luckylca.autocrack.debug
 import android.app.Activity
 import android.os.Bundle
 import android.util.Base64
+import android.util.Log
 import com.luckylca.autocrack.agent.AgentToolSessionFactory
 import com.luckylca.autocrack.agent.DangerousOperationDecision
 import com.luckylca.autocrack.root.ProcessRootCommandRunner
 import com.luckylca.autocrack.root.RootDetector
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /** Debug-only ADB harness that exercises the production Mobile Agent exec_bash path. */
@@ -24,9 +26,14 @@ class DebugMobileAgentExecActivity : Activity() {
                     .put("failure", error.message ?: error::class.java.name)
                     .put("exception", error::class.java.name)
             }
+            Log.d(TAG, "report_execute_return")
+            val reportText = report.toString(2)
+            Log.d(TAG, "report_stringify_return:${reportText.length}")
             val output = File(filesDir, REPORT_PATH)
             output.parentFile?.mkdirs()
-            output.writeText(report.toString(2), Charsets.UTF_8)
+            Log.d(TAG, "report_write_enter")
+            output.writeText(reportText, Charsets.UTF_8)
+            Log.d(TAG, "report_write_return:${output.length()}")
             runOnUiThread { finish() }
         }.start()
     }
@@ -48,6 +55,7 @@ class DebugMobileAgentExecActivity : Activity() {
             sessionId = UUID.randomUUID().toString(),
             knownRootStatus = root,
             dangerousOperationGate = { DangerousOperationDecision.ALLOW_ONCE },
+            onStage = { stage -> Log.d(TAG, stage) },
         )
         val result = JSONObject(
             runtime.tools.dispatch(
@@ -58,15 +66,34 @@ class DebugMobileAgentExecActivity : Activity() {
                     .put("timeout_ms", timeoutMs),
             ),
         )
-        val cleanupCompleted = withTimeoutOrNull(5_000L) {
-            runCatching { runtime.cleanupSessionProcesses() }.isSuccess
-        } ?: false
-        runtime.cancelAllCommands()
+        // Mirror MobileAgentTaskCoordinator's production teardown order: close the
+        // Android-host bridge/cancel host commands first, then clean session-tagged chroot
+        // descendants. Runtime-heavy commands such as so-diagnose can otherwise leave a live
+        // bridge coroutine racing with the debug-only cleanup probe.
+        Log.d(TAG, "cancel_all_enter")
+        val cancelledCommands = runtime.cancelAllCommands()
+        Log.d(TAG, "cancel_all_return:$cancelledCommands")
+        Log.d(TAG, "cleanup_session_enter")
+        val cleanupExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "debug-mobile-agent-cleanup").apply { isDaemon = true }
+        }
+        val cleanupCompleted = try {
+            cleanupExecutor.submit<Boolean> {
+                runCatching { runBlocking { runtime.cleanupSessionProcesses() } }.isSuccess
+            }.get(30_000L, TimeUnit.MILLISECONDS)
+        } catch (error: Exception) {
+            Log.w(TAG, "cleanup_session_timeout_or_failure", error)
+            false
+        } finally {
+            cleanupExecutor.shutdownNow()
+        }
+        Log.d(TAG, "cleanup_session_return:$cleanupCompleted")
         return JSONObject()
             .put("success", result.optBoolean("ok"))
             .put("workspace", runtime.workspacePath)
             .put("installedToolpacks", runtime.installedToolpacks.size)
             .put("cleanupCompleted", cleanupCompleted)
+            .put("cancelledCommands", cancelledCommands)
             .put("result", result)
     }
 
@@ -81,6 +108,7 @@ class DebugMobileAgentExecActivity : Activity() {
     }
 
     private companion object {
+        const val TAG = "DebugMobileAgentExec"
         const val REPORT_PATH = "debug-validation/mobile-agent-exec-report.json"
     }
 }

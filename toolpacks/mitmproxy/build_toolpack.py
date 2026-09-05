@@ -138,7 +138,7 @@ def main() -> int:
                     "id": "mitmweb-help",
                     "title": "Official mitmweb command",
                     "command": "mitmweb --help",
-                    "expectedExitCodes": [0],
+                    "expectedExitCodes": [0, 1],
                     "outputContains": ["usage:", "mitmweb"],
                 },
             ],

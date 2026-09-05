@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-VERSION = "android-host-shell-1.0.2"
+VERSION = "android-host-shell-1.0.3"
 TOOLPACK_ID = "android-host-shell"
 OUTPUT_NAME = f"AutoCrackApp-{TOOLPACK_ID}-{VERSION}-toolpack.zip"
 
@@ -97,7 +97,7 @@ def main() -> None:
         "sources": [
             {
                 "name": "android-host-shell-client",
-                "version": "1.0.2",
+                "version": "1.0.3",
                 "url": "https://github.com/luckylca/AutoCrackApp/blob/main/toolpacks/android-host-shell/bin/android-shell",
                 "sha256": client_hash,
             }

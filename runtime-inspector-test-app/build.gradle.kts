@@ -11,6 +11,7 @@ android {
     namespace = "com.luckylca.runtimeinspector.testapp"
     compileSdk = 36
     buildToolsVersion = "36.0.0"
+    ndkVersion = "27.3.13750724"
 
     defaultConfig {
         applicationId = "com.luckylca.runtimeinspector.testapp"
@@ -18,6 +19,10 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.2.0"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     compileOptions {
@@ -26,6 +31,17 @@ android {
     }
 
     sourceSets["main"].assets.srcDir(delayedAssets)
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    packaging {
+        jniLibs.useLegacyPackaging = true
+    }
 }
 
 val compileDelayedTarget by tasks.registering(JavaCompile::class) {
